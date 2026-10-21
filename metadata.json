@@ -1,0 +1,6 @@
+{
+  "name": "BloomCampus — College Period, Cycle, Mood & Skincare Companion",
+  "description": "Private college period, cycle stage, mood, study planner, and Sidratu skincare wellness companion with 14-day free trial and Le 30/mo pass.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

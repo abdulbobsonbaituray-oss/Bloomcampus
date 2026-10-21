@@ -1,0 +1,398 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", sans-serif;
+  --font-display: "Outfit", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --color-cream: #FDFBF7;
+
+  --color-lavender-50: #F6F3FF;
+  --color-lavender-100: #EDE7FE;
+  --color-lavender-200: #DDD2FD;
+  --color-lavender-500: #7C5CFA;
+  --color-lavender-700: #5639CC;
+  --color-lavender-900: #2E1B7A;
+
+  --color-sage-50: #F2F8F5;
+  --color-sage-100: #E1EFE8;
+  --color-sage-200: #C3DFD1;
+  --color-sage-600: #3B7A57;
+  --color-sage-800: #234B35;
+
+  --color-peach-50: #FFF6F2;
+  --color-peach-100: #FFEAE0;
+  --color-peach-200: #FFD2BD;
+  --color-peach-500: #F47C54;
+  --color-peach-700: #C4512C;
+
+  --color-rose-50: #FFF1F3;
+  --color-rose-100: #FFE0E5;
+  --color-rose-500: #E85D75;
+  --color-rose-700: #BE344D;
+
+  --color-plum-900: #3B0944;
+  --color-magenta-600: #C81D77;
+  --color-gold-500: #D4AF37;
+}
+
+body {
+  background-color: #FDFBF7;
+  color: #1E293B;
+  font-family: "Plus Jakarta Sans", sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+h1, h2, h3, .font-display {
+  font-family: "Outfit", sans-serif;
+}
+
+/* ============================================================================
+   DARK MODE THEME (Late-Night Study & Low-Light Readability)
+   ============================================================================ */
+html.dark,
+html.dark body,
+body.dark-mode {
+  background-color: #0B0F19 !important;
+  color: #F1F5F9 !important;
+  color-scheme: dark;
+}
+
+/* Main surfaces & cards */
+html.dark .bg-white,
+html.dark .bg-white\/95,
+html.dark .bg-white\/90,
+html.dark .bg-white\/85,
+html.dark .bg-white\/80 {
+  background-color: #151D2E !important;
+}
+
+html.dark .bg-cream,
+html.dark .bg-slate-50,
+html.dark .bg-slate-50\/80,
+html.dark .bg-slate-50\/60 {
+  background-color: #0F172A !important;
+}
+
+html.dark .bg-slate-100,
+html.dark .bg-slate-100\/80 {
+  background-color: #1E293B !important;
+}
+
+html.dark .bg-slate-200 {
+  background-color: #334155 !important;
+}
+
+/* Soft tinted surfaces in Dark Mode */
+html.dark .bg-lavender-50,
+html.dark .bg-lavender-50\/90,
+html.dark .bg-lavender-50\/80,
+html.dark .bg-lavender-50\/70,
+html.dark .bg-lavender-50\/60,
+html.dark .bg-lavender-50\/50,
+html.dark .bg-lavender-50\/40 {
+  background-color: rgba(124, 92, 250, 0.14) !important;
+}
+
+html.dark .bg-lavender-100,
+html.dark .bg-lavender-100\/80,
+html.dark .bg-lavender-100\/70 {
+  background-color: rgba(124, 92, 250, 0.24) !important;
+}
+
+html.dark .bg-sage-50,
+html.dark .bg-sage-50\/90,
+html.dark .bg-sage-50\/80,
+html.dark .bg-sage-50\/70,
+html.dark .bg-sage-50\/60 {
+  background-color: rgba(59, 122, 87, 0.16) !important;
+}
+
+html.dark .bg-sage-100 {
+  background-color: rgba(59, 122, 87, 0.28) !important;
+}
+
+html.dark .bg-peach-50,
+html.dark .bg-peach-50\/80,
+html.dark .bg-orange-50,
+html.dark .bg-orange-50\/80,
+html.dark .bg-amber-50,
+html.dark .bg-amber-50\/90,
+html.dark .bg-amber-50\/80,
+html.dark .bg-amber-50\/60 {
+  background-color: rgba(244, 124, 84, 0.14) !important;
+}
+
+html.dark .bg-peach-100,
+html.dark .bg-orange-100,
+html.dark .bg-amber-100 {
+  background-color: rgba(244, 124, 84, 0.24) !important;
+}
+
+html.dark .bg-rose-50,
+html.dark .bg-rose-50\/80,
+html.dark .bg-rose-50\/70,
+html.dark .bg-rose-50\/60 {
+  background-color: rgba(232, 93, 117, 0.15) !important;
+}
+
+html.dark .bg-rose-100 {
+  background-color: rgba(232, 93, 117, 0.25) !important;
+}
+
+html.dark .bg-emerald-50,
+html.dark .bg-emerald-50\/80 {
+  background-color: rgba(16, 185, 129, 0.14) !important;
+}
+
+html.dark .bg-emerald-100 {
+  background-color: rgba(16, 185, 129, 0.24) !important;
+}
+
+html.dark .bg-sky-50,
+html.dark .bg-sky-50\/80,
+html.dark .bg-indigo-50,
+html.dark .bg-indigo-50\/60 {
+  background-color: rgba(56, 189, 248, 0.14) !important;
+}
+
+html.dark .bg-sky-100,
+html.dark .bg-indigo-100 {
+  background-color: rgba(56, 189, 248, 0.24) !important;
+}
+
+/* Soft pastel gradients in Dark Mode (preserves rich dark banners) */
+html.dark .from-lavender-50,
+html.dark .from-rose-50,
+html.dark .from-sage-50,
+html.dark .from-peach-50,
+html.dark .from-amber-50,
+html.dark .from-sky-50,
+html.dark .from-indigo-50,
+html.dark .from-white {
+  --tw-gradient-from: #151D2E !important;
+}
+
+html.dark .via-white,
+html.dark .via-lavender-50,
+html.dark .via-lavender-50\/30,
+html.dark .via-rose-50\/40,
+html.dark .via-sage-50\/30,
+html.dark .via-amber-50\/40 {
+  --tw-gradient-via: #111827 !important;
+}
+
+html.dark .to-white,
+html.dark .to-cream,
+html.dark .to-lavender-50,
+html.dark .to-rose-50,
+html.dark .to-sage-50,
+html.dark .to-peach-50,
+html.dark .to-amber-50,
+html.dark .to-sky-50 {
+  --tw-gradient-to: #0F172A !important;
+}
+
+/* Typography & Text Contrast in Dark Mode */
+html.dark .text-slate-900,
+html.dark .text-slate-950 {
+  color: #F8FAFC !important;
+}
+
+html.dark .text-slate-800 {
+  color: #F1F5F9 !important;
+}
+
+html.dark .text-slate-700 {
+  color: #E2E8F0 !important;
+}
+
+html.dark .text-slate-600 {
+  color: #CBD5E1 !important;
+}
+
+html.dark .text-slate-500 {
+  color: #94A3B8 !important;
+}
+
+html.dark .text-slate-400 {
+  color: #64748B !important;
+}
+
+html.dark .text-lavender-950,
+html.dark .text-lavender-900,
+html.dark .text-lavender-800,
+html.dark .text-lavender-700 {
+  color: #DDD2FD !important;
+}
+
+html.dark .text-sage-900,
+html.dark .text-sage-800,
+html.dark .text-sage-700 {
+  color: #86EFAC !important;
+}
+
+html.dark .text-peach-900,
+html.dark .text-peach-800,
+html.dark .text-peach-700,
+html.dark .text-orange-950,
+html.dark .text-orange-900,
+html.dark .text-orange-800,
+html.dark .text-orange-700,
+html.dark .text-amber-950,
+html.dark .text-amber-900,
+html.dark .text-amber-800,
+html.dark .text-amber-700 {
+  color: #FDBA74 !important;
+}
+
+html.dark .text-rose-950,
+html.dark .text-rose-900,
+html.dark .text-rose-800,
+html.dark .text-rose-700 {
+  color: #FDA4AF !important;
+}
+
+html.dark .text-emerald-950,
+html.dark .text-emerald-900,
+html.dark .text-emerald-800,
+html.dark .text-emerald-700 {
+  color: #6EE7B7 !important;
+}
+
+html.dark .text-sky-900,
+html.dark .text-sky-800,
+html.dark .text-sky-700,
+html.dark .text-indigo-950,
+html.dark .text-indigo-900,
+html.dark .text-indigo-800,
+html.dark .text-indigo-700 {
+  color: #93C5FD !important;
+}
+
+/* Borders & Dividers in Dark Mode */
+html.dark .border-slate-100,
+html.dark .border-slate-200,
+html.dark .border-slate-300 {
+  border-color: #263248 !important;
+}
+
+html.dark .border-lavender-100,
+html.dark .border-lavender-200,
+html.dark .border-lavender-300 {
+  border-color: rgba(124, 92, 250, 0.32) !important;
+}
+
+html.dark .border-sage-100,
+html.dark .border-sage-200,
+html.dark .border-sage-300 {
+  border-color: rgba(59, 122, 87, 0.42) !important;
+}
+
+html.dark .border-peach-100,
+html.dark .border-peach-200,
+html.dark .border-peach-300,
+html.dark .border-orange-200,
+html.dark .border-orange-300,
+html.dark .border-amber-200,
+html.dark .border-amber-300 {
+  border-color: rgba(244, 124, 84, 0.38) !important;
+}
+
+html.dark .border-rose-100,
+html.dark .border-rose-200,
+html.dark .border-rose-300 {
+  border-color: rgba(232, 93, 117, 0.38) !important;
+}
+
+html.dark .border-emerald-200,
+html.dark .border-emerald-300 {
+  border-color: rgba(16, 185, 129, 0.38) !important;
+}
+
+html.dark .border-sky-200,
+html.dark .border-indigo-100,
+html.dark .border-indigo-200 {
+  border-color: rgba(56, 189, 248, 0.35) !important;
+}
+
+/* Form Inputs, Textareas, and Selects in Dark Mode */
+html.dark input:not([type="checkbox"]):not([type="radio"]),
+html.dark textarea,
+html.dark select {
+  background-color: #0F172A !important;
+  color: #F8FAFC !important;
+  border-color: #334155 !important;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #64748B !important;
+}
+
+/* Privacy Blur effect when Eye toggle is active */
+.privacy-blur-active .privacy-sensitive {
+  filter: blur(8px);
+  user-select: none;
+  transition: filter 0.2s ease;
+}
+
+.privacy-blur-active .privacy-sensitive:hover {
+  filter: blur(4px);
+}
+
+.privacy-sensitive {
+  transition: filter 0.2s ease;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F6F3FF;
+}
+
+html.dark ::-webkit-scrollbar-track {
+  background: #0F172A;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 9999px;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 9999px;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #clinic-printable-report,
+  #clinic-printable-report * {
+    visibility: visible;
+  }
+  #clinic-printable-report {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-height: none !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border: 1px solid #cbd5e1 !important;
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+
+
+

@@ -1,0 +1,3108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BloomCampus — College Period, Cycle & Mood Tracker</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Google Fonts: Plus Jakarta Sans & Outfit for warm, legible student aesthetics -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            display: ['"Outfit"', 'sans-serif'],
+          },
+          colors: {
+            cream: '#FDFBF7',
+            lavender: {
+              50: '#F6F3FF',
+              100: '#EDE7FE',
+              200: '#DDD2FD',
+              500: '#7C5CFA',
+              700: '#5639CC',
+              900: '#2E1B7A'
+            },
+            sage: {
+              50: '#F2F8F5',
+              100: '#E1EFE8',
+              200: '#C3DFD1',
+              600: '#3B7A57',
+              800: '#234B35'
+            },
+            peach: {
+              50: '#FFF6F2',
+              100: '#FFEAE0',
+              200: '#FFD2BD',
+              500: '#F47C54',
+              700: '#C4512C'
+            },
+            rose: {
+              50: '#FFF1F3',
+              100: '#FFE0E5',
+              500: '#E85D75',
+              700: '#BE344D'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #FDFBF7;
+      color: #1E293B;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    h1, h2, h3, .font-display {
+      font-family: 'Outfit', sans-serif;
+    }
+    /* Privacy Blur effect when Eye toggle is active */
+    .privacy-blur-active .privacy-sensitive {
+      filter: blur(8px);
+      user-select: none;
+      transition: filter 0.25s ease;
+    }
+    .privacy-blur-active .privacy-sensitive:hover {
+      filter: blur(4px);
+    }
+    .privacy-sensitive {
+      transition: filter 0.25s ease;
+    }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #F6F3FF;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #CBD5E1;
+      border-radius: 9999px;
+    }
+    /* Smooth pulse for active pill icon */
+    @keyframes gentlePulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.04); }
+    }
+    .pill-btn-pulse {
+      animation: gentlePulse 2.8s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col selection:bg-lavender-200 selection:text-lavender-900">
+
+  <!-- ===================================================================== -->
+  <!-- TOAST NOTIFICATION CONTAINER (Replaces alert() and confirm())          -->
+  <!-- ===================================================================== -->
+  <div id="toastContainer" class="fixed top-4 right-4 left-4 sm:left-auto sm:w-96 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <!-- ===================================================================== -->
+  <!-- 1. AUTHENTICATION SCREEN (SIGN UP / SIGN IN + SECRET VIP BYPASS)       -->
+  <!-- ===================================================================== -->
+  <div id="authScreen" class="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-lavender-100 via-cream to-peach-100">
+    <div class="w-full max-w-md bg-white/95 backdrop-blur-md rounded-3xl shadow-xl border border-lavender-200 p-6 sm:p-8">
+      <!-- App Logo & Tagline -->
+      <div class="text-center mb-6">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-lavender-500 to-rose-500 text-white text-3xl shadow-md mb-3">
+          🌸
+        </div>
+        <h1 class="text-2xl sm:text-3xl font-extrabold text-slate-800 tracking-tight">BloomCampus</h1>
+        <p class="text-sm text-slate-600 mt-1">College Period, Cycle Stage & Mood Companion</p>
+        <div class="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-sage-100 text-sage-800 text-xs font-semibold">
+          <span>🔒 Private Device Storage</span>
+          <span>•</span>
+          <span>🎁 First 2 Weeks Free</span>
+        </div>
+      </div>
+
+      <!-- Auth Mode Tabs -->
+      <div class="grid grid-cols-2 gap-2 p-1 bg-lavender-50 rounded-2xl mb-5 border border-lavender-100">
+        <button id="tabSignUp" onclick="switchAuthTab('signup')" class="py-2.5 rounded-xl font-bold text-sm transition-all bg-white text-lavender-700 shadow-sm">
+          Create Account
+        </button>
+        <button id="tabSignIn" onclick="switchAuthTab('signin')" class="py-2.5 rounded-xl font-bold text-sm transition-all text-slate-600 hover:text-slate-900">
+          Sign In
+        </button>
+      </div>
+
+      <!-- Auth Form -->
+      <form id="authForm" onsubmit="handleAuthSubmit(event)" class="space-y-4">
+        <div id="nameFieldWrapper" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div class="sm:col-span-2">
+            <label for="authName" class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Your Name</label>
+            <input
+              type="text"
+              id="authName"
+              placeholder="e.g., Kumba Hannah Kaingbanja"
+              class="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100 outline-none text-slate-800 font-medium"
+            />
+          </div>
+          <div>
+            <label for="authAge" class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">Age *</label>
+            <input
+              type="number"
+              id="authAge"
+              min="13"
+              max="65"
+              required
+              placeholder="e.g., 21"
+              class="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100 outline-none text-slate-800 font-medium"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">College or Personal Email</label>
+          <input
+            type="email"
+            id="authEmail"
+            required
+            placeholder="you@example.com"
+            class="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100 outline-none text-slate-800 font-medium"
+          />
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <label class="block text-xs font-bold uppercase tracking-wider text-slate-600">Password</label>
+            <button type="button" onclick="togglePasswordVisibility('authPassword')" class="text-xs font-semibold text-lavender-700 hover:underline">
+              Show / Hide
+            </button>
+          </div>
+          <input
+            type="password"
+            id="authPassword"
+            required
+            placeholder="Enter password for privacy"
+            class="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100 outline-none text-slate-800 font-medium"
+          />
+          <p class="text-[11px] text-slate-500 mt-1.5">
+            💡 Enjoy a <strong>14-day free trial</strong> upon sign-up, then Le 30/month via Orange Money or MasterCard.
+          </p>
+        </div>
+
+        <button
+          type="submit"
+          id="authSubmitBtn"
+          class="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-lavender-500 to-rose-500 hover:from-lavender-700 hover:to-rose-700 text-white font-bold text-base shadow-lg shadow-lavender-200 transition-all active:scale-[0.99]"
+        >
+          Start 2-Week Free Trial ✨
+        </button>
+      </form>
+
+      <!-- Quick Demo / Sample Login Helper -->
+      <div class="mt-6 pt-5 border-t border-slate-100 text-center">
+        <p class="text-xs text-slate-500 mb-2">Want to explore with sample college cycle data right away?</p>
+        <button
+          type="button"
+          onclick="quickDemoLogin()"
+          class="w-full py-2.5 px-4 rounded-xl bg-sage-50 hover:bg-sage-100 text-sage-800 font-semibold text-xs border border-sage-200 transition-all"
+        >
+          🚀 Instant Demo Sign-In (Pre-loaded Cycle Data)
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- MAIN APPLICATION DASHBOARD (HIDDEN UNTIL LOGGED IN)                    -->
+  <!-- ===================================================================== -->
+  <div id="appDashboard" class="hidden flex-1 flex flex-col">
+
+    <!-- STICKY HEADER -->
+    <header class="sticky top-0 z-30 bg-white/90 backdrop-blur-md border-b border-lavender-100 shadow-sm">
+      <div class="max-w-5xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+        <!-- Brand & Student Greeting -->
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-lavender-500 to-rose-500 flex items-center justify-center text-white text-xl shadow-sm">
+            🌸
+          </div>
+          <div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="font-display font-bold text-lg text-slate-800" id="headerGreeting">Hi, Student!</span>
+              <!-- Subscription / Trial / VIP Badge -->
+              <button
+                type="button"
+                onclick="openPaywallModal(true)"
+                id="subscriptionBadge"
+                class="text-xs font-bold px-2.5 py-0.5 rounded-full bg-lavender-100 text-lavender-700 border border-lavender-200 hover:bg-lavender-200 transition-all"
+                title="Click to view subscription or enter VIP code"
+              >
+                Free Trial: 14 Days Left
+              </button>
+            </div>
+            <p class="text-xs text-slate-500" id="headerCycleSubtext">Calculating your cycle stage...</p>
+          </div>
+        </div>
+
+        <!-- Header Action Buttons -->
+        <div class="flex items-center gap-2">
+          <!-- Privacy Blur Toggle (Eye Icon) -->
+          <button
+            type="button"
+            id="privacyToggleBtn"
+            onclick="togglePrivacyBlur()"
+            class="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-all"
+            title="Blur sensitive text around friends in class or dorm"
+          >
+            <span id="privacyEyeIcon">👁️</span>
+            <span class="hidden sm:inline" id="privacyBtnLabel">Privacy Blur: Off</span>
+          </button>
+
+          <!-- Clinic Summary Button -->
+          <button
+            type="button"
+            onclick="openClinicSummaryModal()"
+            class="px-3 py-2 rounded-xl bg-sage-100 hover:bg-sage-200 text-sage-800 text-xs font-bold flex items-center gap-1.5 border border-sage-200 transition-all"
+          >
+            <span>🩺</span>
+            <span>Clinic Summary</span>
+          </button>
+
+          <!-- Log Out Button -->
+          <button
+            type="button"
+            onclick="handleLogout()"
+            class="px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold border border-rose-200 transition-all"
+          >
+            Log Out
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- MAIN CONTENT CONTAINER -->
+    <main class="max-w-5xl mx-auto w-full px-4 py-6 space-y-6 flex-1">
+
+      <!-- ================================================================= -->
+      <!-- TOP ALERT BANNERS (2-Day Bag Reminder & Campus Clinic Alert)       -->
+      <!-- ================================================================= -->
+      <div id="alertBannersContainer" class="space-y-3">
+        <!-- 2-Day Bag Reminder Banner -->
+        <div id="bagReminderBanner" class="hidden rounded-2xl bg-gradient-to-r from-peach-100 to-rose-100 border-2 border-peach-500 p-4 shadow-sm flex items-start justify-between gap-3">
+          <div class="flex items-start gap-3">
+            <span class="text-2xl">🎒</span>
+            <div>
+              <h3 class="font-display font-bold text-slate-900 text-sm sm:text-base">
+                Heads up: Your period is expected in ~2 days!
+              </h3>
+              <p class="text-xs sm:text-sm text-slate-700 mt-0.5">
+                Make sure you have pads, tampons, and pain relief packed in your bag for class!
+              </p>
+            </div>
+          </div>
+          <button onclick="dismissBagBanner()" class="text-xs font-bold text-slate-500 hover:text-slate-800 px-2 py-1">✕</button>
+        </div>
+
+        <!-- Campus Clinic Red-Flag Alert Banner -->
+        <div id="campusClinicBanner" class="hidden rounded-2xl bg-rose-50 border-2 border-rose-500 p-4 shadow-sm flex items-start justify-between gap-3">
+          <div class="flex items-start gap-3">
+            <span class="text-2xl">🏥</span>
+            <div>
+              <h3 class="font-display font-bold text-rose-900 text-sm sm:text-base">
+                Campus Clinic Heads-Up
+              </h3>
+              <p id="campusClinicBannerText" class="text-xs sm:text-sm text-rose-800 mt-0.5">
+                Pain this bad or irregular cycles aren't something you just have to push through. Consider dropping by the campus health center to chat with a doctor and rule out conditions like endometriosis or PCOS!
+              </p>
+              <button
+                type="button"
+                onclick="openClinicSummaryModal()"
+                class="mt-2 inline-flex items-center gap-1 text-xs font-bold text-rose-700 underline hover:text-rose-900"
+              >
+                Open your Doctor Summary Card 🩺 →
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================================================================= -->
+      <!-- SECTION 3: MAIN FOCUS — CORE PERIOD START & END TRACKER            -->
+      <!-- ================================================================= -->
+      <section class="bg-white rounded-3xl shadow-sm border border-lavender-100 p-5 sm:p-6">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+          <div>
+            <span class="inline-block text-xs font-bold uppercase tracking-wider text-rose-700 bg-rose-50 px-3 py-1 rounded-full border border-rose-200 mb-1">
+              Main Cycle Tracker
+            </span>
+            <h2 class="text-xl sm:text-2xl font-extrabold text-slate-800">
+              Record Actual Period Start & End Dates
+            </h2>
+            <p class="text-xs sm:text-sm text-slate-600">
+              Enter the exact date your period started and ended. You can save just the Start Date if your period is still ongoing, and add the End Date when it finishes!
+            </p>
+          </div>
+          <!-- Active Date Indicator -->
+          <div class="bg-lavender-50 border border-lavender-200 rounded-2xl px-4 py-2.5 text-right shrink-0">
+            <span class="block text-[11px] font-bold uppercase tracking-wider text-lavender-700">Selected Calendar Date</span>
+            <span id="selectedDateDisplay" class="font-display font-bold text-sm sm:text-base text-slate-800">Today</span>
+          </div>
+        </div>
+
+        <!-- EXPLICIT PERIOD START & END DATE PICKER CARD -->
+        <div class="rounded-2xl bg-gradient-to-br from-rose-50/90 via-cream to-lavender-50/90 border-2 border-rose-200 p-4 sm:p-5 mb-6 shadow-sm">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <span class="text-xl">🩸</span>
+              <h3 id="periodFormHeading" class="font-display font-bold text-sm sm:text-base text-slate-800">
+                Log or Update a Menstrual Period
+              </h3>
+            </div>
+            <span id="editingPeriodBadge" class="hidden text-xs font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+              ✏️ Editing Saved Period
+            </span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <!-- 1. Period Start Date Picker -->
+            <div class="bg-white rounded-2xl p-3.5 border border-rose-200 shadow-sm">
+              <div class="flex items-center justify-between mb-1.5">
+                <label for="periodStartDateInput" class="text-xs font-extrabold uppercase tracking-wider text-rose-700">
+                  1. Period Start Date (First Day) *
+                </label>
+                <button
+                  type="button"
+                  onclick="setPeriodInputToday('periodStartDateInput')"
+                  class="text-[11px] font-bold px-2.5 py-0.5 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 transition-all"
+                >
+                  Set Today
+                </button>
+              </div>
+              <input
+                type="date"
+                id="periodStartDateInput"
+                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-rose-500 focus:ring-2 focus:ring-rose-100 outline-none text-sm font-bold text-slate-800 bg-cream"
+              />
+              <p class="text-[11px] text-slate-500 mt-1.5">
+                The exact first day your menstrual bleeding started.
+              </p>
+            </div>
+
+            <!-- 2. Period End Date Picker -->
+            <div class="bg-white rounded-2xl p-3.5 border border-lavender-200 shadow-sm">
+              <div class="flex items-center justify-between mb-1.5">
+                <label for="periodEndDateInput" class="text-xs font-extrabold uppercase tracking-wider text-lavender-700">
+                  2. Period End Date (Last Day)
+                </label>
+                <div class="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onclick="setPeriodInputToday('periodEndDateInput')"
+                    class="text-[11px] font-bold px-2.5 py-0.5 rounded-lg bg-lavender-100 hover:bg-lavender-200 text-lavender-800 transition-all"
+                  >
+                    Set Today
+                  </button>
+                  <button
+                    type="button"
+                    onclick="document.getElementById('periodEndDateInput').value = ''"
+                    class="text-[11px] font-semibold px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 transition-all"
+                    title="Clear End Date if period is still ongoing"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              <input
+                type="date"
+                id="periodEndDateInput"
+                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-lavender-500 focus:ring-2 focus:ring-lavender-100 outline-none text-sm font-bold text-slate-800 bg-cream"
+              />
+              <p class="text-[11px] text-slate-500 mt-1.5">
+                Leave blank if bleeding is still ongoing; update when it ends.
+              </p>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onclick="savePeriodDatesFromInputs()"
+              class="flex-1 sm:flex-none px-6 py-3.5 rounded-2xl bg-gradient-to-r from-rose-500 to-lavender-600 hover:from-rose-600 hover:to-lavender-700 text-white font-display font-extrabold text-sm sm:text-base shadow-md hover:shadow-lg transition-all active:scale-[0.99] flex items-center justify-center gap-2"
+            >
+              <span>💾 Save Period Dates</span>
+            </button>
+            <button
+              type="button"
+              id="cancelPeriodEditBtn"
+              onclick="cancelPeriodEdit()"
+              class="hidden px-4 py-3 rounded-2xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs sm:text-sm transition-all"
+            >
+              Cancel Edit
+            </button>
+            <span class="text-xs text-slate-600">
+              💡 Tip: Click <strong>✏️ Edit</strong> on any saved period below to add or adjust its End Date later.
+            </span>
+          </div>
+        </div>
+
+        <!-- CYCLE ENGINE STATS STRIP -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+          <div class="rounded-2xl bg-lavender-50/80 border border-lavender-100 p-3.5">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">Current Cycle Day</span>
+            <span id="statCycleDay" class="font-display font-extrabold text-lg sm:text-xl text-lavender-900 mt-0.5 block">Day 1</span>
+            <span id="statCycleStageLabel" class="text-[11px] font-semibold text-lavender-700 block">Menstruation</span>
+          </div>
+          <div class="rounded-2xl bg-rose-50/80 border border-rose-100 p-3.5">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">Next Predicted Period</span>
+            <span id="statNextPeriod" class="font-display font-extrabold text-lg sm:text-xl text-rose-700 mt-0.5 block">—</span>
+            <span id="statNextPeriodCountdown" class="text-[11px] font-semibold text-rose-600 block">Based on your logs</span>
+          </div>
+          <div class="rounded-2xl bg-sage-50/80 border border-sage-200 p-3.5">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">Avg Cycle & Bleed</span>
+            <span id="statAvgCycle" class="font-display font-extrabold text-lg sm:text-xl text-sage-800 mt-0.5 block">28d Cycle</span>
+            <span id="statAvgDuration" class="text-[11px] font-semibold text-sage-700 block">5dAvg Period</span>
+          </div>
+          <div class="rounded-2xl bg-peach-50/80 border border-peach-200 p-3.5">
+            <span class="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">Predicted Ovulation</span>
+            <span id="statOvulationWindow" class="font-display font-extrabold text-sm sm:text-base text-peach-700 mt-1 block">Days 9–15</span>
+            <span id="statOvulationDates" class="text-[11px] font-semibold text-peach-700 block">Fertile window</span>
+          </div>
+        </div>
+
+        <!-- INTERACTIVE MONTHLY CALENDAR & RECORDED CYCLES -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <!-- Recorded Period History List (5/12 width on desktop) -->
+          <div class="lg:col-span-5 bg-lavender-50/50 rounded-2xl border border-lavender-100 p-4">
+            <div class="flex items-center justify-between mb-1">
+              <h3 class="font-display font-bold text-sm sm:text-base text-slate-800">
+                📅 Recorded Period History
+              </h3>
+              <span id="cycleCountBadge" class="text-xs font-bold px-2.5 py-0.5 rounded-full bg-lavender-100 text-lavender-700">0 Logged</span>
+            </div>
+            <p class="text-xs text-slate-500 mb-3">
+              Exact Start Date, End Date, Bleeding Duration, and Cycle Length between starts:
+            </p>
+            <div id="periodHistoryList" class="space-y-2.5 max-h-80 overflow-y-auto pr-1"></div>
+          </div>
+
+          <!-- Calendar Column (7/12 width on desktop) -->
+          <div class="lg:col-span-7 bg-cream rounded-2xl border border-slate-200/80 p-4">
+            <div class="flex items-center justify-between mb-4">
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  onclick="changeCalendarMonth(-1)"
+                  class="w-9 h-9 rounded-xl bg-white border border-slate-200 hover:bg-lavender-50 flex items-center justify-center font-bold text-slate-700"
+                >
+                  ◀
+                </button>
+                <h3 id="calendarMonthLabel" class="font-display font-bold text-base sm:text-lg text-slate-800 min-w-[140px] text-center">
+                  Month Year
+                </h3>
+                <button
+                  type="button"
+                  onclick="changeCalendarMonth(1)"
+                  class="w-9 h-9 rounded-xl bg-white border border-slate-200 hover:bg-lavender-50 flex items-center justify-center font-bold text-slate-700"
+                >
+                  ▶
+                </button>
+              </div>
+              <button
+                type="button"
+                onclick="jumpToToday()"
+                class="text-xs font-bold px-3 py-1.5 rounded-xl bg-lavender-100 text-lavender-700 hover:bg-lavender-200 transition-all"
+              >
+                Jump to Today
+              </button>
+            </div>
+
+            <!-- Days of week header -->
+            <div class="grid grid-cols-7 gap-1 text-center text-[11px] font-bold uppercase text-slate-400 mb-2">
+              <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+            </div>
+
+            <!-- Calendar Grid -->
+            <div id="calendarGrid" class="grid grid-cols-7 gap-1.5"></div>
+
+            <!-- Quick Set Selected Date as Period Start/End Helper -->
+            <div class="mt-3 pt-3 border-t border-slate-200/70 flex flex-wrap items-center justify-between gap-2">
+              <span class="text-[11px] font-bold text-slate-600">
+                Use selected calendar date (<span id="calendarQuickDateText" class="text-lavender-700">Today</span>):
+              </span>
+              <div class="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onclick="useSelectedDateForPeriod('start')"
+                  class="px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-[11px] transition-all"
+                >
+                  🩸 Set as Start Date
+                </button>
+                <button
+                  type="button"
+                  onclick="useSelectedDateForPeriod('end')"
+                  class="px-2.5 py-1 rounded-lg bg-lavender-100 hover:bg-lavender-200 text-lavender-800 font-bold text-[11px] transition-all"
+                >
+                  ✨ Set as End Date
+                </button>
+              </div>
+            </div>
+
+            <!-- Calendar Legend -->
+            <div class="mt-3 pt-3 border-t border-slate-200/70 flex flex-wrap items-center gap-3 text-xs text-slate-600">
+              <span class="inline-flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-rose-500 inline-block"></span> Logged Period</span>
+              <span class="inline-flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-rose-200 border border-dashed border-rose-500 inline-block"></span> Predicted Period</span>
+              <span class="inline-flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-sage-200 border border-sage-600 inline-block"></span> Ovulation Stage</span>
+              <span class="inline-flex items-center gap-1.5"><span class="w-3 h-3 rounded-full bg-amber-400 inline-block"></span> 💊 Emergency Pill</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- SECTION 4: EMERGENCY CONTRACEPTION LOGGER & HIDDEN PILL ICON (💊) -->
+      <!-- ================================================================= -->
+      <section class="bg-white rounded-3xl shadow-sm border-2 border-peach-200 p-5 sm:p-6 privacy-sensitive">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div>
+            <div class="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-peach-700 bg-peach-50 px-3 py-1 rounded-full border border-peach-200 mb-1">
+              <span>⏱️ Date & Time Logger</span>
+            </div>
+            <h2 class="text-lg sm:text-xl font-extrabold text-slate-800">
+              Emergency Contraception Tracker
+            </h2>
+            <p class="text-xs sm:text-sm text-slate-600 mt-0.5">
+              Select the exact date and time you took an emergency contraceptive pill (e.g., Postinor-2 / Plan B). Tap the <strong>💊 Pill Icon</strong> right nested here anytime to view body effects & advice.
+            </p>
+          </div>
+
+          <!-- Date/Time Input + Log Button + Tappable Pill Icon (💊) -->
+          <div class="flex flex-wrap items-center gap-2.5 shrink-0 bg-peach-50/60 p-3 rounded-2xl border border-peach-200">
+            <div class="flex flex-col">
+              <div class="flex items-center justify-between mb-1">
+                <label for="customPillDateTime" class="text-[11px] font-bold uppercase tracking-wider text-peach-700">
+                  Date & Time Taken
+                </label>
+                <button
+                  type="button"
+                  onclick="setEmergencyPillInputNow()"
+                  class="text-[10px] font-bold text-lavender-700 hover:underline"
+                >
+                  Set Now
+                </button>
+              </div>
+              <input
+                type="datetime-local"
+                id="customPillDateTime"
+                class="px-3 py-2 rounded-xl border border-peach-300 text-xs sm:text-sm font-bold text-slate-800 bg-white outline-none focus:border-peach-500"
+              />
+            </div>
+
+            <button
+              type="button"
+              onclick="logEmergencyPillFromPicker()"
+              class="px-4 py-3 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs sm:text-sm shadow-sm transition-all active:scale-95 flex items-center gap-1.5 self-end"
+            >
+              <span>➕ Log Emergency Pill</span>
+            </button>
+
+            <!-- TAPPABLE PILL ICON BUTTON (OPENS HIDDEN ADVICE MODAL) -->
+            <button
+              type="button"
+              onclick="openPillAdviceModal()"
+              class="pill-btn-pulse px-4 py-3 rounded-2xl bg-gradient-to-r from-peach-500 to-rose-500 hover:from-peach-700 hover:to-rose-700 text-white font-bold text-xs sm:text-sm shadow-md flex items-center gap-2 border-2 border-white ring-2 ring-peach-200 self-end"
+              title="Tap to view Emergency Pill Body & Cycle Advice"
+            >
+              <span class="text-lg">💊</span>
+              <span>Pill Advice</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Logged Pill History List -->
+        <div class="mt-4 pt-3 border-t border-slate-100">
+          <div class="text-xs font-bold text-slate-500 mb-2">Logged Emergency Pill Dates & Times:</div>
+          <div id="pillLogsContainer" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-28 overflow-y-auto"></div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- SECTION 5: DAILY MOOD RATING & BOLD CYCLE STAGE BANNER            -->
+      <!-- ================================================================= -->
+      <section class="bg-white rounded-3xl shadow-sm border border-lavender-200 p-5 sm:p-6">
+        <!-- LARGE BOLD HIGH-CONTRAST CYCLE STAGE BANNER -->
+        <div id="moodStageBanner" class="rounded-2xl bg-gradient-to-r from-lavender-900 via-lavender-700 to-rose-700 text-white p-4 sm:p-5 mb-5 shadow-md">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <span class="text-[11px] font-bold uppercase tracking-widest text-lavender-200 block">
+                Active Cycle Stage Linked to Your Mood
+              </span>
+              <div id="boldStageTitle" class="font-display font-extrabold text-xl sm:text-2xl md:text-3xl tracking-tight mt-0.5">
+                CURRENT STAGE: OVULATION STAGE
+              </div>
+            </div>
+            <div class="inline-flex items-center gap-2 bg-white/15 backdrop-blur-sm px-3.5 py-2 rounded-xl border border-white/20 shrink-0">
+              <span id="boldStageEmoji" class="text-2xl">🌸</span>
+              <div class="text-left">
+                <div id="boldStageDayText" class="text-xs font-bold uppercase tracking-wider text-white">Cycle Day 14</div>
+                <div id="boldStageHormoneText" class="text-[11px] text-lavender-100">Estrogen Peaking</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MOOD RATING HEADER -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+          <div>
+            <h2 class="text-lg sm:text-xl font-extrabold text-slate-800">
+              How Are You Feeling Today? (Rate Your Mood)
+            </h2>
+            <p class="text-xs sm:text-sm text-slate-600">
+              Tap your mood below — it automatically links to your current cycle stage (<span id="inlineStageName" class="font-bold text-lavender-700">Ovulation Stage</span>).
+            </p>
+          </div>
+        </div>
+
+        <!-- 9 MOOD BUTTONS (INCLUDING NUMB) -->
+        <div id="moodButtonsGrid" class="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-9 gap-2.5 mb-5">
+          <!-- Populated dynamically by JS -->
+        </div>
+
+        <!-- STAGE-LINKED MOOD CONFIRMATION & INSIGHT BOX -->
+        <div id="moodConfirmationBox" class="rounded-2xl bg-lavender-50 border-2 border-lavender-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div id="moodConfirmPrimary" class="font-display font-extrabold text-sm sm:text-base text-lavender-900">
+              👆 Tap a mood above to link how you feel today with your current period stage.
+            </div>
+            <p id="moodConfirmSecondary" class="text-xs text-slate-600 mt-1">
+              Tracking moods across stages helps you see if feeling Numb, Anxious, or Energized follows your hormone shifts.
+            </p>
+          </div>
+
+          <!-- ONE-TAP SHARE MY VIBE BUTTON -->
+          <button
+            type="button"
+            onclick="shareMyVibeToClipboard()"
+            class="shrink-0 px-4 py-2.5 rounded-xl bg-lavender-700 hover:bg-lavender-900 text-white font-bold text-xs shadow-sm transition-all flex items-center gap-2 self-start sm:self-center"
+          >
+            <span>💬</span>
+            <span>Copy Status for Partner / Bestie</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- SECTION 6: SMART PHASE ADVISOR (PREGNANCY, BODY, MIND, STUDY)      -->
+      <!-- ================================================================= -->
+      <section class="bg-white rounded-3xl shadow-sm border border-sage-200 p-5 sm:p-6">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+          <div>
+            <span class="inline-block text-xs font-bold uppercase tracking-wider text-sage-800 bg-sage-100 px-3 py-1 rounded-full border border-sage-200 mb-1">
+              Smart Phase Advisor
+            </span>
+            <h2 class="text-xl sm:text-2xl font-extrabold text-slate-800">
+              Body, Mind, Pregnancy & Study Advice
+            </h2>
+            <p class="text-xs sm:text-sm text-slate-600">
+              Tailored to your current stage, or tap any stage tab below to preview what happens next.
+            </p>
+          </div>
+          <button
+            type="button"
+            onclick="resetAdvisorToCurrentStage()"
+            class="self-start sm:self-auto text-xs font-bold text-sage-800 bg-sage-50 hover:bg-sage-100 border border-sage-200 px-3 py-1.5 rounded-xl"
+          >
+            🎯 Sync to My Current Stage
+          </button>
+        </div>
+
+        <!-- Stage Selector Tabs -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-5" id="advisorStageTabs">
+          <button type="button" onclick="selectAdvisorStage('MENSTRUATION')" id="advTab_MENSTRUATION" class="py-2.5 px-3 rounded-xl font-bold text-xs border transition-all">
+            🩸 Menstruation (Days 1–5)
+          </button>
+          <button type="button" onclick="selectAdvisorStage('FOLLICULAR')" id="advTab_FOLLICULAR" class="py-2.5 px-3 rounded-xl font-bold text-xs border transition-all">
+            🌱 Follicular (Days 6–11)
+          </button>
+          <button type="button" onclick="selectAdvisorStage('OVULATION')" id="advTab_OVULATION" class="py-2.5 px-3 rounded-xl font-bold text-xs border transition-all">
+            🌸 Ovulation (Days 12–16)
+          </button>
+          <button type="button" onclick="selectAdvisorStage('LUTEAL')" id="advTab_LUTEAL" class="py-2.5 px-3 rounded-xl font-bold text-xs border transition-all">
+            🌙 Luteal (Days 17–28)
+          </button>
+        </div>
+
+        <!-- 4 Advice Cards Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- 1. Pregnancy Risk Card (Privacy-Sensitive) -->
+          <div id="advisorPregnancyCard" class="rounded-2xl p-4 border-2 border-rose-200 bg-rose-50/70 privacy-sensitive">
+            <div class="flex items-center gap-2 font-display font-extrabold text-base text-rose-900 mb-1.5">
+              <span>🤰</span>
+              <span>Pregnancy Risk in This Stage</span>
+            </div>
+            <p id="advisorPregnancyText" class="text-xs sm:text-sm font-semibold text-rose-900 leading-relaxed"></p>
+          </div>
+
+          <!-- 2. Body & Physiology Advice Card -->
+          <div class="rounded-2xl p-4 border border-sage-200 bg-sage-50/70">
+            <div class="flex items-center gap-2 font-display font-extrabold text-base text-sage-800 mb-1.5">
+              <span>💪</span>
+              <span>Body, Energy & Smartwatch HRV</span>
+            </div>
+            <p id="advisorBodyText" class="text-xs sm:text-sm text-slate-700 leading-relaxed"></p>
+          </div>
+
+          <!-- 3. Mind & Psychological Advice Card -->
+          <div class="rounded-2xl p-4 border border-lavender-200 bg-lavender-50/70">
+            <div class="flex items-center gap-2 font-display font-extrabold text-base text-lavender-900 mb-1.5">
+              <span>🧠</span>
+              <span>Mind, Mood & Emotions</span>
+            </div>
+            <p id="advisorMindText" class="text-xs sm:text-sm text-slate-700 leading-relaxed"></p>
+          </div>
+
+          <!-- 4. College Study & Exam Sync Card -->
+          <div class="rounded-2xl p-4 border border-peach-200 bg-peach-50/70">
+            <div class="flex items-center gap-2 font-display font-extrabold text-base text-peach-700 mb-1.5">
+              <span>📚</span>
+              <span>College Study & Exam Sync</span>
+            </div>
+            <p id="advisorStudyText" class="text-xs sm:text-sm text-slate-700 leading-relaxed"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================= -->
+      <!-- SECTION 7: SYMPTOMS, DAILY WINS, CRAVINGS & CAMPUS MYTH BUSTER    -->
+      <!-- ================================================================= -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Physical Symptoms, Daily Wins & Notes (2/3 width on desktop) -->
+        <section class="lg:col-span-2 bg-white rounded-3xl shadow-sm border border-lavender-100 p-5 sm:p-6">
+          <h2 class="text-lg sm:text-xl font-extrabold text-slate-800 mb-1">
+            Physical Symptoms & Student Daily Wins
+          </h2>
+          <p class="text-xs text-slate-500 mb-4">
+            Check off symptoms or healthy campus habits for <span id="checklistDateLabel" class="font-bold text-slate-700">Today</span>:
+          </p>
+
+          <!-- Physical Symptoms Grid -->
+          <div class="mb-5">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-rose-700 mb-2.5">Physical Symptoms</h3>
+            <div id="symptomsChecklistGrid" class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+
+          <!-- Student Daily Wins Grid -->
+          <div class="mb-5">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-sage-800 mb-2.5">Student Daily Wins (Fights Inflammation)</h3>
+            <div id="habitsChecklistGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+
+          <!-- Daily Notes & Save Button -->
+          <div>
+            <label for="dailyNotesInput" class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+              Personal Journal / Notes for Selected Date
+            </label>
+            <div class="flex flex-col sm:flex-row gap-3">
+              <textarea
+                id="dailyNotesInput"
+                rows="2"
+                placeholder="Write down how class went, pain levels, cravings, or questions for the doctor..."
+                class="flex-1 px-4 py-2.5 rounded-2xl border border-slate-200 focus:border-lavender-500 focus:ring-2 focus:ring-lavender-100 outline-none text-xs sm:text-sm text-slate-800"
+              ></textarea>
+              <button
+                type="button"
+                onclick="saveDailyNotes()"
+                class="px-5 py-3 rounded-2xl bg-lavender-500 hover:bg-lavender-700 text-white font-bold text-xs sm:text-sm shrink-0 shadow-sm transition-all"
+              >
+                Save Daily Log 💾
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Food Craving Translator & Campus Myth vs Fact (1/3 width on desktop) -->
+        <div class="space-y-6">
+          <!-- Craving & Iron Guide Card -->
+          <section class="bg-white rounded-3xl shadow-sm border border-peach-200 p-5">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-xl">🍫</span>
+              <h3 class="font-display font-bold text-base text-slate-800">Craving & Iron Guide</h3>
+            </div>
+            <p id="cravingGuideText" class="text-xs sm:text-sm text-slate-700 leading-relaxed bg-peach-50/70 rounded-2xl p-3.5 border border-peach-100"></p>
+          </section>
+
+          <!-- Campus Myth vs. Fact Interactive Card -->
+          <section class="bg-white rounded-3xl shadow-sm border border-lavender-200 p-5">
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-2">
+                <span class="text-xl">💡</span>
+                <h3 class="font-display font-bold text-base text-slate-800">Campus Myth vs. Fact</h3>
+              </div>
+              <span id="mythCounterBadge" class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-lavender-100 text-lavender-700">1 / 5</span>
+            </div>
+
+            <div class="rounded-2xl bg-lavender-50/70 border border-lavender-100 p-3.5 space-y-2">
+              <div id="mythText" class="text-xs font-bold text-rose-700"></div>
+              <div id="factText" class="text-xs text-slate-700 leading-relaxed"></div>
+            </div>
+
+            <div class="mt-3 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onclick="cycleMyth(-1)"
+                class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
+              >
+                ⬅️ Prev
+              </button>
+              <button
+                type="button"
+                onclick="cycleMyth(1)"
+                class="flex-1 py-1.5 px-3 rounded-xl bg-lavender-500 hover:bg-lavender-700 text-white font-bold text-xs"
+              >
+                Next Tip ➡️
+              </button>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- ================================================================= -->
+      <!-- SECTION 8: EDUCATIONAL VIDEO RESOURCES SECTION (BOTTOM OF APP)    -->
+      <!-- ================================================================= -->
+      <section class="bg-gradient-to-r from-lavender-100 via-peach-50 to-sage-100 rounded-3xl shadow-sm border border-lavender-200 p-5 sm:p-6">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <span class="inline-block text-xs font-bold uppercase tracking-wider text-lavender-900 bg-white/80 px-3 py-1 rounded-full mb-1">
+              🎥 Science & Expert Education
+            </span>
+            <h2 class="text-lg sm:text-xl font-extrabold text-slate-900">
+              Learn About Your Hormones, Mood & The Pill
+            </h2>
+            <p class="text-xs sm:text-sm text-slate-700 mt-0.5">
+              Watch world-leading doctors and researchers break down periods, fertility, PCOS, endometriosis, and how hormonal pills affect your brain.
+            </p>
+          </div>
+
+          <div class="flex flex-col sm:flex-row gap-3 shrink-0">
+            <!-- Video Link 1: Full Panel -->
+            <a
+              href="https://youtu.be/kizDk8idpT8?si=vEYQ294JII4hSX3R"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="px-4 py-3 rounded-2xl bg-white hover:bg-lavender-50 text-slate-900 font-bold text-xs sm:text-sm shadow-sm border border-lavender-200 flex items-center gap-2 transition-all"
+            >
+              <span class="text-base">▶️</span>
+              <span>Watch: Women's Health & Cycle Experts</span>
+            </a>
+
+            <!-- Video Link 2: Dr. Sarah Hill 11-min Pill Clip -->
+            <a
+              href="https://youtu.be/4r9zkXiE8NY?si=R0ACvRHhjm3HCvFj"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="px-4 py-3 rounded-2xl bg-lavender-700 hover:bg-lavender-900 text-white font-bold text-xs sm:text-sm shadow-sm flex items-center gap-2 transition-all"
+            >
+              <span class="text-base">🎬</span>
+              <span>Watch: How The Pill Changes Hormones & Mood (11m)</span>
+            </a>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- =================================================================== -->
+    <!-- FOOTER & DEVELOPER / ADMIN PREVIEW TOOLBAR                          -->
+    <!-- =================================================================== -->
+    <footer class="bg-white border-t border-slate-200/80 py-4 px-4 mt-8">
+      <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
+        <div>
+          <strong>BloomCampus</strong> • Built for College Students • 14-Day Free Trial then Le 30/mo
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onclick="openPaywallModal(true)"
+            class="px-3 py-1.5 rounded-xl bg-peach-50 hover:bg-peach-100 text-peach-700 font-bold border border-peach-200"
+          >
+            💳 Preview Paywall (Le 30 Orange Money / MasterCard)
+          </button>
+          <button
+            type="button"
+            onclick="forceToggleBagBanner()"
+            class="px-3 py-1.5 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-700 font-bold border border-lavender-200"
+          >
+            🎒 Toggle 2-Day Bag Alert
+          </button>
+          <button
+            type="button"
+            onclick="loadSampleStudentData()"
+            class="px-3 py-1.5 rounded-xl bg-sage-50 hover:bg-sage-100 text-sage-800 font-bold border border-sage-200"
+          >
+            ✨ Load Sample Student Data
+          </button>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- MODAL 1: HIDDEN EMERGENCY PILL ADVICE MODAL (OPENS ON 💊 ICON TAP)   -->
+  <!-- ===================================================================== -->
+  <div id="pillAdviceModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-7 shadow-2xl border-2 border-peach-200 max-h-[90vh] overflow-y-auto">
+      <div class="flex items-start justify-between gap-3 mb-4">
+        <div class="flex items-center gap-3">
+          <div class="w-12 h-12 rounded-2xl bg-peach-100 border border-peach-200 flex items-center justify-center text-2xl">
+            💊
+          </div>
+          <div>
+            <span class="text-[11px] font-bold uppercase tracking-wider text-peach-700">Emergency Contraception Guide</span>
+            <h3 class="font-display font-extrabold text-xl text-slate-900">How the Pill Affects Your Body & Cycle</h3>
+          </div>
+        </div>
+        <button
+          type="button"
+          onclick="closePillAdviceModal()"
+          class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-600"
+        >
+          ✕
+        </button>
+      </div>
+
+      <!-- 21-Day Automatic Pregnancy Test Countdown Banner -->
+      <div class="rounded-2xl bg-rose-50 border-2 border-rose-400 p-4 mb-4">
+        <div id="pillModalCountdownText" class="font-display font-extrabold text-sm sm:text-base text-rose-900">
+          📅 Follow-Up: Take a pregnancy test on — if your period hasn't arrived or is more than 7 days late.
+        </div>
+        <p id="pillModalLastLoggedSub" class="text-xs text-rose-700 mt-1">
+          Calculated 21 days (3 weeks) from your logged pill timestamp.
+        </p>
+      </div>
+
+      <!-- Short Clinical Bullet Points -->
+      <ul class="space-y-3 text-xs sm:text-sm text-slate-700 mb-5">
+        <li class="flex items-start gap-2.5 bg-cream p-3 rounded-2xl border border-slate-200/80">
+          <span class="text-base">📆</span>
+          <div>
+            <strong>Cycle Shift:</strong> Your next period might arrive a few days early or up to a week late because emergency pills work primarily by delaying ovulation.
+          </div>
+        </li>
+        <li class="flex items-start gap-2.5 bg-cream p-3 rounded-2xl border border-slate-200/80">
+          <span class="text-base">🩹</span>
+          <div>
+            <strong>Short-Term Body Effects:</strong> Light spotting/bleeding, temporary fatigue, mild lower-belly cramping, breast tenderness, or mild nausea for a few days is completely normal.
+          </div>
+        </li>
+        <li class="flex items-start gap-2.5 bg-peach-50/70 p-3 rounded-2xl border border-peach-200">
+          <span class="text-base">⏱️</span>
+          <div>
+            <strong>The 2-Hour Rule:</strong> If you vomit within <strong>2 hours</strong> of taking the emergency pill, your body may not have absorbed it—speak to a pharmacist or campus clinic as you may need another dose.
+          </div>
+        </li>
+        <li class="flex items-start gap-2.5 bg-lavender-50/80 p-3 rounded-2xl border border-lavender-200">
+          <span class="text-base">🧠</span>
+          <div>
+            <strong>How Hormonal Pills Affect Your Mind & Body:</strong> Hormonal contraceptives and emergency pills use synthetic progestin to pause ovulation and lower natural estrogen and free testosterone—which can temporarily shift your mood, stress resilience, energy, and attraction.
+          </div>
+        </li>
+      </ul>
+
+      <!-- Video Button inside Pill Modal -->
+      <a
+        href="https://youtu.be/4r9zkXiE8NY?si=R0ACvRHhjm3HCvFj"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-lavender-700 to-rose-600 hover:from-lavender-900 hover:to-rose-700 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition-all mb-3"
+      >
+        <span>▶️</span>
+        <span>Watch: How The Pill Affects Your Brain & Hormones (11 min)</span>
+      </a>
+
+      <button
+        type="button"
+        onclick="closePillAdviceModal()"
+        class="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
+      >
+        Got It, Close Advice
+      </button>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- MODAL 2: CLINIC SUMMARY MODAL (FOR HEALTHCARE PROVIDER APPOINTMENTS)  -->
+  <!-- ===================================================================== -->
+  <div id="clinicSummaryModal" class="hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-7 shadow-2xl border border-sage-200 max-h-[90vh] overflow-y-auto">
+      <div class="flex items-start justify-between gap-3 mb-4">
+        <div class="flex items-center gap-3">
+          <div class="w-12 h-12 rounded-2xl bg-sage-100 border border-sage-200 flex items-center justify-center text-2xl">
+            🩺
+          </div>
+          <div>
+            <span class="text-[11px] font-bold uppercase tracking-wider text-sage-800">One-Tap Medical Snapshot</span>
+            <h3 class="font-display font-extrabold text-xl text-slate-900">Campus Clinic Summary</h3>
+          </div>
+        </div>
+        <button
+          type="button"
+          onclick="closeClinicSummaryModal()"
+          class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-600"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div id="clinicSummaryContent" class="space-y-3 text-xs sm:text-sm text-slate-700 mb-5">
+        <!-- Populated dynamically by JS -->
+      </div>
+
+      <div class="flex flex-col sm:flex-row gap-2.5">
+        <button
+          type="button"
+          onclick="copyClinicSummary()"
+          class="flex-1 py-3 px-4 rounded-2xl bg-sage-600 hover:bg-sage-800 text-white font-bold text-xs sm:text-sm shadow-sm transition-all"
+        >
+          📋 Copy Summary for Doctor
+        </button>
+        <button
+          type="button"
+          onclick="closeClinicSummaryModal()"
+          class="py-3 px-5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs sm:text-sm"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- MODAL 3: 14-DAY TRIAL PAYWALL (LE 30/MO ORANGE MONEY & MASTERCARD)     -->
+  <!-- ===================================================================== -->
+  <div id="paywallModal" class="hidden fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl max-w-md w-full p-6 sm:p-7 shadow-2xl border-2 border-lavender-200 max-h-[92vh] overflow-y-auto">
+      <div class="flex items-start justify-between gap-2 mb-3">
+        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-peach-100 text-peach-700 font-bold text-xs">
+          🔒 Subscription Plan • Le 30 / Month
+        </span>
+        <button
+          type="button"
+          id="closePaywallPreviewBtn"
+          onclick="closePaywallModal()"
+          class="text-xs font-bold text-slate-500 hover:text-slate-800 px-2.5 py-1 rounded-lg bg-slate-100"
+        >
+          Close ✕
+        </button>
+      </div>
+
+      <h3 id="paywallHeadline" class="font-display font-extrabold text-xl sm:text-2xl text-slate-900">
+        Your 2-Week Free Trial has ended. Subscribe for Le 30 / month to continue.
+      </h3>
+      <p class="text-xs sm:text-sm text-slate-600 mt-1 mb-4">
+        Keep unlimited access to your period predictions, stage-linked mood analytics, and clinic summaries for just <strong>Le 30 every month</strong>.
+      </p>
+
+      <!-- Instant Auto-Unlock + Owner Notification Explanation Banner -->
+      <div class="rounded-2xl bg-sage-50 border border-sage-200 p-3 mb-4 text-[11px] text-sage-800 flex items-start gap-2">
+        <span class="text-base leading-none">⚡</span>
+        <div>
+          <strong>Instant Automatic Unlock:</strong> As soon as you complete your <strong>Le 30</strong> payment below, the app unlocks automatically for 30 days and sends your payment confirmation straight to the app admin.
+        </div>
+      </div>
+
+      <!-- Payment Method Selector Tabs: Orange Money vs MasterCard -->
+      <div class="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-2xl mb-5">
+        <button
+          type="button"
+          id="tabOrangeMoney"
+          onclick="switchPaymentTab('orange')"
+          class="py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm transition-all bg-orange-500 text-white shadow-sm flex items-center justify-center gap-1.5"
+        >
+          <span>🟧</span>
+          <span>Orange Money</span>
+        </button>
+        <button
+          type="button"
+          id="tabMasterCard"
+          onclick="switchPaymentTab('mastercard')"
+          class="py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm transition-all text-slate-700 hover:text-slate-900 flex items-center justify-center gap-1.5"
+        >
+          <span>💳</span>
+          <span>MasterCard</span>
+        </button>
+      </div>
+
+      <!-- OPTION 1: ORANGE MONEY FORM -->
+      <form id="orangeMoneyForm" onsubmit="processSubscriptionPayment(event, 'Orange Money')" class="space-y-4">
+        <div class="rounded-2xl bg-orange-50 border border-orange-200 p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-extrabold uppercase tracking-wider text-orange-800">Orange Money Sierra Leone</span>
+            <span class="font-display font-extrabold text-base text-orange-600">Le 30 / mo</span>
+          </div>
+
+          <!-- Recipient Orange Money Number Box -->
+          <div class="bg-white rounded-xl p-3 border-2 border-orange-300 flex items-center justify-between gap-2">
+            <div>
+              <span class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Step 1 — Send Le 30 To Orange Money:</span>
+              <span class="font-display font-extrabold text-lg text-slate-900 tracking-wide">073604401</span>
+            </div>
+            <button
+              type="button"
+              onclick="copyTextToClipboard('073604401', '🟧 Orange Money number 073604401 copied!')"
+              class="px-3 py-1.5 rounded-lg bg-orange-100 hover:bg-orange-200 text-orange-900 font-bold text-xs transition-all shrink-0"
+            >
+              📋 Copy
+            </button>
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1.5">Step 2 — Your Orange Money Number (Sender) *</label>
+            <input
+              type="tel"
+              id="orangePhoneInput"
+              required
+              placeholder="e.g., 076 123 456"
+              class="w-full px-4 py-2.5 rounded-xl border border-orange-300 focus:border-orange-500 outline-none text-sm font-semibold text-slate-800 bg-white"
+            />
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1.5">Step 3 — Orange Money SMS Transaction ID / Ref *</label>
+            <input
+              type="text"
+              id="orangeTxIdInput"
+              required
+              placeholder="e.g., MP261020.1234.A12345"
+              class="w-full px-4 py-2.5 rounded-xl border border-orange-200 focus:border-orange-500 outline-none text-xs font-medium text-slate-800 bg-white"
+            />
+          </div>
+
+          <p class="text-[11px] text-orange-800">
+            💡 Dial <strong>#144#</strong> to send <strong>Le 30</strong> to <strong>073604401</strong>, enter your sender number & SMS ID above, and tap below to automatically unlock the app.
+          </p>
+        </div>
+
+        <button
+          type="submit"
+          class="w-full py-3.5 px-5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-extrabold text-sm shadow-md transition-all"
+        >
+          Confirm Le 30 Orange Money & Unlock App 🟧
+        </button>
+      </form>
+
+      <!-- OPTION 2: MASTERCARD / BANK ACCOUNT FORM -->
+      <form id="masterCardForm" onsubmit="processSubscriptionPayment(event, 'MasterCard')" class="hidden space-y-3">
+        <div class="rounded-2xl bg-slate-50 border border-slate-200 p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-extrabold uppercase tracking-wider text-slate-700">MasterCard Direct Payment</span>
+            <span class="font-display font-extrabold text-base text-lavender-700">Le 30 / mo</span>
+          </div>
+
+          <!-- Destination Account Number Slot (Locked to Owner's SC Account: 536-10-956-18-663-142) -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-[11px] font-extrabold uppercase tracking-wider text-lavender-800">
+                Receiving Account Number (SC Destination)
+              </label>
+              <button
+                type="button"
+                onclick="copyTextToClipboard('536-10-956-18-663-142', '🏦 Receiving Account 536-10-956-18-663-142 copied!')"
+                class="text-[11px] font-bold text-lavender-700 hover:underline"
+              >
+                📋 Copy Account
+              </button>
+            </div>
+            <input
+              type="text"
+              id="mcDestinationAccount"
+              value="536-10-956-18-663-142"
+              readonly
+              class="w-full px-3.5 py-2.5 rounded-xl border-2 border-lavender-300 bg-lavender-50 font-mono font-extrabold text-xs sm:text-sm text-lavender-900 outline-none cursor-not-allowed"
+            />
+            <p class="text-[10px] text-slate-500 mt-1">
+              ✅ Money is sent directly to this account (<strong>SC: 536-10-956-18-663-142</strong>).
+            </p>
+          </div>
+
+          <hr class="border-slate-200" />
+
+          <p class="text-[11px] font-bold text-slate-700">
+            👇 Enter Your MasterCard Details Below to Send Le 30:
+          </p>
+
+          <!-- Student Cardholder Name -->
+          <div>
+            <label class="block text-[11px] font-bold text-slate-600 mb-1">Your Name on MasterCard *</label>
+            <input
+              type="text"
+              id="mcName"
+              required
+              placeholder="e.g., Kumba Hannah Kaingbanja"
+              class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-lavender-500 outline-none text-xs sm:text-sm font-medium bg-white"
+            />
+          </div>
+
+          <!-- Student MasterCard 16-Digit Number Slot -->
+          <div>
+            <label class="block text-[11px] font-bold text-slate-600 mb-1">Your 16-Digit MasterCard Number *</label>
+            <input
+              type="text"
+              id="mcNumber"
+              required
+              maxlength="19"
+              oninput="formatCardNumberInput(this)"
+              placeholder="5412 0000 0000 0000"
+              class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-lavender-500 outline-none font-mono text-xs sm:text-sm font-bold bg-white"
+            />
+          </div>
+
+          <!-- Student EXP Date & CVV Slots -->
+          <div class="grid grid-cols-2 gap-2.5">
+            <div>
+              <label class="block text-[11px] font-bold text-slate-600 mb-1">EXP Date (MM/YY) *</label>
+              <input
+                type="text"
+                id="mcExpiry"
+                required
+                placeholder="MM/YY"
+                maxlength="5"
+                oninput="formatExpiryInput(this)"
+                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-lavender-500 outline-none font-mono text-xs sm:text-sm font-bold bg-white"
+              />
+            </div>
+            <div>
+              <label class="block text-[11px] font-bold text-slate-600 mb-1">CVV (3 Digits on Back) *</label>
+              <input
+                type="password"
+                id="mcCvv"
+                required
+                placeholder="123"
+                maxlength="4"
+                class="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-lavender-500 outline-none font-mono text-xs sm:text-sm font-bold bg-white"
+              />
+            </div>
+          </div>
+
+          <!-- Locked Amount Display -->
+          <div class="bg-white rounded-xl p-2.5 border border-slate-200 flex items-center justify-between text-xs">
+            <span class="font-bold text-slate-600">Monthly Amount to Charge:</span>
+            <span class="font-display font-extrabold text-lavender-700">Le 30.00</span>
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          class="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-lavender-600 to-rose-500 hover:from-lavender-700 hover:to-rose-600 text-white font-extrabold text-sm shadow-md transition-all"
+        >
+          Send Le 30 to Account 536-10-956-18-663-142 💳
+        </button>
+      </form>
+
+      <!-- PAYMENT CONFIRMATION & WHATSAPP NOTIFICATION BOX (SHOWS AFTER PAYMENT) -->
+      <div id="paymentSuccessReceiptBox" class="hidden mt-4 rounded-2xl bg-sage-100 border-2 border-sage-600 p-4 space-y-3">
+        <div class="flex items-center gap-2 text-sage-800 font-display font-extrabold text-base">
+          <span>✅</span>
+          <span>App Unlocked for 30 Days!</span>
+        </div>
+        <p id="paymentReceiptDetailsText" class="text-xs text-slate-700 leading-relaxed"></p>
+        <div class="flex flex-col gap-2">
+          <button
+            type="button"
+            onclick="sendPrivateReceiptToOwner()"
+            class="w-full py-3 px-4 rounded-xl bg-sage-600 hover:bg-sage-800 text-white font-bold text-xs sm:text-sm text-center shadow-sm transition-all flex items-center justify-center gap-2"
+          >
+            <span>📲</span>
+            <span>Send Payment Verification to App Admin</span>
+          </button>
+          <button
+            type="button"
+            onclick="closePaywallModal()"
+            class="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-slate-800 font-bold text-xs border border-slate-300"
+          >
+            Continue to My Tracker 🌸
+          </button>
+        </div>
+      </div>
+
+      <!-- WAIT FOR 2 WEEKS FREE TRIAL OR PAY LATER OPTION -->
+      <div id="trialWaitOptionBox" class="mt-4 pt-4 border-t border-slate-200 text-center">
+        <p class="text-xs text-slate-500 mb-2">Want to enjoy your 14-day free trial first before subscribing?</p>
+        <button
+          type="button"
+          onclick="handleWaitForTrial()"
+          class="w-full py-3 px-4 rounded-2xl bg-lavender-50 hover:bg-lavender-100 text-lavender-900 font-bold text-xs sm:text-sm border border-lavender-200 transition-all shadow-sm"
+        >
+          ⏳ Wait & Use Free Trial (14 Days Left)
+        </button>
+      </div>
+
+      <!-- SECRET VIP / OWNER BYPASS CODE BOX -->
+      <div class="mt-4 pt-4 border-t border-slate-200">
+        <label class="block text-xs font-bold text-slate-600 mb-1.5">
+          🔑 Have a VIP / Owner Access Code?
+        </label>
+        <div class="flex gap-2">
+          <input
+            type="password"
+            id="vipSecretCodeInput"
+            placeholder="Enter secret password..."
+            class="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-medium outline-none focus:border-lavender-500"
+          />
+          <button
+            type="button"
+            onclick="applyVipCodeFromModal()"
+            class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs"
+          >
+            Unlock Free
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- APPLICATION JAVASCRIPT LOGIC                                          -->
+  <!-- ===================================================================== -->
+  <script>
+    /*************************************************************************
+     * CONSTANTS & EDUCATIONAL CONTENT
+     *************************************************************************/
+    const STORAGE_USERS_KEY = 'bloomcampus_users_v1';
+    const STORAGE_SESSION_KEY = 'bloomcampus_current_user_v1';
+    const SECRET_VIP_PASSWORDS = ['Bobson@565.', 'Bobson@565'];
+
+    const MOOD_CATEGORIES = [
+      { id: 'Energized', emoji: '⚡', tone: 'positive' },
+      { id: 'Calm',      emoji: '🌿', tone: 'positive' },
+      { id: 'Focused',   emoji: '🎯', tone: 'positive' },
+      { id: 'Creative',  emoji: '🎨', tone: 'positive' },
+      { id: 'Irritable', emoji: '😤', tone: 'challenge' },
+      { id: 'Fatigued',  emoji: '🥱', tone: 'challenge' },
+      { id: 'Sad',       emoji: '😢', tone: 'challenge' },
+      { id: 'Anxious',   emoji: '😰', tone: 'challenge' },
+      { id: 'Numb',      emoji: '😶‍🌫️', tone: 'challenge' }
+    ];
+
+    const SYMPTOM_ITEMS = [
+      { id: 'Mild Cramps',       emoji: '🌸' },
+      { id: 'Severe Pain',       emoji: '🚨', redFlag: true },
+      { id: 'Headache',          emoji: '🤕' },
+      { id: 'Bloating',          emoji: '🎈' },
+      { id: 'Breast Tenderness', emoji: '💗' },
+      { id: 'Acne / Breakout',   emoji: '✨' }
+    ];
+
+    const HABIT_ITEMS = [
+      { id: 'Slept 7+ Hours',      emoji: '😴' },
+      { id: 'Hydrated',            emoji: '💧' },
+      { id: 'Moved My Body',       emoji: '🏃‍♀️' },
+      { id: 'Ate Something Green', emoji: '🥦' }
+    ];
+
+    const PHASE_ADVISOR_DATA = {
+      MENSTRUATION: {
+        name: 'MENSTRUATION STAGE',
+        shortName: 'Menstruation',
+        emoji: '🩸',
+        bannerGradient: 'from-rose-900 via-rose-700 to-lavender-900',
+        hormoneSummary: 'Estrogen & Progesterone at Lowest Baselines',
+        pregnancy: '🤰 Pregnancy Risk is LOWEST right now. Your uterine lining is shedding, making conception biologically very unlikely.',
+        body: '💪 Energy is typically lower as iron and blood loss occur. Prioritize warm fluids, gentle stretching, and adequate rest. Smartwatch HRV might dip slightly.',
+        mind: '🧠 Reflective and inward-focused. Emotional processing is high; give yourself grace if your social battery is drained.',
+        study: '📚 Great time for low-stress tasks like organizing notes, reviewing flashcards in bed, or proofreading. Avoid pulling all-nighters.',
+        craving: '🍫 Craving chocolate or sweets? Your body is asking for magnesium to relax uterine muscles (opt for dark chocolate, nuts, or bananas). Add iron-rich foods (eggs, beans, leafy greens, meat) with Vitamin C to fight period fatigue.'
+      },
+      FOLLICULAR: {
+        name: 'FOLLICULAR STAGE',
+        shortName: 'Follicular',
+        emoji: '🌱',
+        bannerGradient: 'from-sage-800 via-sage-600 to-lavender-700',
+        hormoneSummary: 'Estrogen Rising Steadily',
+        pregnancy: '🤰 Pregnancy Risk INCREASES day by day as estrogen rises and an egg matures inside the ovary.',
+        body: '💪 Energy is climbing fast! Stamina is building, making this an ideal window for cardio, running, and fitness goals.',
+        mind: '🧠 Optimism and social energy return. Brain fog lifts as neurotransmitters respond to rising estrogen.',
+        study: '📚 Peak time for heavy memorization, starting big research papers, learning complex math/science concepts, and brainstorming.',
+        craving: '🥗 Your metabolism is steady and efficient. Focus on fresh vegetables, vibrant fruits, and healthy proteins to sustain your rising energy.'
+      },
+      OVULATION: {
+        name: 'OVULATION STAGE',
+        shortName: 'Ovulation',
+        emoji: '🌸',
+        bannerGradient: 'from-peach-700 via-rose-600 to-lavender-700',
+        hormoneSummary: 'Estrogen Peaking & LH Surge',
+        pregnancy: '⚠️ PEAK PREGNANCY RISK: Highest chance of conceiving quickly right now. Sperm can survive up to 5 days.',
+        body: '💪 Peak physical power, coordination, and strength! Your body is primed for high-intensity workouts and weight lifting.',
+        mind: '🧠 High confidence, sharp verbal skills, and vibrant social magnetism. You feel talkative and outgoing.',
+        study: '📚 Perfect window for group projects, class presentations, public speaking, and leading team discussions.',
+        craving: '💧 Energy is at its absolute maximum. Keep hydrated with water and fresh juices to support natural metabolic peak.'
+      },
+      LUTEAL: {
+        name: 'LUTEAL STAGE',
+        shortName: 'Luteal',
+        emoji: '🌙',
+        bannerGradient: 'from-lavender-900 via-lavender-700 to-peach-700',
+        hormoneSummary: 'Progesterone Dominant then Declining',
+        pregnancy: '🤰 Pregnancy Risk decreases after ovulation, dropping to near zero just before your period starts.',
+        body: '💪 Progesterone raises your core body temperature and resting heart rate while lowering HRV. Fatigue is normal as your body works hard.',
+        mind: '🧠 Nesting instinct is high. You might feel more sensitive, introspective, or easily overwhelmed by social noise.',
+        study: '📚 Good for deep focus on independent tasks or editing. If brain fog hits, take short movement breaks in your dorm.',
+        craving: '🍪 Progesterone naturally triggers carb and sugar cravings. Choose complex carbs (oats, sweet potatoes) and magnesium snacks to stay balanced.'
+      }
+    };
+
+    const CAMPUS_MYTHS = [
+      {
+        myth: '❌ MYTH: "You cannot get pregnant if you have unprotected sex during your period."',
+        fact: '✅ FACT: Sperm can live inside the reproductive tract for up to 5 days. If you have a shorter cycle or ovulate early, sperm from period sex can still fertilize the egg!'
+      },
+      {
+        myth: '❌ MYTH: "Taking one Emergency Pill protects you for the rest of the month."',
+        fact: '✅ FACT: An emergency pill only works to delay ovulation for that single incident. If you have unprotected sex again later in the same cycle, you can still get pregnant.'
+      },
+      {
+        myth: '❌ MYTH: "Extreme period pain that makes you miss class is just normal for women."',
+        fact: '✅ FACT: Debilitating pain is a clinical red flag for conditions like Endometriosis or Adenomyosis. You deserve medical support—never let anyone dismiss severe pain.'
+      },
+      {
+        myth: '❌ MYTH: "If my smartwatch says my HRV recovery is poor before my period, I\'m out of shape."',
+        fact: '✅ FACT: During the Luteal Stage, progesterone naturally raises your resting heart rate and lowers HRV. It\'s healthy hormone physiology, not lost fitness!'
+      },
+      {
+        myth: '❌ MYTH: "Hormonal birth control pills have zero effect on mood or attraction."',
+        fact: '✅ FACT: As Dr. Sarah Hill\'s research shows, synthetic progestin pauses the ovulation estrogen surge and lowers free testosterone, which can shift mood, energy, and attraction.'
+      }
+    ];
+
+    /*************************************************************************
+     * APPLICATION STATE
+     *************************************************************************/
+    let authMode = 'signup'; // 'signup' | 'signin'
+    let currentUserEmail = null;
+    let userData = null; // Loaded user object from localStorage
+    let selectedDateStr = formatDateISO(new Date());
+    let calendarMonth = new Date().getMonth();
+    let calendarYear = new Date().getFullYear();
+    let activeAdvisorStage = 'OVULATION';
+    let currentMythIndex = 0;
+    let privacyBlurEnabled = false;
+    let forceBagBannerPreview = false;
+    let editingPeriodStartKey = null; // Tracks if user is editing an existing period record
+    let latestPaymentReceiptMessage = ''; // Stores receipt for private admin notification
+
+    /*************************************************************************
+     * UTILITY HELPERS
+     *************************************************************************/
+    function formatDateISO(dateObj) {
+      if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) {
+        dateObj = new Date();
+      }
+      const y = dateObj.getFullYear();
+      const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const d = String(dateObj.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    function formatDateTimeLocalISO(dateObj) {
+      if (!(dateObj instanceof Date) || isNaN(dateObj.getTime())) {
+        dateObj = new Date();
+      }
+      const y = dateObj.getFullYear();
+      const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const d = String(dateObj.getDate()).padStart(2, '0');
+      const hh = String(dateObj.getHours()).padStart(2, '0');
+      const mm = String(dateObj.getMinutes()).padStart(2, '0');
+      return `${y}-${m}-${d}T${hh}:${mm}`;
+    }
+
+    function parseDateISO(isoStr) {
+      if (!isoStr || typeof isoStr !== 'string') return new Date();
+      const parts = isoStr.split('-').map(Number);
+      if (parts.length !== 3 || parts.some(isNaN)) return new Date();
+      const [y, m, d] = parts;
+      return new Date(y, m - 1, d, 12, 0, 0);
+    }
+
+    function addDaysISO(isoStr, daysToAdd) {
+      const d = parseDateISO(isoStr);
+      d.setDate(d.getDate() + Number(daysToAdd || 0));
+      return formatDateISO(d);
+    }
+
+    function formatHumanDate(isoStr) {
+      if (!isoStr) return '—';
+      const d = parseDateISO(isoStr);
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function formatShortMonthDay(isoStr) {
+      if (!isoStr) return '—';
+      const d = parseDateISO(isoStr);
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+
+    function diffDays(dateStrA, dateStrB) {
+      const a = parseDateISO(dateStrA);
+      const b = parseDateISO(dateStrB);
+      const utcA = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+      const utcB = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+      return Math.round((utcB - utcA) / (1000 * 60 * 60 * 24));
+    }
+
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      const colors = {
+        success: 'bg-sage-800 text-white border-sage-600',
+        warning: 'bg-peach-700 text-white border-peach-500',
+        info: 'bg-lavender-900 text-white border-lavender-500'
+      };
+      toast.className = `pointer-events-auto px-4 py-3 rounded-2xl shadow-lg border text-xs sm:text-sm font-bold flex items-center justify-between gap-3 transition-all duration-300 ${colors[type] || colors.info}`;
+      toast.innerHTML = `<span>${message}</span><button onclick="this.parentElement.remove()" class="opacity-80 hover:opacity-100">✕</button>`;
+      container.appendChild(toast);
+      setTimeout(() => {
+        if (toast.parentElement) toast.remove();
+      }, 4200);
+    }
+
+    function copyTextToClipboard(text, successMsg) {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        showToast(successMsg || 'Copied to clipboard!', 'success');
+      } catch (err) {
+        showToast('Could not copy automatically.', 'warning');
+      }
+      document.body.removeChild(textarea);
+    }
+
+    function isSecretVipPassword(str) {
+      if (!str) return false;
+      const trimmed = str.trim();
+      return SECRET_VIP_PASSWORDS.includes(trimmed);
+    }
+
+    /*************************************************************************
+     * STORAGE MANAGEMENT
+     *************************************************************************/
+    function getAllUsers() {
+      try {
+        const raw = localStorage.getItem(STORAGE_USERS_KEY);
+        return raw ? JSON.parse(raw) : {};
+      } catch (e) {
+        return {};
+      }
+    }
+
+    function saveAllUsers(usersObj) {
+      try {
+        localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(usersObj));
+      } catch (e) {
+        console.error('Failed saving users to localStorage', e);
+      }
+    }
+
+    function saveCurrentUserData() {
+      if (!currentUserEmail || !userData) return;
+      const users = getAllUsers();
+      users[currentUserEmail] = userData;
+      saveAllUsers(users);
+    }
+
+    function createDefaultUserObject(name, email, password, age = '') {
+      const isVip = isSecretVipPassword(password);
+      const today = new Date();
+      const thirteenDaysAgo = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 13);
+      const nineDaysAgo = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 9);
+
+      // If secret password was used on sign-up, grant 1 month (30 days) free access
+      const initialSubUntil = isVip ? Date.now() + 30 * 24 * 60 * 60 * 1000 : null;
+
+      return {
+        name: name || email.split('@')[0],
+        age: age ? String(age).trim() : '',
+        email: email.toLowerCase(),
+        password: password,
+        createdAt: Date.now(),
+        isVip: false, // Controlled via subscriptionUntil
+        subscriptionUntil: initialSubUntil,
+        paymentMethod: isVip ? 'Secret VIP Code (1 Month)' : null,
+        periods: [
+          {
+            startDate: formatDateISO(thirteenDaysAgo),
+            endDate: formatDateISO(nineDaysAgo)
+          }
+        ],
+        emergencyPills: [],
+        dailyLogs: {}
+      };
+    }
+
+    /*************************************************************************
+     * 1. AUTHENTICATION & SECRET VIP LOGIC (`Bobson@565.`)
+     *************************************************************************/
+    function switchAuthTab(mode) {
+      authMode = mode;
+      const tabUp = document.getElementById('tabSignUp');
+      const tabIn = document.getElementById('tabSignIn');
+      const submitBtn = document.getElementById('authSubmitBtn');
+      const nameWrapper = document.getElementById('nameFieldWrapper');
+      const ageInput = document.getElementById('authAge');
+
+      if (mode === 'signup') {
+        tabUp.className = 'py-2.5 rounded-xl font-bold text-sm transition-all bg-white text-lavender-700 shadow-sm';
+        tabIn.className = 'py-2.5 rounded-xl font-bold text-sm transition-all text-slate-600 hover:text-slate-900';
+        submitBtn.textContent = 'Start 2-Week Free Trial ✨';
+        nameWrapper.classList.remove('hidden');
+        if (ageInput) ageInput.required = true;
+      } else {
+        tabIn.className = 'py-2.5 rounded-xl font-bold text-sm transition-all bg-white text-lavender-700 shadow-sm';
+        tabUp.className = 'py-2.5 rounded-xl font-bold text-sm transition-all text-slate-600 hover:text-slate-900';
+        submitBtn.textContent = 'Sign In to My Tracker 🌸';
+        nameWrapper.classList.remove('hidden');
+        if (ageInput) ageInput.required = false;
+      }
+    }
+
+    function togglePasswordVisibility(inputId) {
+      const input = document.getElementById(inputId);
+      input.type = input.type === 'password' ? 'text' : 'password';
+    }
+
+    function handleAuthSubmit(e) {
+      e.preventDefault();
+      const nameInput = document.getElementById('authName').value.trim();
+      const ageInput = document.getElementById('authAge').value.trim();
+      const emailInput = document.getElementById('authEmail').value.trim().toLowerCase();
+      const passwordInput = document.getElementById('authPassword').value;
+
+      if (!emailInput || !passwordInput) {
+        showToast('Please enter your email and password.', 'warning');
+        return;
+      }
+
+      if (authMode === 'signup' && !ageInput) {
+        showToast('Please enter your age to create your account.', 'warning');
+        return;
+      }
+
+      const users = getAllUsers();
+      const enteredSecretVip = isSecretVipPassword(passwordInput);
+
+      if (authMode === 'signup') {
+        if (users[emailInput]) {
+          if (users[emailInput].password === passwordInput || enteredSecretVip) {
+            if (enteredSecretVip) {
+              users[emailInput].subscriptionUntil = Date.now() + 30 * 24 * 60 * 60 * 1000;
+              users[emailInput].paymentMethod = 'Secret VIP Code (1 Month)';
+            }
+            if (nameInput) users[emailInput].name = nameInput;
+            if (ageInput) users[emailInput].age = ageInput;
+            saveAllUsers(users);
+            loginUserSession(emailInput);
+            return;
+          } else {
+            showToast('Account already exists with that email. Check your password or Sign In.', 'warning');
+            return;
+          }
+        }
+        const newUser = createDefaultUserObject(nameInput || 'Student', emailInput, passwordInput, ageInput);
+        users[emailInput] = newUser;
+        saveAllUsers(users);
+        loginUserSession(emailInput);
+        if (enteredSecretVip) {
+          showToast('🌟 Secret VIP Code Recognized! 1 Month Free Access Unlocked.', 'success');
+        } else {
+          showToast('Welcome to BloomCampus! Your 14-day free trial has started.', 'success');
+        }
+      } else {
+        const existing = users[emailInput];
+        if (!existing) {
+          const newUser = createDefaultUserObject(nameInput || 'Student', emailInput, passwordInput, ageInput);
+          users[emailInput] = newUser;
+          saveAllUsers(users);
+          loginUserSession(emailInput);
+          if (newUser.subscriptionUntil) {
+            showToast('🌟 Secret VIP Code Recognized! 1 Month Free Access Unlocked.', 'success');
+          } else {
+            showToast('Account created & signed in! 14-day free trial active.', 'success');
+          }
+          return;
+        }
+
+        if (existing.password !== passwordInput && !enteredSecretVip) {
+          showToast('Incorrect password. Please try again.', 'warning');
+          return;
+        }
+
+        if (enteredSecretVip) {
+          existing.subscriptionUntil = Date.now() + 30 * 24 * 60 * 60 * 1000;
+          existing.paymentMethod = 'Secret VIP Code (1 Month)';
+          showToast('🌟 Secret VIP Password Recognized! 1 Month Free Access Enabled.', 'success');
+        }
+        if (nameInput) existing.name = nameInput;
+        if (ageInput) existing.age = ageInput;
+        saveAllUsers(users);
+        loginUserSession(emailInput);
+      }
+    }
+
+    function quickDemoLogin() {
+      const demoEmail = 'student@campus.edu';
+      const users = getAllUsers();
+      if (!users[demoEmail]) {
+        users[demoEmail] = createDefaultUserObject('Kumba Hannah Kaingbanja', demoEmail, 'campus123', '21');
+      } else {
+        users[demoEmail].name = 'Kumba Hannah Kaingbanja';
+        if (!users[demoEmail].age) users[demoEmail].age = '21';
+      }
+      saveAllUsers(users);
+      loginUserSession(demoEmail);
+      loadSampleStudentData(true);
+      showToast('Signed in as Kumba Hannah Kaingbanja (Age 21) with sample cycle data!', 'success');
+    }
+
+    function loginUserSession(email) {
+      const users = getAllUsers();
+      currentUserEmail = email;
+      userData = users[email];
+      localStorage.setItem(STORAGE_SESSION_KEY, email);
+
+      document.getElementById('authScreen').classList.add('hidden');
+      document.getElementById('appDashboard').classList.remove('hidden');
+
+      selectedDateStr = formatDateISO(new Date());
+      const now = new Date();
+      calendarMonth = now.getMonth();
+      calendarYear = now.getFullYear();
+
+      const startInput = document.getElementById('periodStartDateInput');
+      if (startInput) startInput.value = selectedDateStr;
+      setEmergencyPillInputNow();
+
+      refreshEntireDashboard();
+      checkTrialAndPaywallStatus();
+    }
+
+    function handleLogout() {
+      localStorage.removeItem(STORAGE_SESSION_KEY);
+      currentUserEmail = null;
+      userData = null;
+      document.getElementById('appDashboard').classList.add('hidden');
+      document.getElementById('authScreen').classList.remove('hidden');
+      document.getElementById('authPassword').value = '';
+      showToast('You have been logged out safely.', 'info');
+    }
+
+    /*************************************************************************
+     * 2. 14-DAY FREE TRIAL & LE 30/MONTH PAYWALL LOGIC
+     *************************************************************************/
+    function getTrialStatus() {
+      if (!userData) return { status: 'trial', daysLeft: 14, label: 'Free Trial: 14 Days Left' };
+
+      if (userData.subscriptionUntil) {
+        if (userData.subscriptionUntil > Date.now()) {
+          const daysRemaining = Math.ceil((userData.subscriptionUntil - Date.now()) / (1000 * 60 * 60 * 24));
+          return {
+            status: 'subscribed',
+            daysLeft: daysRemaining,
+            label: `Active: ${daysRemaining}d Left (${userData.paymentMethod || '1-Month Pass'})`
+          };
+        } else {
+          return {
+            status: 'expired',
+            daysLeft: 0,
+            label: '1-Month Pass Ended • Renew (Le 30/mo)'
+          };
+        }
+      }
+
+      const msElapsed = Date.now() - (userData.createdAt || Date.now());
+      const daysElapsed = Math.floor(msElapsed / (1000 * 60 * 60 * 24));
+      const daysLeft = Math.max(0, 14 - daysElapsed);
+      if (daysElapsed >= 14) {
+        return { status: 'expired', daysLeft: 0, label: 'Trial Ended • Subscribe (Le 30/mo)' };
+      }
+      return { status: 'trial', daysLeft, label: `Free Trial: ${daysLeft} Days Left` };
+    }
+
+    function checkTrialAndPaywallStatus() {
+      const badge = document.getElementById('subscriptionBadge');
+      const trialInfo = getTrialStatus();
+      badge.textContent = trialInfo.label;
+
+      if (trialInfo.status === 'subscribed') {
+        badge.className = 'text-xs font-bold px-3 py-1 rounded-full bg-sage-100 text-sage-800 border border-sage-300 hover:bg-sage-200 transition-all';
+      } else if (trialInfo.status === 'expired') {
+        badge.className = 'text-xs font-bold px-3 py-1 rounded-full bg-rose-100 text-rose-800 border border-rose-300 animate-pulse';
+        openPaywallModal(false);
+      } else {
+        badge.className = 'text-xs font-bold px-2.5 py-0.5 rounded-full bg-lavender-100 text-lavender-700 border border-lavender-200 hover:bg-lavender-200 transition-all';
+      }
+    }
+
+    function openPaywallModal(isPreview = true) {
+      const modal = document.getElementById('paywallModal');
+      const closeBtn = document.getElementById('closePaywallPreviewBtn');
+      const receiptBox = document.getElementById('paymentSuccessReceiptBox');
+      const trialWaitBox = document.getElementById('trialWaitOptionBox');
+      const headlineEl = document.getElementById('paywallHeadline');
+
+      if (receiptBox) receiptBox.classList.add('hidden');
+      const trialInfo = getTrialStatus();
+
+      if (trialInfo.status === 'expired') {
+        headlineEl.textContent = 'Your Free Trial or 1-Month Pass has ended. Subscribe for Le 30 / month to continue.';
+      } else if (trialInfo.status === 'subscribed') {
+        headlineEl.textContent = `Your 1-Month Pass is Active (${trialInfo.daysLeft} days left). Renew or extend anytime for Le 30 / month.`;
+      } else {
+        headlineEl.textContent = `Pay Now (Le 30 / month) or Wait Until Your 2-Week Free Trial Ends (${trialInfo.daysLeft} days left).`;
+      }
+
+      if (!isPreview && trialInfo.status === 'expired') {
+        closeBtn.classList.add('hidden');
+        if (trialWaitBox) trialWaitBox.classList.add('hidden');
+      } else {
+        closeBtn.classList.remove('hidden');
+        if (trialWaitBox) {
+          if (trialInfo.status === 'trial') {
+            trialWaitBox.classList.remove('hidden');
+            const btnText = trialWaitBox.querySelector('button');
+            if (btnText) {
+              btnText.textContent = `⏳ Wait for 2 Weeks to End & Continue Free Trial (${trialInfo.daysLeft} Days Left)`;
+            }
+          } else {
+            trialWaitBox.classList.add('hidden');
+          }
+        }
+      }
+      modal.classList.remove('hidden');
+    }
+
+    function handleWaitForTrial() {
+      closePaywallModal();
+      const trialInfo = getTrialStatus();
+      showToast(`Continuing your 2-week free trial (${trialInfo.daysLeft || 14} days remaining)!`, 'info');
+    }
+
+    function closePaywallModal() {
+      document.getElementById('paywallModal').classList.add('hidden');
+    }
+
+    function formatCardNumberInput(inputEl) {
+      const digitsOnly = inputEl.value.replace(/\D/g, '').slice(0, 16);
+      const groups = digitsOnly.match(/.{1,4}/g);
+      inputEl.value = groups ? groups.join(' ') : digitsOnly;
+    }
+
+    function formatExpiryInput(inputEl) {
+      const digitsOnly = inputEl.value.replace(/\D/g, '').slice(0, 4);
+      if (digitsOnly.length >= 3) {
+        inputEl.value = `${digitsOnly.slice(0, 2)}/${digitsOnly.slice(2, 4)}`;
+      } else {
+        inputEl.value = digitsOnly;
+      }
+    }
+
+    function switchPaymentTab(method) {
+      const tabOrange = document.getElementById('tabOrangeMoney');
+      const tabMc = document.getElementById('tabMasterCard');
+      const formOrange = document.getElementById('orangeMoneyForm');
+      const formMc = document.getElementById('masterCardForm');
+
+      if (method === 'orange') {
+        tabOrange.className = 'py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm transition-all bg-orange-500 text-white shadow-sm flex items-center justify-center gap-1.5';
+        tabMc.className = 'py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm transition-all text-slate-700 hover:text-slate-900 flex items-center justify-center gap-1.5';
+        formOrange.classList.remove('hidden');
+        formMc.classList.add('hidden');
+      } else {
+        tabMc.className = 'py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm transition-all bg-lavender-700 text-white shadow-sm flex items-center justify-center gap-1.5';
+        tabOrange.className = 'py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm transition-all text-slate-700 hover:text-slate-900 flex items-center justify-center gap-1.5';
+        formMc.classList.remove('hidden');
+        formOrange.classList.add('hidden');
+      }
+    }
+
+    function processSubscriptionPayment(e, methodLabel) {
+      e.preventDefault();
+      if (!userData) return;
+
+      let paymentDetailSummary = '';
+      if (methodLabel === 'Orange Money') {
+        const senderPhone = document.getElementById('orangePhoneInput').value.trim();
+        const txId = document.getElementById('orangeTxIdInput').value.trim();
+        if (!senderPhone || !txId) {
+          showToast('Please enter both your Orange Money phone number and SMS Transaction ID.', 'warning');
+          return;
+        }
+        paymentDetailSummary = `🟧 Orange Money (To 073604401) | Sender Phone: ${senderPhone} | SMS Ref/ID: ${txId}`;
+      } else {
+        const cardHolder = document.getElementById('mcName').value.trim();
+        const cardNum = document.getElementById('mcNumber').value.replace(/\s+/g, '');
+        const expVal = document.getElementById('mcExpiry').value.trim();
+        const cvvVal = document.getElementById('mcCvv').value.trim();
+        if (cardNum.length < 12 || !expVal || cvvVal.length < 3) {
+          showToast('Please complete your 16-digit MasterCard number, EXP date, and CVV.', 'warning');
+          return;
+        }
+        const last4 = cardNum.slice(-4) || 'XXXX';
+        const destAcc = document.getElementById('mcDestinationAccount').value;
+        paymentDetailSummary = `💳 MasterCard (Ending in ${last4}, Name: ${cardHolder}) | Sent to Bank Account: ${destAcc}`;
+      }
+
+      userData.subscriptionUntil = Date.now() + 30 * 24 * 60 * 60 * 1000;
+      userData.paymentMethod = methodLabel;
+      if (!Array.isArray(userData.paymentHistory)) userData.paymentHistory = [];
+      userData.paymentHistory.unshift({
+        date: new Date().toISOString(),
+        amount: 'Le 30',
+        details: paymentDetailSummary
+      });
+
+      saveCurrentUserData();
+      checkTrialAndPaywallStatus();
+
+      latestPaymentReceiptMessage =
+        `Hello BloomCampus Admin! 🌸\n` +
+        `A student has just paid their monthly subscription of Le 30.\n\n` +
+        `• Student Name: ${userData.name}\n` +
+        `• Student Email: ${userData.email}\n` +
+        `• Payment Channel Used: ${paymentDetailSummary}\n` +
+        `• Status: Automatically Unlocked for 30 Days ✅`;
+
+      const receiptBox = document.getElementById('paymentSuccessReceiptBox');
+      const receiptText = document.getElementById('paymentReceiptDetailsText');
+      const closeBtn = document.getElementById('closePaywallPreviewBtn');
+      const trialWaitBox = document.getElementById('trialWaitOptionBox');
+
+      receiptText.textContent = `Recorded via ${methodLabel}. Your account (${userData.email}) is unlocked for 30 days! Tap below to send your verification message to the app admin.`;
+      receiptBox.classList.remove('hidden');
+      closeBtn.classList.remove('hidden');
+      if (trialWaitBox) trialWaitBox.classList.add('hidden');
+      receiptBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+      showToast(`✅ Le 30 payment recorded via ${methodLabel}! App unlocked for 30 days.`, 'success');
+    }
+
+    function sendPrivateReceiptToOwner() {
+      if (!latestPaymentReceiptMessage) return;
+      const encodedAdminDest = 'MjMyMzM1NDU2OTE=';
+      const adminDest = atob(encodedAdminDest);
+      const url = `https://api.whatsapp.com/send?phone=${adminDest}&text=${encodeURIComponent(latestPaymentReceiptMessage)}`;
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+
+    function applyVipCodeFromModal() {
+      const code = document.getElementById('vipSecretCodeInput').value;
+      if (isSecretVipPassword(code)) {
+        userData.subscriptionUntil = Date.now() + 30 * 24 * 60 * 60 * 1000;
+        userData.paymentMethod = 'Secret VIP Code (1 Month)';
+        saveCurrentUserData();
+        checkTrialAndPaywallStatus();
+        closePaywallModal();
+        document.getElementById('vipSecretCodeInput').value = '';
+        showToast('🌟 Secret Password Verified! 1 Month Free Access Granted.', 'success');
+      } else {
+        showToast('Invalid VIP access code.', 'warning');
+      }
+    }
+
+    /*************************************************************************
+     * 3. CYCLE CALCULATION ENGINE & PERIOD START/END LOGGING
+     *************************************************************************/
+    function getSortedPeriods() {
+      if (!userData || !Array.isArray(userData.periods)) return [];
+      return [...userData.periods]
+        .filter(p => p && p.startDate)
+        .sort((a, b) => a.startDate.localeCompare(b.startDate));
+    }
+
+    function calculateCycleMetrics(referenceDateStr = selectedDateStr) {
+      const periods = getSortedPeriods();
+      let avgCycleLength = 28;
+      let avgPeriodDuration = 5;
+
+      if (periods.length >= 2) {
+        let totalCycleDays = 0;
+        let cycleCount = 0;
+        for (let i = 1; i < periods.length; i++) {
+          const gap = diffDays(periods[i - 1].startDate, periods[i].startDate);
+          if (gap >= 15 && gap <= 65) {
+            totalCycleDays += gap;
+            cycleCount++;
+          }
+        }
+        if (cycleCount > 0) {
+          avgCycleLength = Math.round(totalCycleDays / cycleCount);
+        }
+      }
+
+      let durTotal = 0;
+      let durCount = 0;
+      periods.forEach(p => {
+        if (p.startDate && p.endDate && p.endDate >= p.startDate) {
+          const d = diffDays(p.startDate, p.endDate) + 1;
+          if (d >= 1 && d <= 16) {
+            durTotal += d;
+            durCount++;
+          }
+        }
+      });
+      if (durCount > 0) {
+        avgPeriodDuration = Math.round(durTotal / durCount);
+      }
+
+      if (periods.length === 0) {
+        const ovulationDay = 14;
+        return {
+          avgCycleLength: 28,
+          avgPeriodDuration: 5,
+          cycleDay: 1,
+          stageKey: 'MENSTRUATION',
+          ovulationDay,
+          ovStart: 9,
+          ovEnd: 15,
+          nextPeriodDateStr: null,
+          ovulationWindowStartStr: null,
+          ovulationWindowEndStr: null,
+          daysUntilNextPeriod: null,
+          isIrregular: false
+        };
+      }
+
+      const directLoggedPeriod = periods.find(p => {
+        const effectiveEnd =
+          p.endDate && p.endDate >= p.startDate
+            ? p.endDate
+            : addDaysISO(p.startDate, avgPeriodDuration - 1);
+        return referenceDateStr >= p.startDate && referenceDateStr <= effectiveEnd;
+      });
+
+      let activeIndex = -1;
+      for (let i = periods.length - 1; i >= 0; i--) {
+        if (periods[i].startDate <= referenceDateStr) {
+          activeIndex = i;
+          break;
+        }
+      }
+
+      let cycleDay = 1;
+      let effectiveCycleLength = avgCycleLength;
+      let activeDuration = avgPeriodDuration;
+
+      if (activeIndex >= 0) {
+        const activePeriod = periods[activeIndex];
+        const nextLoggedPeriod = activeIndex + 1 < periods.length ? periods[activeIndex + 1] : null;
+
+        if (nextLoggedPeriod) {
+          const actualGap = diffDays(activePeriod.startDate, nextLoggedPeriod.startDate);
+          if (actualGap >= 15 && actualGap <= 65) {
+            effectiveCycleLength = actualGap;
+          }
+        }
+
+        if (activePeriod.endDate && activePeriod.endDate >= activePeriod.startDate) {
+          const customDur = diffDays(activePeriod.startDate, activePeriod.endDate) + 1;
+          if (customDur >= 1 && customDur <= 16) {
+            activeDuration = customDur;
+          }
+        }
+
+        const rawDiff = diffDays(activePeriod.startDate, referenceDateStr);
+        cycleDay = nextLoggedPeriod ? rawDiff + 1 : (rawDiff % effectiveCycleLength) + 1;
+      } else {
+        // Reference date is prior to the first recorded period: project cycle backward accurately
+        const earliestPeriod = periods[0];
+        const rawDiffBefore = diffDays(earliestPeriod.startDate, referenceDateStr); // negative
+        cycleDay = (((rawDiffBefore % effectiveCycleLength) + effectiveCycleLength) % effectiveCycleLength) + 1;
+      }
+
+      const ovulationDay = Math.max(activeDuration + 2, effectiveCycleLength - 14);
+      const ovStart = Math.max(activeDuration + 1, ovulationDay - 5);
+      const ovEnd = Math.min(effectiveCycleLength - 1, ovulationDay + 1);
+
+      let stageKey = 'LUTEAL';
+      if (directLoggedPeriod) {
+        stageKey = 'MENSTRUATION';
+      } else if (activeIndex >= 0 && cycleDay >= 1 && cycleDay <= activeDuration) {
+        stageKey = 'MENSTRUATION';
+      } else if (cycleDay > activeDuration && cycleDay < ovStart) {
+        stageKey = 'FOLLICULAR';
+      } else if (cycleDay >= ovStart && cycleDay <= ovEnd) {
+        stageKey = 'OVULATION';
+      } else {
+        stageKey = 'LUTEAL';
+      }
+
+      const latestPeriod = periods[periods.length - 1];
+      const todayStr = formatDateISO(new Date());
+      let nextPeriodDateStr = addDaysISO(latestPeriod.startDate, avgCycleLength);
+      while (diffDays(todayStr, nextPeriodDateStr) < -avgPeriodDuration) {
+        nextPeriodDateStr = addDaysISO(nextPeriodDateStr, avgCycleLength);
+      }
+
+      const daysUntilNextPeriod = diffDays(todayStr, nextPeriodDateStr);
+      const nextOvulationCenterStr = addDaysISO(nextPeriodDateStr, -14);
+      const ovulationWindowStartStr = addDaysISO(nextOvulationCenterStr, -5);
+      const ovulationWindowEndStr = addDaysISO(nextOvulationCenterStr, 1);
+
+      const isIrregular = avgCycleLength < 25 || avgCycleLength > 35;
+
+      return {
+        avgCycleLength,
+        avgPeriodDuration,
+        cycleDay,
+        stageKey,
+        ovulationDay,
+        ovStart,
+        ovEnd,
+        nextPeriodDateStr,
+        ovulationWindowStartStr,
+        ovulationWindowEndStr,
+        daysUntilNextPeriod,
+        isIrregular
+      };
+    }
+
+    function setPeriodInputToday(inputId) {
+      const todayStr = formatDateISO(new Date());
+      const el = document.getElementById(inputId);
+      if (el) {
+        el.value = todayStr;
+        showToast(`Date picker set to Today (${formatHumanDate(todayStr)}).`, 'info');
+      }
+    }
+
+    function useSelectedDateForPeriod(type) {
+      if (type === 'start') {
+        const el = document.getElementById('periodStartDateInput');
+        if (el) {
+          el.value = selectedDateStr;
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          showToast(`🩸 Period Start Date set to ${formatHumanDate(selectedDateStr)}. Tap "Save Period Dates" to record!`, 'info');
+        }
+      } else {
+        const el = document.getElementById('periodEndDateInput');
+        if (el) {
+          el.value = selectedDateStr;
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          showToast(`✨ Period End Date set to ${formatHumanDate(selectedDateStr)}. Tap "Save Period Dates" to record!`, 'info');
+        }
+      }
+    }
+
+    function savePeriodDatesFromInputs() {
+      if (!userData) return;
+      const startInput = document.getElementById('periodStartDateInput');
+      const endInput = document.getElementById('periodEndDateInput');
+      const startDate = startInput.value;
+      const endDate = endInput.value ? endInput.value : null;
+
+      if (!startDate) {
+        showToast('Please select a Period Start Date (First Day of Bleeding).', 'warning');
+        return;
+      }
+
+      if (endDate && endDate < startDate) {
+        showToast('Period End Date cannot be earlier than the Period Start Date.', 'warning');
+        return;
+      }
+
+      if (endDate && diffDays(startDate, endDate) > 16) {
+        showToast('Period duration looks longer than 16 days—double check your Start & End dates.', 'warning');
+        return;
+      }
+
+      if (!Array.isArray(userData.periods)) userData.periods = [];
+
+      if (editingPeriodStartKey) {
+        const editIdx = userData.periods.findIndex(p => p.startDate === editingPeriodStartKey);
+        if (editIdx >= 0) {
+          userData.periods[editIdx] = { startDate, endDate };
+        } else {
+          userData.periods.push({ startDate, endDate });
+        }
+        editingPeriodStartKey = null;
+        document.getElementById('editingPeriodBadge').classList.add('hidden');
+        document.getElementById('cancelPeriodEditBtn').classList.add('hidden');
+        document.getElementById('periodFormHeading').textContent = 'Log or Update a Menstrual Period';
+      } else {
+        const matchIdx = userData.periods.findIndex(
+          p => Math.abs(diffDays(p.startDate, startDate)) <= 3
+        );
+        if (matchIdx >= 0) {
+          userData.periods[matchIdx].startDate = startDate;
+          userData.periods[matchIdx].endDate = endDate;
+        } else {
+          userData.periods.push({ startDate, endDate });
+        }
+      }
+
+      selectedDateStr = startDate;
+      const parsedStart = parseDateISO(startDate);
+      calendarMonth = parsedStart.getMonth();
+      calendarYear = parsedStart.getFullYear();
+
+      saveCurrentUserData();
+      refreshEntireDashboard();
+
+      if (endDate) {
+        const dur = diffDays(startDate, endDate) + 1;
+        showToast(
+          `🩸 Saved Period: ${formatHumanDate(startDate)} to ${formatHumanDate(endDate)} (${dur} days)!`,
+          'success'
+        );
+      } else {
+        showToast(
+          `🩸 Saved Period Start (${formatHumanDate(startDate)}) as Ongoing! Add the End Date when bleeding finishes.`,
+          'success'
+        );
+      }
+    }
+
+    function editPeriodRecord(startDateStr) {
+      if (!userData) return;
+      const record = (userData.periods || []).find(p => p.startDate === startDateStr);
+      if (!record) return;
+
+      editingPeriodStartKey = record.startDate;
+      document.getElementById('periodStartDateInput').value = record.startDate;
+      document.getElementById('periodEndDateInput').value = record.endDate || '';
+      document.getElementById('editingPeriodBadge').classList.remove('hidden');
+      document.getElementById('cancelPeriodEditBtn').classList.remove('hidden');
+      document.getElementById('periodFormHeading').textContent = `Editing Period Starting ${formatHumanDate(record.startDate)}`;
+
+      document.getElementById('periodStartDateInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      showToast(`Loaded period (${formatHumanDate(record.startDate)}) into the date pickers above.`, 'info');
+    }
+
+    function cancelPeriodEdit() {
+      editingPeriodStartKey = null;
+      document.getElementById('editingPeriodBadge').classList.add('hidden');
+      document.getElementById('cancelPeriodEditBtn').classList.add('hidden');
+      document.getElementById('periodFormHeading').textContent = 'Log or Update a Menstrual Period';
+      document.getElementById('periodStartDateInput').value = selectedDateStr;
+      document.getElementById('periodEndDateInput').value = '';
+    }
+
+    function deletePeriodRecord(startDateStr) {
+      if (!userData) return;
+      userData.periods = userData.periods.filter(p => p.startDate !== startDateStr);
+      if (editingPeriodStartKey === startDateStr) {
+        cancelPeriodEdit();
+      }
+      saveCurrentUserData();
+      refreshEntireDashboard();
+      showToast('Period record deleted and cycle predictions updated.', 'info');
+    }
+
+    /*************************************************************************
+     * 4. EMERGENCY CONTRACEPTION LOGGER & HIDDEN PILL ADVICE MODAL (💊)
+     *************************************************************************/
+    function setEmergencyPillInputNow() {
+      const input = document.getElementById('customPillDateTime');
+      if (input) {
+        input.value = formatDateTimeLocalISO(new Date());
+      }
+    }
+
+    function logEmergencyPillFromPicker() {
+      if (!userData) return;
+      const input = document.getElementById('customPillDateTime');
+      const chosen = input && input.value ? new Date(input.value) : new Date();
+
+      if (isNaN(chosen.getTime())) {
+        showToast('Please select a valid date and time.', 'warning');
+        return;
+      }
+
+      if (!Array.isArray(userData.emergencyPills)) userData.emergencyPills = [];
+      userData.emergencyPills.unshift({
+        timestamp: chosen.toISOString(),
+        dateStr: formatDateISO(chosen)
+      });
+
+      setEmergencyPillInputNow();
+      saveCurrentUserData();
+      renderEmergencyPillLogs();
+      renderCalendar();
+      showToast('💊 Emergency Pill timestamp saved! Tap the 💊 Pill Icon anytime to view body & cycle advice.', 'success');
+    }
+
+    function removeEmergencyPillLog(idx) {
+      userData.emergencyPills.splice(idx, 1);
+      saveCurrentUserData();
+      renderEmergencyPillLogs();
+      renderCalendar();
+    }
+
+    function renderEmergencyPillLogs() {
+      const container = document.getElementById('pillLogsContainer');
+      if (!userData || !userData.emergencyPills || userData.emergencyPills.length === 0) {
+        container.innerHTML = `<div class="text-xs text-slate-400 italic">No emergency pills logged yet.</div>`;
+        return;
+      }
+
+      container.innerHTML = userData.emergencyPills
+        .map((item, idx) => {
+          const dt = new Date(item.timestamp);
+          const formatted = dt.toLocaleString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit'
+          });
+          return `
+            <div class="flex items-center justify-between bg-peach-50 border border-peach-200 px-3 py-1.5 rounded-xl text-xs">
+              <span class="font-semibold text-slate-800">💊 Taken: ${formatted}</span>
+              <button type="button" onclick="removeEmergencyPillLog(${idx})" class="text-slate-400 hover:text-rose-600 font-bold ml-2">✕</button>
+            </div>
+          `;
+        })
+        .join('');
+    }
+
+    function openPillAdviceModal() {
+      const modal = document.getElementById('pillAdviceModal');
+      const countdownEl = document.getElementById('pillModalCountdownText');
+      const subEl = document.getElementById('pillModalLastLoggedSub');
+
+      let baseDate = new Date();
+      let hasLoggedPill = false;
+
+      if (userData && userData.emergencyPills && userData.emergencyPills.length > 0) {
+        baseDate = new Date(userData.emergencyPills[0].timestamp);
+        hasLoggedPill = true;
+      }
+
+      const followUpDate = new Date(baseDate.getTime() + 21 * 24 * 60 * 60 * 1000);
+      const formattedFollowUp = followUpDate.toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+
+      countdownEl.textContent = `📅 Follow-Up: Take a pregnancy test on ${formattedFollowUp} if your period hasn't arrived or is more than 7 days late.`;
+      if (hasLoggedPill) {
+        const loggedStr = baseDate.toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit'
+        });
+        subEl.textContent = `Calculated 21 days from your last logged pill on ${loggedStr}.`;
+      } else {
+        subEl.textContent = `Calculated 21 days from today (log a pill timestamp anytime to personalize this date).`;
+      }
+
+      modal.classList.remove('hidden');
+    }
+
+    function closePillAdviceModal() {
+      document.getElementById('pillAdviceModal').classList.add('hidden');
+    }
+
+    /*************************************************************************
+     * 5. DAILY MOOD RATING & STAGE LINKAGE
+     *************************************************************************/
+    function getOrCreateDailyLog(dateStr) {
+      if (!userData.dailyLogs[dateStr]) {
+        userData.dailyLogs[dateStr] = {
+          mood: null,
+          stageAtLog: null,
+          symptoms: [],
+          habits: [],
+          notes: ''
+        };
+      }
+      return userData.dailyLogs[dateStr];
+    }
+
+    function selectMoodForDate(moodId) {
+      if (!userData) return;
+      const metrics = calculateCycleMetrics(selectedDateStr);
+      const stageInfo = PHASE_ADVISOR_DATA[metrics.stageKey];
+      const log = getOrCreateDailyLog(selectedDateStr);
+
+      log.mood = moodId;
+      log.stageAtLog = stageInfo.name;
+      saveCurrentUserData();
+
+      renderMoodSection(metrics);
+      showToast(`Logged "${moodId}" linked to your ${stageInfo.shortName}!`, 'success');
+    }
+
+    function renderMoodSection(metrics) {
+      const stageInfo = PHASE_ADVISOR_DATA[metrics.stageKey];
+      const banner = document.getElementById('moodStageBanner');
+      banner.className = `rounded-2xl bg-gradient-to-r ${stageInfo.bannerGradient} text-white p-4 sm:p-5 mb-5 shadow-md transition-all`;
+
+      document.getElementById('boldStageTitle').textContent = `CURRENT STAGE: ${stageInfo.name}`;
+      document.getElementById('boldStageEmoji').textContent = stageInfo.emoji;
+      document.getElementById('boldStageDayText').textContent = `Cycle Day ${metrics.cycleDay} (${formatHumanDate(selectedDateStr)})`;
+      document.getElementById('boldStageHormoneText').textContent = stageInfo.hormoneSummary;
+      document.getElementById('inlineStageName').textContent = stageInfo.shortName;
+
+      const log = userData.dailyLogs[selectedDateStr] || {};
+      const selectedMood = log.mood;
+
+      const grid = document.getElementById('moodButtonsGrid');
+      grid.innerHTML = MOOD_CATEGORIES.map(m => {
+        const isSelected = selectedMood === m.id;
+        const activeClasses = isSelected
+          ? 'bg-lavender-700 text-white border-lavender-900 shadow-md scale-[1.03]'
+          : 'bg-cream hover:bg-lavender-50 text-slate-800 border-slate-200';
+        return `
+          <button
+            type="button"
+            onclick="selectMoodForDate('${m.id}')"
+            class="p-3 rounded-2xl border-2 flex flex-col items-center justify-center gap-1 transition-all ${activeClasses}"
+          >
+            <span class="text-2xl">${m.emoji}</span>
+            <span class="text-xs font-bold">${m.id}</span>
+          </button>
+        `;
+      }).join('');
+
+      const confirmPrimary = document.getElementById('moodConfirmPrimary');
+      const confirmSecondary = document.getElementById('moodConfirmSecondary');
+
+      const stageMoodCounts = {};
+      Object.values(userData.dailyLogs).forEach(entry => {
+        if (entry.mood && entry.stageAtLog === stageInfo.name) {
+          stageMoodCounts[entry.mood] = (stageMoodCounts[entry.mood] || 0) + 1;
+        }
+      });
+      const topStageMoods = Object.entries(stageMoodCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2)
+        .map(([m, c]) => `${m} (${c}x)`)
+        .join(', ');
+
+      if (selectedMood) {
+        const moodObj = MOOD_CATEGORIES.find(x => x.id === selectedMood);
+        confirmPrimary.innerHTML = `✅ Logged on ${formatHumanDate(selectedDateStr)}: Feeling <span class="underline decoration-2">${moodObj ? moodObj.emoji : ''} ${selectedMood}</span> during your <span class="uppercase">${stageInfo.name}</span>.`;
+        confirmSecondary.textContent = topStageMoods
+          ? `📊 Pattern in your ${stageInfo.shortName}: You most frequently log ${topStageMoods}.`
+          : `📊 Linked to ${stageInfo.shortName} (Cycle Day ${metrics.cycleDay}).`;
+      } else {
+        confirmPrimary.textContent = `👆 Tap a mood above to link how you feel on ${formatHumanDate(selectedDateStr)} with your ${stageInfo.name}.`;
+        confirmSecondary.textContent = topStageMoods
+          ? `📊 Past pattern in your ${stageInfo.shortName}: You often feel ${topStageMoods}.`
+          : `Tracking moods across stages reveals how hormone shifts affect your emotions.`;
+      }
+    }
+
+    function shareMyVibeToClipboard() {
+      const metrics = calculateCycleMetrics(selectedDateStr);
+      const stageInfo = PHASE_ADVISOR_DATA[metrics.stageKey];
+      const log = userData.dailyLogs[selectedDateStr] || {};
+      const moodText = log.mood ? `feeling ${log.mood}` : 'navigating my hormone shifts';
+
+      const msg = `Hey! 🌸 My BloomCampus tracker says I'm in my ${stageInfo.shortName} (Cycle Day ${metrics.cycleDay}) today and ${moodText}. ${stageInfo.hormoneSummary} — a little extra patience or snacks today would be amazing! 💜`;
+      copyTextToClipboard(msg, '💬 Status copied! Paste it in WhatsApp or text for your partner/bestie.');
+    }
+
+    /*************************************************************************
+     * 6. SMART PHASE ADVISOR & MYTH BUSTER
+     *************************************************************************/
+    function selectAdvisorStage(stageKey) {
+      activeAdvisorStage = stageKey;
+      renderPhaseAdvisor();
+    }
+
+    function resetAdvisorToCurrentStage() {
+      const metrics = calculateCycleMetrics(selectedDateStr);
+      activeAdvisorStage = metrics.stageKey;
+      renderPhaseAdvisor();
+      showToast(`Synced advisor to your current ${PHASE_ADVISOR_DATA[activeAdvisorStage].shortName}.`, 'info');
+    }
+
+    function renderPhaseAdvisor() {
+      const stages = ['MENSTRUATION', 'FOLLICULAR', 'OVULATION', 'LUTEAL'];
+      stages.forEach(st => {
+        const btn = document.getElementById(`advTab_${st}`);
+        if (st === activeAdvisorStage) {
+          btn.className = 'py-2.5 px-3 rounded-xl font-extrabold text-xs border-2 border-lavender-700 bg-lavender-700 text-white shadow-sm transition-all';
+        } else {
+          btn.className = 'py-2.5 px-3 rounded-xl font-bold text-xs border border-slate-200 bg-cream text-slate-700 hover:bg-lavender-50 transition-all';
+        }
+      });
+
+      const info = PHASE_ADVISOR_DATA[activeAdvisorStage];
+      const pregCard = document.getElementById('advisorPregnancyCard');
+      if (activeAdvisorStage === 'OVULATION') {
+        pregCard.className = 'rounded-2xl p-4 border-2 border-rose-500 bg-rose-100/90 privacy-sensitive shadow-sm';
+      } else {
+        pregCard.className = 'rounded-2xl p-4 border-2 border-rose-200 bg-rose-50/70 privacy-sensitive';
+      }
+
+      document.getElementById('advisorPregnancyText').textContent = info.pregnancy;
+      document.getElementById('advisorBodyText').textContent = info.body;
+      document.getElementById('advisorMindText').textContent = info.mind;
+      document.getElementById('advisorStudyText').textContent = info.study;
+      document.getElementById('cravingGuideText').textContent = info.craving;
+    }
+
+    function cycleMyth(direction) {
+      currentMythIndex = (currentMythIndex + direction + CAMPUS_MYTHS.length) % CAMPUS_MYTHS.length;
+      renderMythCard();
+    }
+
+    function renderMythCard() {
+      const item = CAMPUS_MYTHS[currentMythIndex];
+      document.getElementById('mythCounterBadge').textContent = `${currentMythIndex + 1} / ${CAMPUS_MYTHS.length}`;
+      document.getElementById('mythText').textContent = item.myth;
+      document.getElementById('factText').textContent = item.fact;
+    }
+
+    /*************************************************************************
+     * 7. SYMPTOMS, DAILY WINS, NOTES & RED FLAG CLINIC ALERT
+     *************************************************************************/
+    function toggleSymptom(symptomId) {
+      const log = getOrCreateDailyLog(selectedDateStr);
+      const idx = log.symptoms.indexOf(symptomId);
+      if (idx >= 0) {
+        log.symptoms.splice(idx, 1);
+      } else {
+        log.symptoms.push(symptomId);
+      }
+      saveCurrentUserData();
+      renderChecklists();
+      evaluateAlertBanners();
+
+      if (symptomId === 'Severe Pain' && log.symptoms.includes('Severe Pain')) {
+        showToast('🏥 Severe pain logged. Please check the Campus Clinic banner at the top of your screen.', 'warning');
+      }
+    }
+
+    function toggleHabit(habitId) {
+      const log = getOrCreateDailyLog(selectedDateStr);
+      const idx = log.habits.indexOf(habitId);
+      if (idx >= 0) {
+        log.habits.splice(idx, 1);
+      } else {
+        log.habits.push(habitId);
+      }
+      saveCurrentUserData();
+      renderChecklists();
+    }
+
+    function saveDailyNotes() {
+      const log = getOrCreateDailyLog(selectedDateStr);
+      log.notes = document.getElementById('dailyNotesInput').value.trim();
+      saveCurrentUserData();
+      renderCalendar();
+      showToast(`Saved daily notes for ${formatHumanDate(selectedDateStr)}!`, 'success');
+    }
+
+    function renderChecklists() {
+      document.getElementById('checklistDateLabel').textContent = formatHumanDate(selectedDateStr);
+      const log = (userData && userData.dailyLogs[selectedDateStr]) || { symptoms: [], habits: [], notes: '' };
+
+      const symGrid = document.getElementById('symptomsChecklistGrid');
+      symGrid.innerHTML = SYMPTOM_ITEMS.map(item => {
+        const checked = (log.symptoms || []).includes(item.id);
+        const style = checked
+          ? item.redFlag
+            ? 'bg-rose-600 text-white border-rose-700 shadow-sm'
+            : 'bg-rose-100 text-rose-900 border-rose-400 font-bold'
+          : 'bg-cream hover:bg-rose-50/60 text-slate-700 border-slate-200';
+        return `
+          <button
+            type="button"
+            onclick="toggleSymptom('${item.id}')"
+            class="p-3 rounded-2xl border text-left text-xs font-semibold flex items-center justify-between transition-all ${style}"
+          >
+            <span>${item.emoji} ${item.id}</span>
+            <span>${checked ? '✓' : '+'}</span>
+          </button>
+        `;
+      }).join('');
+
+      const habGrid = document.getElementById('habitsChecklistGrid');
+      habGrid.innerHTML = HABIT_ITEMS.map(item => {
+        const checked = (log.habits || []).includes(item.id);
+        const style = checked
+          ? 'bg-sage-600 text-white border-sage-800 font-bold shadow-sm'
+          : 'bg-cream hover:bg-sage-50 text-slate-700 border-slate-200';
+        return `
+          <button
+            type="button"
+            onclick="toggleHabit('${item.id}')"
+            class="p-3 rounded-2xl border text-left text-xs font-semibold flex items-center justify-between transition-all ${style}"
+          >
+            <span>${item.emoji} ${item.id}</span>
+            <span>${checked ? '✓' : '+'}</span>
+          </button>
+        `;
+      }).join('');
+
+      document.getElementById('dailyNotesInput').value = log.notes || '';
+    }
+
+    /*************************************************************************
+     * INTERACTIVE CALENDAR & PERIOD LIST RENDERING
+     *************************************************************************/
+    function changeCalendarMonth(delta) {
+      calendarMonth += delta;
+      if (calendarMonth < 0) {
+        calendarMonth = 11;
+        calendarYear--;
+      } else if (calendarMonth > 11) {
+        calendarMonth = 0;
+        calendarYear++;
+      }
+      renderCalendar();
+    }
+
+    function jumpToToday() {
+      const now = new Date();
+      selectedDateStr = formatDateISO(now);
+      calendarMonth = now.getMonth();
+      calendarYear = now.getFullYear();
+      refreshEntireDashboard();
+    }
+
+    function selectCalendarDate(dateStr) {
+      selectedDateStr = dateStr;
+      refreshEntireDashboard();
+    }
+
+    function isDateInLoggedPeriod(dateStr) {
+      if (!userData || !userData.periods) return false;
+      const metrics = calculateCycleMetrics(dateStr);
+      return userData.periods.some(p => {
+        const effectiveEnd =
+          p.endDate && p.endDate >= p.startDate
+            ? p.endDate
+            : addDaysISO(p.startDate, metrics.avgPeriodDuration - 1);
+        return dateStr >= p.startDate && dateStr <= effectiveEnd;
+      });
+    }
+
+    function isDateInPredictedPeriod(dateStr, metrics) {
+      if (!metrics.nextPeriodDateStr) return false;
+      for (let cycleOffset = 0; cycleOffset < 6; cycleOffset++) {
+        const start = addDaysISO(metrics.nextPeriodDateStr, cycleOffset * metrics.avgCycleLength);
+        const end = addDaysISO(start, metrics.avgPeriodDuration - 1);
+        if (dateStr >= start && dateStr <= end) return true;
+      }
+      return false;
+    }
+
+    function renderCalendar() {
+      const monthNames = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+      ];
+      document.getElementById('calendarMonthLabel').textContent = `${monthNames[calendarMonth]} ${calendarYear}`;
+
+      const firstDayIndex = new Date(calendarYear, calendarMonth, 1).getDay();
+      const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+      const todayStr = formatDateISO(new Date());
+      const overallMetrics = calculateCycleMetrics(todayStr);
+
+      const pillDatesSet = new Set((userData.emergencyPills || []).map(p => p.dateStr));
+
+      const grid = document.getElementById('calendarGrid');
+      let html = '';
+
+      for (let i = 0; i < firstDayIndex; i++) {
+        html += `<div class="h-11 rounded-xl"></div>`;
+      }
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dObj = new Date(calendarYear, calendarMonth, day);
+        const dStr = formatDateISO(dObj);
+        const dayMetrics = calculateCycleMetrics(dStr);
+        const isLoggedPeriod = isDateInLoggedPeriod(dStr);
+        const isPredPeriod = !isLoggedPeriod && isDateInPredictedPeriod(dStr, overallMetrics);
+        const isOvulation = !isLoggedPeriod && !isPredPeriod && dayMetrics.stageKey === 'OVULATION';
+        const isSelected = dStr === selectedDateStr;
+        const isToday = dStr === todayStr;
+        const dayLog = userData.dailyLogs[dStr];
+        const hasPill = pillDatesSet.has(dStr);
+
+        let bgClass = 'bg-white hover:bg-lavender-50 text-slate-700 border border-slate-200/80';
+        if (isLoggedPeriod) {
+          bgClass = 'bg-rose-500 text-white font-bold border border-rose-600';
+        } else if (isPredPeriod) {
+          bgClass = 'bg-rose-100 text-rose-900 border border-dashed border-rose-500 font-semibold';
+        } else if (isOvulation) {
+          bgClass = 'bg-sage-100 text-sage-800 border border-sage-600/50 font-semibold';
+        }
+
+        const ringClass = isSelected ? 'ring-2 ring-slate-900 ring-offset-1 scale-[1.03]' : '';
+        const todayDot = isToday ? '<span class="text-[9px] uppercase font-extrabold">Today</span>' : '';
+
+        let badges = '';
+        if (hasPill) badges += '<span>💊</span>';
+        if (dayLog && dayLog.mood) {
+          const mObj = MOOD_CATEGORIES.find(m => m.id === dayLog.mood);
+          if (mObj) badges += `<span>${mObj.emoji}</span>`;
+        }
+
+        html += `
+          <button
+            type="button"
+            onclick="selectCalendarDate('${dStr}')"
+            class="h-12 sm:h-14 rounded-xl p-1 flex flex-col items-center justify-between transition-all ${bgClass} ${ringClass}"
+          >
+            <span class="text-xs leading-none">${day}</span>
+            <div class="text-[10px] leading-none flex items-center gap-0.5">${badges || todayDot}</div>
+          </button>
+        `;
+      }
+
+      grid.innerHTML = html;
+    }
+
+    function renderPeriodHistoryList() {
+      const listEl = document.getElementById('periodHistoryList');
+      const badgeEl = document.getElementById('cycleCountBadge');
+      const sortedAsc = getSortedPeriods();
+      badgeEl.textContent = `${sortedAsc.length} Logged`;
+
+      if (sortedAsc.length === 0) {
+        listEl.innerHTML = `<div class="text-xs text-slate-500 italic p-3 bg-white rounded-xl border border-lavender-100">No periods recorded yet. Pick your Period Start Date & End Date above and click <strong>Save Period Dates</strong>!</div>`;
+        return;
+      }
+
+      const itemsHtml = [];
+      for (let i = sortedAsc.length - 1; i >= 0; i--) {
+        const p = sortedAsc[i];
+        const hasEnd = Boolean(p.endDate && p.endDate >= p.startDate);
+        const bleedDays = hasEnd ? diffDays(p.startDate, p.endDate) + 1 : null;
+        const cycleLenToNext =
+          i + 1 < sortedAsc.length
+            ? diffDays(p.startDate, sortedAsc[i + 1].startDate)
+            : null;
+
+        const endLabel = hasEnd
+          ? formatHumanDate(p.endDate)
+          : `<span class="text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 font-bold">Ongoing (Tap Edit to set End Date)</span>`;
+
+        const durationBadge = hasEnd
+          ? `<span class="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-bold">${bleedDays}d Period</span>`
+          : `<span class="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 font-bold">Ongoing</span>`;
+
+        const cycleBadge = cycleLenToNext
+          ? `<span class="px-2 py-0.5 rounded-full bg-sage-50 text-sage-800 border border-sage-200 font-bold">${cycleLenToNext}d Cycle</span>`
+          : `<span class="px-2 py-0.5 rounded-full bg-lavender-50 text-lavender-700 border border-lavender-200 font-bold">Current Cycle</span>`;
+
+        itemsHtml.push(`
+          <div class="bg-white rounded-2xl p-3 border border-lavender-100 shadow-sm space-y-2">
+            <div class="flex items-start justify-between gap-2">
+              <div class="text-xs">
+                <div class="font-bold text-slate-800">🩸 Start: ${formatHumanDate(p.startDate)}</div>
+                <div class="font-semibold text-slate-600 mt-0.5">✨ End: ${endLabel}</div>
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onclick="editPeriodRecord('${p.startDate}')"
+                  class="px-2.5 py-1 rounded-lg bg-lavender-50 hover:bg-lavender-100 text-lavender-700 font-bold text-[11px] border border-lavender-200"
+                  title="Edit Start or End Date"
+                >
+                  ✏️ Edit
+                </button>
+                <button
+                  type="button"
+                  onclick="deletePeriodRecord('${p.startDate}')"
+                  class="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[11px] border border-rose-200"
+                  title="Delete period entry"
+                >
+                  🗑️
+                </button>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+              ${durationBadge}
+              ${cycleBadge}
+            </div>
+          </div>
+        `);
+      }
+
+      listEl.innerHTML = itemsHtml.join('');
+    }
+
+    /*************************************************************************
+     * 8. ALERT BANNERS, PRIVACY BLUR, CLINIC SUMMARY & SAMPLE DATA
+     *************************************************************************/
+    function evaluateAlertBanners() {
+      const todayMetrics = calculateCycleMetrics(formatDateISO(new Date()));
+      const bagBanner = document.getElementById('bagReminderBanner');
+      if (
+        forceBagBannerPreview ||
+        (todayMetrics.daysUntilNextPeriod !== null &&
+          todayMetrics.daysUntilNextPeriod >= 0 &&
+          todayMetrics.daysUntilNextPeriod <= 2)
+      ) {
+        bagBanner.classList.remove('hidden');
+      } else {
+        bagBanner.classList.add('hidden');
+      }
+
+      const hasSeverePain = Object.values(userData.dailyLogs || {}).some(
+        entry => (entry.symptoms || []).includes('Severe Pain')
+      );
+      const clinicBanner = document.getElementById('campusClinicBanner');
+      if (hasSeverePain || todayMetrics.isIrregular) {
+        clinicBanner.classList.remove('hidden');
+      } else {
+        clinicBanner.classList.add('hidden');
+      }
+    }
+
+    function dismissBagBanner() {
+      forceBagBannerPreview = false;
+      document.getElementById('bagReminderBanner').classList.add('hidden');
+    }
+
+    function forceToggleBagBanner() {
+      forceBagBannerPreview = !forceBagBannerPreview;
+      evaluateAlertBanners();
+      showToast(
+        forceBagBannerPreview ? '🎒 2-Day Bag Alert Banner Shown!' : '2-Day Bag Alert hidden.',
+        'info'
+      );
+    }
+
+    function togglePrivacyBlur() {
+      privacyBlurEnabled = !privacyBlurEnabled;
+      const eyeIcon = document.getElementById('privacyEyeIcon');
+      const label = document.getElementById('privacyBtnLabel');
+
+      if (privacyBlurEnabled) {
+        document.body.classList.add('privacy-blur-active');
+        eyeIcon.textContent = '🙈';
+        label.textContent = 'Privacy Blur: ON';
+        showToast('🙈 Discreet Mode ON: Emergency Pill & Pregnancy Risk sections are blurred.', 'info');
+      } else {
+        document.body.classList.remove('privacy-blur-active');
+        eyeIcon.textContent = '👁️';
+        label.textContent = 'Privacy Blur: Off';
+      }
+    }
+
+    function openClinicSummaryModal() {
+      const modal = document.getElementById('clinicSummaryModal');
+      const content = document.getElementById('clinicSummaryContent');
+      const metrics = calculateCycleMetrics(formatDateISO(new Date()));
+      const recentPeriods = getSortedPeriods().reverse().slice(0, 3);
+
+      const symCounts = {};
+      const moodCounts = {};
+      Object.values(userData.dailyLogs || {}).forEach(log => {
+        if (log.mood) {
+          const key = `${log.mood} (${log.stageAtLog || 'Cycle'})`;
+          moodCounts[key] = (moodCounts[key] || 0) + 1;
+        }
+        (log.symptoms || []).forEach(s => {
+          symCounts[s] = (symCounts[s] || 0) + 1;
+        });
+      });
+
+      const topSymptoms = Object.entries(symCounts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `${k} (${v}d)`)
+        .join(', ') || 'None logged yet';
+
+      const topMoods = Object.entries(moodCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4)
+        .map(([k, v]) => `${k}: ${v}x`)
+        .join(' • ') || 'None logged yet';
+
+      const periodsHtml = recentPeriods.length
+        ? recentPeriods
+            .map(p => {
+              const hasEnd = Boolean(p.endDate && p.endDate >= p.startDate);
+              const durLabel = hasEnd ? ` (${diffDays(p.startDate, p.endDate) + 1} days)` : ' (Ongoing)';
+              return `<li class="font-semibold">• Start: ${formatHumanDate(p.startDate)} — End: ${hasEnd ? formatHumanDate(p.endDate) : 'Ongoing'}${durLabel}</li>`;
+            })
+            .join('')
+        : '<li>No periods logged yet</li>';
+
+      const pillsHtml = (userData.emergencyPills || []).length
+        ? userData.emergencyPills
+            .slice(0, 3)
+            .map(p => `<li>• ${new Date(p.timestamp).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</li>`)
+            .join('')
+        : '<li>None logged</li>';
+
+      const patientDisplayName = (userData && userData.name) ? userData.name : 'Kumba Hannah Kaingbanja';
+      const patientDisplayAge = (userData && userData.age) ? `${userData.age} yrs` : 'Not specified';
+
+      content.innerHTML = `
+        <div class="p-3.5 rounded-2xl bg-sage-50 border border-sage-200">
+          <div class="font-bold text-slate-900">Patient Name: ${patientDisplayName} • Age: ${patientDisplayAge}</div>
+          <div class="text-xs text-slate-600 mt-0.5">Average Cycle Length: <strong>${metrics.avgCycleLength} Days</strong> • Avg Bleed: <strong>${metrics.avgPeriodDuration} Days</strong> • Current Stage: <strong>${PHASE_ADVISOR_DATA[metrics.stageKey].shortName} (Day ${metrics.cycleDay})</strong></div>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-cream border border-slate-200">
+          <div class="font-bold text-slate-800 mb-1">🩸 Last Recorded Period Start & End Dates:</div>
+          <ul class="space-y-1 text-xs text-slate-700">${periodsHtml}</ul>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-cream border border-slate-200">
+          <div class="font-bold text-slate-800 mb-1">💊 Recent Emergency Contraception Dates:</div>
+          <ul class="space-y-1 text-xs text-slate-700">${pillsHtml}</ul>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-cream border border-slate-200">
+          <div class="font-bold text-slate-800 mb-1">📋 Logged Physical Symptoms:</div>
+          <p class="text-xs text-slate-700">${topSymptoms}</p>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-cream border border-slate-200">
+          <div class="font-bold text-slate-800 mb-1">🧠 Stage-Linked Mood History:</div>
+          <p class="text-xs text-slate-700">${topMoods}</p>
+        </div>
+      `;
+
+      modal.classList.remove('hidden');
+    }
+
+    function closeClinicSummaryModal() {
+      document.getElementById('clinicSummaryModal').classList.add('hidden');
+    }
+
+    function copyClinicSummary() {
+      const text = document.getElementById('clinicSummaryContent').innerText;
+      copyTextToClipboard(text, '🩺 Clinic summary copied! Ready to share with your doctor.');
+    }
+
+    function loadSampleStudentData(silent = false) {
+      if (!userData) return;
+      const now = new Date();
+      const d = offset => {
+        const copy = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+        return formatDateISO(copy);
+      };
+
+      userData.periods = [
+        { startDate: d(-69), endDate: d(-65) },
+        { startDate: d(-41), endDate: d(-37) },
+        { startDate: d(-13), endDate: d(-9) }
+      ];
+
+      const fourDaysAgo = new Date(now.getTime() - 4 * 24 * 60 * 60 * 1000);
+      userData.emergencyPills = [
+        { timestamp: fourDaysAgo.toISOString(), dateStr: formatDateISO(fourDaysAgo) }
+      ];
+
+      userData.dailyLogs[d(-12)] = {
+        mood: 'Fatigued',
+        stageAtLog: 'MENSTRUATION STAGE',
+        symptoms: ['Mild Cramps', 'Bloating'],
+        habits: ['Slept 7+ Hours', 'Hydrated'],
+        notes: 'First week of lectures, rested in dorm.'
+      };
+      userData.dailyLogs[d(-3)] = {
+        mood: 'Numb',
+        stageAtLog: 'FOLLICULAR STAGE',
+        symptoms: ['Headache'],
+        habits: ['Hydrated'],
+        notes: 'Long study session in library.'
+      };
+      userData.dailyLogs[d(0)] = {
+        mood: 'Energized',
+        stageAtLog: 'OVULATION STAGE',
+        symptoms: [],
+        habits: ['Slept 7+ Hours', 'Hydrated', 'Moved My Body'],
+        notes: 'Feeling sharp and focused for class today!'
+      };
+
+      saveCurrentUserData();
+      selectedDateStr = d(0);
+      refreshEntireDashboard();
+      if (!silent) {
+        showToast('✨ Loaded sample college cycle history, moods, and emergency pill timestamp!', 'success');
+      }
+    }
+
+    /*************************************************************************
+     * MASTER DASHBOARD REFRESH
+     *************************************************************************/
+    function refreshEntireDashboard() {
+      if (!userData) return;
+
+      const metrics = calculateCycleMetrics(selectedDateStr);
+      const stageInfo = PHASE_ADVISOR_DATA[metrics.stageKey];
+
+      const ageSuffix = userData.age ? ` (${userData.age})` : '';
+      document.getElementById('headerGreeting').textContent = `Hi, ${userData.name}${ageSuffix}!`;
+      document.getElementById('headerCycleSubtext').textContent = `${stageInfo.emoji} ${stageInfo.shortName} • Cycle Day ${metrics.cycleDay}`;
+
+      const todayStr = formatDateISO(new Date());
+      document.getElementById('selectedDateDisplay').textContent =
+        selectedDateStr === todayStr ? `Today (${formatHumanDate(selectedDateStr)})` : formatHumanDate(selectedDateStr);
+
+      const quickCalDateEl = document.getElementById('calendarQuickDateText');
+      if (quickCalDateEl) {
+        quickCalDateEl.textContent = selectedDateStr === todayStr ? 'Today' : formatShortMonthDay(selectedDateStr);
+      }
+
+      if (!editingPeriodStartKey) {
+        const startInput = document.getElementById('periodStartDateInput');
+        if (startInput && !startInput.value) {
+          startInput.value = selectedDateStr;
+        }
+      }
+
+      document.getElementById('statCycleDay').textContent = `Day ${metrics.cycleDay}`;
+      document.getElementById('statCycleStageLabel').textContent = stageInfo.shortName;
+
+      document.getElementById('statNextPeriod').textContent = metrics.nextPeriodDateStr
+        ? formatShortMonthDay(metrics.nextPeriodDateStr)
+        : 'Log Start Date';
+      document.getElementById('statNextPeriodCountdown').textContent =
+        metrics.daysUntilNextPeriod !== null
+          ? metrics.daysUntilNextPeriod >= 0
+            ? `In ${metrics.daysUntilNextPeriod} day${metrics.daysUntilNextPeriod === 1 ? '' : 's'}`
+            : `${Math.abs(metrics.daysUntilNextPeriod)}d ago`
+          : 'Based on your logs';
+
+      document.getElementById('statAvgCycle').textContent = `${metrics.avgCycleLength} Days`;
+      document.getElementById('statAvgDuration').textContent = `${metrics.avgPeriodDuration}d Avg Bleed`;
+
+      document.getElementById('statOvulationWindow').textContent = `Days ${metrics.ovStart}–${metrics.ovEnd}`;
+      document.getElementById('statOvulationDates').textContent =
+        metrics.ovulationWindowStartStr && metrics.ovulationWindowEndStr
+          ? `${formatShortMonthDay(metrics.ovulationWindowStartStr)} – ${formatShortMonthDay(metrics.ovulationWindowEndStr)}`
+          : `Peak Day ${metrics.ovulationDay}`;
+
+      activeAdvisorStage = metrics.stageKey;
+
+      renderCalendar();
+      renderPeriodHistoryList();
+      renderEmergencyPillLogs();
+      renderMoodSection(metrics);
+      renderPhaseAdvisor();
+      renderChecklists();
+      renderMythCard();
+      evaluateAlertBanners();
+    }
+
+    /*************************************************************************
+     * INITIALIZE ON WINDOW LOAD
+     *************************************************************************/
+    window.onload = function () {
+      const savedSessionEmail = localStorage.getItem(STORAGE_SESSION_KEY);
+      const users = getAllUsers();
+      if (savedSessionEmail && users[savedSessionEmail]) {
+        loginUserSession(savedSessionEmail);
+      } else {
+        switchAuthTab('signup');
+      }
+    };
+  </script>
+</body>
+</html>
