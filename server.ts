@@ -6,8 +6,87 @@ import fs from 'fs';
 import os from 'os';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
+import { initializeApp as initFirebaseApp } from 'firebase/app';
+import {
+  getFirestore,
+  collection,
+  doc,
+  getDocs,
+  setDoc,
+  deleteDoc,
+} from 'firebase/firestore';
 
 dotenv.config();
+
+const FIREBASE_CFG_PATH = path.join(process.cwd(), 'firebase-applet-config.json');
+let firestoreDb: ReturnType<typeof getFirestore> | null = null;
+try {
+  if (fs.existsSync(FIREBASE_CFG_PATH)) {
+    const fbCfg = JSON.parse(fs.readFileSync(FIREBASE_CFG_PATH, 'utf-8'));
+    if (fbCfg && fbCfg.projectId) {
+      const fbApp = initFirebaseApp(fbCfg, 'server-sync');
+      firestoreDb = getFirestore(fbApp, fbCfg.firestoreDatabaseId);
+    }
+  }
+} catch (err) {
+  console.error('Could not initialize Firestore in server.ts:', err);
+}
+
+function emailToFirestoreDocId(email: string): string {
+  return email
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-zA-Z0-9_\-@.+]/g, '_')
+    .slice(0, 240);
+}
+
+async function pushUsersToCloudFirestore(users: Record<string, Record<string, unknown>>) {
+  if (!firestoreDb) return;
+  for (const [k, rawUser] of Object.entries(users || {})) {
+    if (!rawUser || typeof rawUser !== 'object') continue;
+    const emailClean = String(rawUser.email || k)
+      .trim()
+      .toLowerCase()
+      .slice(0, 254);
+    if (!emailClean || emailClean.length < 3) continue;
+    const nameClean = String(rawUser.name || emailClean.split('@')[0] || 'Student')
+      .trim()
+      .slice(0, 200);
+    const docId = emailToFirestoreDocId(emailClean);
+    const cleaned = JSON.parse(
+      JSON.stringify({
+        ...rawUser,
+        email: emailClean,
+        name: nameClean || 'Student',
+        createdAt: Number(rawUser.createdAt) > 0 ? Number(rawUser.createdAt) : Date.now(),
+        lastUpdatedAt: rawUser.lastUpdatedAt || new Date().toISOString(),
+      })
+    );
+    try {
+      await setDoc(doc(firestoreDb, 'bloomcampus_users', docId), cleaned, { merge: true });
+    } catch {
+      // Ignore individual sync error
+    }
+  }
+}
+
+async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<string, unknown>>> {
+  if (!firestoreDb) return {};
+  try {
+    const snap = await getDocs(collection(firestoreDb, 'bloomcampus_users'));
+    const out: Record<string, Record<string, unknown>> = {};
+    snap.forEach((d) => {
+      const data = d.data() as Record<string, unknown>;
+      if (data && typeof data.email === 'string') {
+        const emailClean = data.email.trim().toLowerCase();
+        out[emailClean] = sanitizeUserRecord(data, emailClean);
+      }
+    });
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -53,11 +132,13 @@ const DEFAULT_COMMENTS: CommunityComment[] = [
   },
 ];
 
-const DATA_DIR = path.join(os.tmpdir(), 'bloomcampus_data');
-const STORE_PATH = path.join(DATA_DIR, 'bloomcampus_store.json');
+const PROJECT_DATA_DIR = path.join(process.cwd(), '.data');
+const TMP_DATA_DIR = path.join(os.tmpdir(), 'bloomcampus_data');
+const PROJECT_STORE_PATH = path.join(PROJECT_DATA_DIR, 'bloomcampus_store.json');
+const TMP_STORE_PATH = path.join(TMP_DATA_DIR, 'bloomcampus_store.json');
 
 interface PersistentStore {
-  users: Record<string, unknown>;
+  users: Record<string, Record<string, unknown>>;
   communityComments: CommunityComment[];
   adminConfig: {
     ownerEmail: string;
@@ -91,52 +172,139 @@ const DEFAULT_ADMIN_CFG = {
   updatedAt: new Date().toISOString(),
 };
 
-function loadPersistentStore(): PersistentStore {
-  try {
-    if (fs.existsSync(STORE_PATH)) {
-      const raw = fs.readFileSync(STORE_PATH, 'utf-8');
-      const parsed = JSON.parse(raw);
-      return {
-        users: parsed.users && typeof parsed.users === 'object' ? parsed.users : {},
-        communityComments: Array.isArray(parsed.communityComments)
-          ? parsed.communityComments
-          : [...DEFAULT_COMMENTS],
-        adminConfig:
-          parsed.adminConfig && typeof parsed.adminConfig === 'object'
-            ? {
-                ...DEFAULT_ADMIN_CFG,
-                ...parsed.adminConfig,
-                additionalAdmins: Array.isArray(parsed.adminConfig.additionalAdmins)
-                  ? parsed.adminConfig.additionalAdmins
-                  : [],
-              }
-            : { ...DEFAULT_ADMIN_CFG },
-        supportInquiries: Array.isArray(parsed.supportInquiries) ? parsed.supportInquiries : [],
-      };
+function sanitizeUserRecord(obj: Record<string, unknown>, emailKey: string): Record<string, unknown> {
+  const cleaned: Record<string, unknown> = { ...obj, email: emailKey };
+  if (typeof cleaned.paymentMethod === 'string') {
+    if (
+      cleaned.paymentMethod.includes('Bobson') ||
+      cleaned.paymentMethod.toLowerCase().includes('free 30-day') ||
+      cleaned.paymentMethod.toLowerCase().includes('promo')
+    ) {
+      cleaned.paymentMethod = '2-Week Free Access';
     }
-  } catch (err) {
-    console.error('Could not load store from disk:', err);
   }
+  return cleaned;
+}
+
+function getSafeTimestamp(obj: Record<string, unknown>): number {
+  if (obj.lastUpdatedAt) {
+    const t = new Date(String(obj.lastUpdatedAt)).getTime();
+    if (!isNaN(t) && t > 0) return t;
+  }
+  const c = Number(obj.createdAt || 0);
+  return !isNaN(c) && c > 0 ? c : 0;
+}
+
+function mergeUserRecords(
+  existingUsers: Record<string, Record<string, unknown>>,
+  incomingUsers: Record<string, unknown>
+): Record<string, Record<string, unknown>> {
+  const merged: Record<string, Record<string, unknown>> = {};
+  Object.entries(existingUsers || {}).forEach(([k, v]) => {
+    if (!k || !v || typeof v !== 'object') return;
+    const emailKey = String((v as Record<string, unknown>).email || k)
+      .toLowerCase()
+      .trim();
+    if (emailKey) {
+      merged[emailKey] = sanitizeUserRecord(v as Record<string, unknown>, emailKey);
+    }
+  });
+
+  Object.entries(incomingUsers || {}).forEach(([rawKey, val]) => {
+    if (!rawKey || !val || typeof val !== 'object') return;
+    const incomingObj = val as Record<string, unknown>;
+    const emailKey = String(incomingObj.email || rawKey)
+      .toLowerCase()
+      .trim();
+    if (!emailKey) return;
+    const currentObj = merged[emailKey];
+    if (!currentObj) {
+      merged[emailKey] = sanitizeUserRecord(incomingObj, emailKey);
+      return;
+    }
+    const currUpdated = getSafeTimestamp(currentObj);
+    const incUpdated = getSafeTimestamp(incomingObj);
+    if (incUpdated >= currUpdated) {
+      merged[emailKey] = sanitizeUserRecord({ ...currentObj, ...incomingObj }, emailKey);
+    }
+  });
+  return merged;
+}
+
+function loadPersistentStore(): PersistentStore {
+  let mergedUsers: Record<string, Record<string, unknown>> = {};
+  let comments: CommunityComment[] = [...DEFAULT_COMMENTS];
+  let adminCfg = { ...DEFAULT_ADMIN_CFG };
+  let inquiries: PersistentStore['supportInquiries'] = [];
+
+  for (const candidatePath of [TMP_STORE_PATH, PROJECT_STORE_PATH]) {
+    try {
+      if (fs.existsSync(candidatePath)) {
+        const raw = fs.readFileSync(candidatePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed.users && typeof parsed.users === 'object') {
+          mergedUsers = mergeUserRecords(mergedUsers, parsed.users);
+        }
+        if (Array.isArray(parsed.communityComments) && parsed.communityComments.length > 0) {
+          comments = parsed.communityComments;
+        }
+        if (parsed.adminConfig && typeof parsed.adminConfig === 'object') {
+          adminCfg = {
+            ...DEFAULT_ADMIN_CFG,
+            ...parsed.adminConfig,
+            additionalAdmins: Array.isArray(parsed.adminConfig.additionalAdmins)
+              ? parsed.adminConfig.additionalAdmins
+              : [],
+          };
+        }
+        if (Array.isArray(parsed.supportInquiries) && parsed.supportInquiries.length > inquiries.length) {
+          inquiries = parsed.supportInquiries;
+        }
+      }
+    } catch (err) {
+      console.error(`Could not load store from ${candidatePath}:`, err);
+    }
+  }
+
   return {
-    users: {},
-    communityComments: [...DEFAULT_COMMENTS],
-    adminConfig: { ...DEFAULT_ADMIN_CFG },
-    supportInquiries: [],
+    users: mergedUsers,
+    communityComments: comments,
+    adminConfig: adminCfg,
+    supportInquiries: inquiries,
   };
 }
 
 function savePersistentStore(store: PersistentStore) {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+  for (const [dir, file] of [
+    [PROJECT_DATA_DIR, PROJECT_STORE_PATH],
+    [TMP_DATA_DIR, TMP_STORE_PATH],
+  ]) {
+    try {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(file, JSON.stringify(store, null, 2), 'utf-8');
+    } catch (err) {
+      console.error(`Could not save store to ${file}:`, err);
     }
-    fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('Could not save store to disk:', err);
   }
 }
 
 const persistentStore = loadPersistentStore();
+
+// On server boot, sync local persistentStore with Cloud Firestore so all deployments share every user
+(async () => {
+  try {
+    await pushUsersToCloudFirestore(persistentStore.users);
+    const cloudUsers = await pullUsersFromCloudFirestore();
+    if (Object.keys(cloudUsers).length > 0) {
+      persistentStore.users = mergeUserRecords(persistentStore.users, cloudUsers);
+      savePersistentStore(persistentStore);
+    }
+  } catch {
+    // Ignore boot sync errors
+  }
+})();
 
 async function startServer() {
   const app = express();
@@ -146,12 +314,18 @@ async function startServer() {
   app.use(express.json({ limit: '5mb' }));
 
   // Persistent User Memory Sync Endpoints
-  app.get('/api/users/sync', (req, res) => {
+  app.get('/api/users/sync', async (req, res) => {
+    const cloudUsers = await pullUsersFromCloudFirestore();
+    if (Object.keys(cloudUsers).length > 0) {
+      persistentStore.users = mergeUserRecords(persistentStore.users, cloudUsers);
+      savePersistentStore(persistentStore);
+    }
     const email = typeof req.query.email === 'string' ? req.query.email.toLowerCase().trim() : '';
     if (email) {
       res.json({
         user: persistentStore.users[email] || null,
         users: persistentStore.users,
+        totalUsers: Object.keys(persistentStore.users).length,
         adminConfig: persistentStore.adminConfig,
         supportInquiries: persistentStore.supportInquiries,
       });
@@ -159,22 +333,34 @@ async function startServer() {
     }
     res.json({
       users: persistentStore.users,
+      totalUsers: Object.keys(persistentStore.users).length,
       adminConfig: persistentStore.adminConfig,
       supportInquiries: persistentStore.supportInquiries,
     });
   });
 
-  app.post('/api/users/sync', (req, res) => {
-    const { email, userData, allUsers, adminConfig } = req.body || {};
+  app.post('/api/users/sync', async (req, res) => {
+    const { email, userData, allUsers, adminConfig, forceOverwriteUser } = req.body || {};
+    const cloudUsers = await pullUsersFromCloudFirestore();
+    if (Object.keys(cloudUsers).length > 0) {
+      persistentStore.users = mergeUserRecords(persistentStore.users, cloudUsers);
+    }
     if (allUsers && typeof allUsers === 'object') {
-      Object.entries(allUsers).forEach(([k, v]) => {
-        if (k && v && typeof v === 'object') {
-          persistentStore.users[k.toLowerCase().trim()] = v;
-        }
-      });
+      persistentStore.users = mergeUserRecords(persistentStore.users, allUsers);
     }
     if (email && typeof email === 'string' && userData && typeof userData === 'object') {
-      persistentStore.users[email.toLowerCase().trim()] = userData;
+      const cleanEmail = email.toLowerCase().trim();
+      const userObj = userData as Record<string, unknown>;
+      if (forceOverwriteUser) {
+        persistentStore.users[cleanEmail] = sanitizeUserRecord(
+          { ...userObj, email: cleanEmail },
+          cleanEmail
+        );
+      } else {
+        persistentStore.users = mergeUserRecords(persistentStore.users, {
+          [cleanEmail]: { ...userObj, email: cleanEmail },
+        });
+      }
     }
     if (adminConfig && typeof adminConfig === 'object') {
       persistentStore.adminConfig = {
@@ -185,11 +371,61 @@ async function startServer() {
       };
     }
     savePersistentStore(persistentStore);
+    await pushUsersToCloudFirestore(persistentStore.users);
     res.json({
       ok: true,
       savedAt: new Date().toISOString(),
+      users: persistentStore.users,
       totalUsers: Object.keys(persistentStore.users).length,
       adminConfig: persistentStore.adminConfig,
+      supportInquiries: persistentStore.supportInquiries,
+    });
+  });
+
+  app.post('/api/users/delete', async (req, res) => {
+    const { email } = req.body || {};
+    const cleanEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
+    if (!cleanEmail) {
+      res.status(400).json({ error: 'Email is required.' });
+      return;
+    }
+    delete persistentStore.users[cleanEmail];
+    savePersistentStore(persistentStore);
+    if (firestoreDb) {
+      try {
+        await deleteDoc(doc(firestoreDb, 'bloomcampus_users', emailToFirestoreDocId(cleanEmail)));
+      } catch {
+        // ignore
+      }
+    }
+    res.json({
+      ok: true,
+      users: persistentStore.users,
+      totalUsers: Object.keys(persistentStore.users).length,
+    });
+  });
+
+  // Dedicated Sign-In / Account Lookup Endpoint Across All Devices
+  app.post('/api/auth/signin', async (req, res) => {
+    const { email, password } = req.body || {};
+    const emailClean = typeof email === 'string' ? email.toLowerCase().trim() : '';
+    const passClean = typeof password === 'string' ? password.trim() : '';
+    if (!emailClean) {
+      res.status(400).json({ error: 'Email is required.' });
+      return;
+    }
+    const cloudUsers = await pullUsersFromCloudFirestore();
+    if (Object.keys(cloudUsers).length > 0) {
+      persistentStore.users = mergeUserRecords(persistentStore.users, cloudUsers);
+      savePersistentStore(persistentStore);
+    }
+    const foundUser = persistentStore.users[emailClean] || null;
+    res.json({
+      found: Boolean(foundUser),
+      user: foundUser,
+      users: persistentStore.users,
+      adminConfig: persistentStore.adminConfig,
+      passwordMatch: foundUser ? String(foundUser.password || '').trim() === passClean : false,
     });
   });
 
@@ -432,6 +668,7 @@ Provide a brief, empathetic, and medically grounded "Cycle Health Insight" JSON 
       server: {
         middlewareMode: true,
         hmr: false,
+        ws: false,
         watch: null,
       },
       appType: 'spa',
@@ -444,6 +681,15 @@ Provide a brief, empathetic, and medically grounded "Cycle Health Insight" JSON 
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  httpServer.on('upgrade', (_req, socket) => {
+    socket.on('error', () => {});
+    if (socket.writable) {
+      socket.end('HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n');
+    } else {
+      socket.destroy();
+    }
+  });
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`BloomCampus & Sidratu server running on http://localhost:${PORT}`);

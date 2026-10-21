@@ -113,6 +113,9 @@ export interface UserData {
   password: string;
   createdAt: number;
   lastUpdatedAt?: string;
+  lastSignInAt?: string;
+  signInCount?: number;
+  signupSource?: string;
   isVip: boolean;
   usedFreeAccessPassword?: boolean;
   subscriptionStatus?: 'active' | 'free_password' | 'pending_verification' | 'expired' | 'trial';

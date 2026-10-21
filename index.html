@@ -20,29 +20,120 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Outfit:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
-      window.addEventListener(
-        'unhandledrejection',
-        function (event) {
-          var reason = event && event.reason;
-          var msg = reason && (reason.message || String(reason));
-          if (typeof msg === 'string' && msg.indexOf('WebSocket closed without opened') !== -1) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
+      (function () {
+        var NativeWebSocket = window.WebSocket;
+        if (NativeWebSocket) {
+          function createMockWebSocket(url, protocols) {
+            var target = new EventTarget();
+            var proto = Array.isArray(protocols) ? protocols[0] || '' : protocols || '';
+            var mock = {
+              CONNECTING: 0,
+              OPEN: 1,
+              CLOSING: 2,
+              CLOSED: 3,
+              readyState: 1,
+              url: String(url || ''),
+              protocol: String(proto),
+              extensions: '',
+              bufferedAmount: 0,
+              binaryType: 'blob',
+              onopen: null,
+              onerror: null,
+              onclose: null,
+              onmessage: null,
+              send: function () {},
+              close: function () {
+                mock.readyState = 3;
+              },
+              addEventListener: function (type, listener, options) {
+                target.addEventListener(type, listener, options);
+              },
+              removeEventListener: function (type, listener, options) {
+                target.removeEventListener(type, listener, options);
+              },
+              dispatchEvent: function (event) {
+                return target.dispatchEvent(event);
+              },
+            };
+            setTimeout(function () {
+              var openEvt = new Event('open');
+              if (typeof mock.onopen === 'function') {
+                try {
+                  mock.onopen(openEvt);
+                } catch (_e) {}
+              }
+              target.dispatchEvent(openEvt);
+              try {
+                var msgEvt = new MessageEvent('message', {
+                  data: JSON.stringify({ type: 'connected' }),
+                });
+                if (typeof mock.onmessage === 'function') {
+                  mock.onmessage(msgEvt);
+                }
+                target.dispatchEvent(msgEvt);
+              } catch (_e) {}
+            }, 0);
+            return mock;
           }
-        },
-        true
-      );
-      window.addEventListener(
-        'error',
-        function (event) {
-          var msg = event && (event.message || (event.error && event.error.message));
-          if (typeof msg === 'string' && msg.indexOf('WebSocket closed without opened') !== -1) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-          }
-        },
-        true
-      );
+
+          var PatchedWebSocket = function (url, protocols) {
+            var urlStr = String(url || '');
+            var protoStr = Array.isArray(protocols) ? protocols.join(',') : String(protocols || '');
+            var isViteWs =
+              protoStr.indexOf('vite') !== -1 ||
+              urlStr.indexOf('token=') !== -1 ||
+              urlStr.indexOf('vite') !== -1 ||
+              (window.location && urlStr.indexOf(window.location.host) !== -1);
+            if (isViteWs) {
+              return createMockWebSocket(url, protocols);
+            }
+            return protocols !== undefined
+              ? new NativeWebSocket(url, protocols)
+              : new NativeWebSocket(url);
+          };
+          PatchedWebSocket.prototype = NativeWebSocket.prototype;
+          PatchedWebSocket.CONNECTING = 0;
+          PatchedWebSocket.OPEN = 1;
+          PatchedWebSocket.CLOSING = 2;
+          PatchedWebSocket.CLOSED = 3;
+          window.WebSocket = PatchedWebSocket;
+        }
+
+        function isWebSocketErrorMsg(msg) {
+          if (typeof msg !== 'string') return false;
+          var lower = msg.toLowerCase();
+          return (
+            lower.indexOf('websocket') !== -1 ||
+            lower.indexOf('vite-hmr') !== -1 ||
+            lower.indexOf('failed to connect to websocket') !== -1
+          );
+        }
+
+        window.addEventListener(
+          'unhandledrejection',
+          function (event) {
+            var reason = event && event.reason;
+            var msg = reason && (reason.message || String(reason));
+            if (isWebSocketErrorMsg(msg)) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          },
+          true
+        );
+
+        window.addEventListener(
+          'error',
+          function (event) {
+            var msg = event && (event.message || (event.error && event.error.message));
+            if (isWebSocketErrorMsg(msg)) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          },
+          true
+        );
+      })();
     </script>
   </head>
   <body>

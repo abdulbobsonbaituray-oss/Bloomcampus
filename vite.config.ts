@@ -51,6 +51,21 @@ export default defineConfig(() => {
           type: 'module',
         },
       }),
+      {
+        name: 'disable-vite-ws-client',
+        transform(code, id) {
+          if (id.includes('vite/dist/client/client.mjs') || id.includes('@vite/client')) {
+            return {
+              code: code.replace(
+                /function setupWebSocket\s*\([^)]*\)\s*\{/,
+                'function setupWebSocket() { return { send() {}, close() {} }; '
+              ),
+              map: null,
+            };
+          }
+          return null;
+        },
+      },
     ],
     resolve: {
       alias: {
@@ -59,6 +74,7 @@ export default defineConfig(() => {
     },
     server: {
       hmr: false,
+      ws: false,
       watch: null,
     },
   };

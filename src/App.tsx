@@ -58,6 +58,18 @@ import { CycleJournalPromptsSection } from './components/CycleJournalPromptsSect
 import { FullScreenCalendarModal } from './components/FullScreenCalendarModal';
 import { OwnerAdminDashboard } from './components/OwnerAdminDashboard';
 import { exportClinicSummaryToPDF } from './utils/clinicPdfExport';
+import {
+  deleteUserFromFirestore,
+  fetchAllUsersFromFirestore,
+  signInWithGooglePopup,
+  subscribeToAdminConfigFirestore,
+  subscribeToAllUsersFirestore,
+  subscribeToSupportInquiriesFirestore,
+  syncAdminConfigToFirestore,
+  syncAllUsersToFirestore,
+  syncSupportInquiryToFirestore,
+  syncUserToFirestore,
+} from './firebase';
 
 interface ToastMessage {
   id: number;
@@ -65,28 +77,103 @@ interface ToastMessage {
   type: 'success' | 'warning' | 'info';
 }
 
+function sanitizeClientUser(u: UserData, emailKey: string): UserData {
+  const cleaned: UserData = { ...u, email: emailKey };
+  if (
+    typeof cleaned.paymentMethod === 'string' &&
+    (cleaned.paymentMethod.includes('Bobson') ||
+      cleaned.paymentMethod.toLowerCase().includes('free 30-day') ||
+      cleaned.paymentMethod.toLowerCase().includes('promo'))
+  ) {
+    cleaned.paymentMethod = '2-Week Free Access';
+  }
+  return cleaned;
+}
+
+function getSafeUserTimestamp(u: UserData): number {
+  if (u.lastUpdatedAt) {
+    const t = new Date(u.lastUpdatedAt).getTime();
+    if (!isNaN(t) && t > 0) return t;
+  }
+  const c = Number(u.createdAt || 0);
+  return !isNaN(c) && c > 0 ? c : 0;
+}
+
+function mergeUsersMaps(
+  baseUsers: Record<string, UserData>,
+  incomingUsers: Record<string, UserData>
+): Record<string, UserData> {
+  const merged: Record<string, UserData> = {};
+  Object.entries(baseUsers || {}).forEach(([k, u]) => {
+    if (!k || !u || typeof u !== 'object') return;
+    const emailKey = (u.email || k).toLowerCase().trim();
+    if (emailKey) {
+      merged[emailKey] = sanitizeClientUser(u, emailKey);
+    }
+  });
+
+  Object.entries(incomingUsers || {}).forEach(([rawKey, u]) => {
+    if (!rawKey || !u || typeof u !== 'object') return;
+    const emailKey = (u.email || rawKey).toLowerCase().trim();
+    if (!emailKey) return;
+    const existing = merged[emailKey];
+    if (!existing) {
+      merged[emailKey] = sanitizeClientUser(u, emailKey);
+      return;
+    }
+    const existingTs = getSafeUserTimestamp(existing);
+    const incomingTs = getSafeUserTimestamp(u);
+    if (incomingTs >= existingTs) {
+      merged[emailKey] = sanitizeClientUser({ ...existing, ...u }, emailKey);
+    }
+  });
+  return merged;
+}
+
 function getAllUsers(): Record<string, UserData> {
   try {
     const raw = localStorage.getItem(STORAGE_USERS_KEY);
-    return raw ? JSON.parse(raw) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return mergeUsersMaps({}, parsed);
   } catch {
     return {};
   }
 }
 
-function saveAllUsers(usersObj: Record<string, UserData>, activeEmail?: string) {
+function saveAllUsers(
+  usersObj: Record<string, UserData>,
+  activeEmail?: string,
+  forceOverwriteUser = false
+) {
   try {
-    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(usersObj));
+    const normalized = mergeUsersMaps(getAllUsers(), usersObj);
+    if (activeEmail && usersObj[activeEmail]) {
+      normalized[activeEmail.toLowerCase().trim()] = usersObj[activeEmail];
+    }
+    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(normalized));
+
+    if (activeEmail) {
+      const cleanKey = activeEmail.toLowerCase().trim();
+      const targetUser = normalized[cleanKey];
+      if (targetUser) {
+        syncUserToFirestore(targetUser, cleanKey).catch(() => {});
+      }
+    } else {
+      syncAllUsersToFirestore(normalized).catch(() => {});
+    }
+
     fetch('/api/users/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: activeEmail || undefined,
-        userData: activeEmail ? usersObj[activeEmail] : undefined,
-        allUsers: usersObj,
+        userData: activeEmail ? normalized[activeEmail.toLowerCase().trim()] : undefined,
+        allUsers: normalized,
+        forceOverwriteUser,
       }),
     }).catch(() => {
-      // Offline fallback: localStorage already has the latest copy
+      // Offline fallback: localStorage and Firestore handle persistence
     });
   } catch (e) {
     console.error('Failed saving users to localStorage', e);
@@ -288,44 +375,86 @@ export default function App() {
       }
     }
 
-    // Reconcile with server persistent store
-    fetch('/api/users/sync')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!data) return;
-        if (data.adminConfig && typeof data.adminConfig === 'object') {
-          setAdminConfig(data.adminConfig);
-          saveAdminConfig(data.adminConfig);
-        }
-        if (Array.isArray(data.supportInquiries)) {
-          setSupportInquiries(data.supportInquiries);
-        }
-        if (data.users && typeof data.users === 'object') {
-          const mergedUsers: Record<string, UserData> = {
-            ...data.users,
-            ...getAllUsers(),
-          };
-          localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(mergedUsers));
-          setAllUsersMap(mergedUsers);
-          if (savedEmail && mergedUsers[savedEmail]) {
-            const syncedUser = mergedUsers[savedEmail];
-            const sorted = getSortedPeriods(syncedUser.periods);
-            const latest = sorted.length > 0 ? sorted[sorted.length - 1] : null;
-            if (!localUsers[savedEmail]) {
-              setCurrentUserEmail(savedEmail);
+    // Push any local users to Cloud Firestore on boot & subscribe in real time
+    syncAllUsersToFirestore(localUsers).catch(() => {});
+
+    const unsubUsers = subscribeToAllUsersFirestore((cloudUsers) => {
+      if (!cloudUsers || Object.keys(cloudUsers).length === 0) return;
+      const mergedUsers = mergeUsersMaps(getAllUsers(), cloudUsers);
+      localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(mergedUsers));
+      setAllUsersMap(mergedUsers);
+      const activeSessionEmail = localStorage.getItem(STORAGE_SESSION_KEY);
+      if (activeSessionEmail && mergedUsers[activeSessionEmail]) {
+        const syncedUser = mergedUsers[activeSessionEmail];
+        setUserData(syncedUser);
+      }
+    });
+
+    const unsubAdminCfg = subscribeToAdminConfigFirestore((cloudCfg) => {
+      if (cloudCfg && typeof cloudCfg === 'object') {
+        setAdminConfig(cloudCfg);
+        saveAdminConfig(cloudCfg);
+      }
+    });
+
+    const unsubInquiries = subscribeToSupportInquiriesFirestore((cloudInqs) => {
+      if (Array.isArray(cloudInqs) && cloudInqs.length > 0) {
+        setSupportInquiries(cloudInqs);
+      }
+    });
+
+    // Reconcile with server persistent store (push local users & pull all server users so Admin sees every person)
+    const refreshUsersFromServer = () => {
+      const currentLocal = getAllUsers();
+      fetch('/api/users/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          allUsers: currentLocal,
+        }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (!data) return;
+          if (data.adminConfig && typeof data.adminConfig === 'object') {
+            setAdminConfig(data.adminConfig);
+            saveAdminConfig(data.adminConfig);
+          }
+          if (Array.isArray(data.supportInquiries) && data.supportInquiries.length > 0) {
+            setSupportInquiries(data.supportInquiries);
+          }
+          if (data.users && typeof data.users === 'object') {
+            const mergedUsers = mergeUsersMaps(getAllUsers(), data.users as Record<string, UserData>);
+            localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(mergedUsers));
+            setAllUsersMap(mergedUsers);
+            syncAllUsersToFirestore(mergedUsers).catch(() => {});
+            const activeSessionEmail = localStorage.getItem(STORAGE_SESSION_KEY);
+            if (activeSessionEmail && mergedUsers[activeSessionEmail]) {
+              const syncedUser = mergedUsers[activeSessionEmail];
+              const sorted = getSortedPeriods(syncedUser.periods);
+              const latest = sorted.length > 0 ? sorted[sorted.length - 1] : null;
+              setCurrentUserEmail(activeSessionEmail);
               setUserData(syncedUser);
-              setPeriodStartInput(latest ? latest.startDate : '');
-              setPeriodEndInput(latest && latest.endDate ? latest.endDate : '');
-            } else if (latest) {
-              setPeriodStartInput((prev) => prev || latest.startDate);
-              setPeriodEndInput((prev) => prev || latest.endDate || '');
+              if (latest) {
+                setPeriodStartInput((prev) => prev || latest.startDate);
+                setPeriodEndInput((prev) => prev || latest.endDate || '');
+              }
             }
           }
-        }
-      })
-      .catch(() => {
-        // Offline mode: local storage is already active
-      });
+        })
+        .catch(() => {
+          // Offline mode: local storage is already active
+        });
+    };
+
+    refreshUsersFromServer();
+    const syncTimer = window.setInterval(refreshUsersFromServer, 6000);
+    return () => {
+      window.clearInterval(syncTimer);
+      unsubUsers();
+      unsubAdminCfg();
+      unsubInquiries();
+    };
   }, []);
 
   // Sync root & body class for Dark Mode theme
@@ -587,6 +716,7 @@ export default function App() {
       createdAt: new Date().toISOString(),
     };
     setSupportInquiries((prev) => [newInq, ...prev]);
+    syncSupportInquiryToFirestore(newInq).catch(() => {});
 
     fetch('/api/admin/inquiries', {
       method: 'POST',
@@ -618,7 +748,38 @@ export default function App() {
   // =========================================================================
   // OWNER ADMIN DASHBOARD HANDLERS
   // =========================================================================
-  const handleAdminLoginSubmit = (e: React.FormEvent) => {
+  const syncLatestUsersFromEverywhere = async (): Promise<number> => {
+    let combined = mergeUsersMaps(getAllUsers(), allUsersMap);
+    try {
+      const cloudUsers = await fetchAllUsersFromFirestore();
+      if (cloudUsers && Object.keys(cloudUsers).length > 0) {
+        combined = mergeUsersMaps(combined, cloudUsers);
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      const res = await fetch('/api/users/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allUsers: combined }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.users && typeof data.users === 'object') {
+          combined = mergeUsersMaps(combined, data.users as Record<string, UserData>);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(combined));
+    setAllUsersMap(combined);
+    syncAllUsersToFirestore(combined).catch(() => {});
+    return Object.keys(combined).length;
+  };
+
+  const handleAdminLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isOwnerAdminCredentials(adminLoginEmail, adminLoginPassword, adminConfig)) {
       const emailClean = adminLoginEmail.trim().toLowerCase();
@@ -627,10 +788,11 @@ export default function App() {
       setShowSidebarDrawer(false);
       setAdminLoginPassword('');
       localStorage.setItem(STORAGE_ADMIN_SESSION_KEY, 'true');
+      const totalCount = await syncLatestUsersFromEverywhere();
       showToast(
         emailClean === OWNER_ADMIN_EMAIL.toLowerCase()
-          ? `🛡️ Welcome Owner (${CREATOR_NAME})! Routed to the Admin Dashboard.`
-          : `🛡️ Welcome Admin (${emailClean})! Routed to the Admin Dashboard.`,
+          ? `🛡️ Welcome Owner (${CREATOR_NAME})! Showing all ${totalCount} people in the app.`
+          : `🛡️ Welcome Admin (${emailClean})! Showing all ${totalCount} people in the app.`,
         'success'
       );
     } else {
@@ -641,9 +803,40 @@ export default function App() {
     }
   };
 
+  const handleGoogleAdminLogin = async () => {
+    try {
+      const googleUser = await signInWithGooglePopup();
+      const gEmail = (googleUser.email || '').trim().toLowerCase();
+      const isAuthorized =
+        gEmail === OWNER_ADMIN_EMAIL.toLowerCase() ||
+        (adminConfig.additionalAdmins || []).some(
+          (a) => a.email.trim().toLowerCase() === gEmail
+        );
+      if (isAuthorized) {
+        setIsAdminView(true);
+        setShowAdminLoginModal(false);
+        setShowSidebarDrawer(false);
+        localStorage.setItem(STORAGE_ADMIN_SESSION_KEY, 'true');
+        const totalCount = await syncLatestUsersFromEverywhere();
+        showToast(
+          `🛡️ Google Admin Verified (${gEmail})! Showing all ${totalCount} people in the app.`,
+          'success'
+        );
+      } else {
+        showToast(
+          `Google account (${gEmail}) is not registered as an Admin. Sign in with ${OWNER_ADMIN_EMAIL} or an added Admin email.`,
+          'warning'
+        );
+      }
+    } catch {
+      showToast('Google Sign-In was cancelled or blocked by popup settings. Use your Admin email & password above.', 'info');
+    }
+  };
+
   const handleUpdateAdminConfig = (nextCfg: AdminConfig) => {
     setAdminConfig(nextCfg);
     saveAdminConfig(nextCfg);
+    syncAdminConfigToFirestore(nextCfg).catch(() => {});
     fetch('/api/admin/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -651,9 +844,95 @@ export default function App() {
     }).catch(() => {});
   };
 
+  const handleExtendUserFreeAccess = (targetEmail: string, daysToAdd = 14) => {
+    const emailKey = targetEmail.toLowerCase().trim();
+    const users = mergeUsersMaps(getAllUsers(), allUsersMap);
+    const target = users[emailKey];
+    if (!target) return;
+
+    const baseMs =
+      target.subscriptionUntil && target.subscriptionUntil > Date.now()
+        ? target.subscriptionUntil
+        : Date.now();
+    const newExpMs = baseMs + daysToAdd * 24 * 60 * 60 * 1000;
+    const expFormatted = new Date(newExpMs).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+
+    const updatedUser: UserData = {
+      ...target,
+      subscriptionStatus: 'active',
+      subscriptionUntil: newExpMs,
+      paymentMethod: '2-Week Free Access',
+      lastUpdatedAt: new Date().toISOString(),
+    };
+
+    users[emailKey] = updatedUser;
+    saveAllUsers(users, emailKey, true);
+    setAllUsersMap({ ...users });
+    if (currentUserEmail === emailKey) {
+      setUserData(updatedUser);
+    }
+
+    showToast(
+      `🎁 Extended ${updatedUser.name} (${updatedUser.email}) by +${daysToAdd} days free access (until ${expFormatted})!`,
+      'success'
+    );
+  };
+
+  const handleRegisterNewUserByAdmin = (params: {
+    name: string;
+    age: string;
+    email: string;
+    phone: string;
+    password: string;
+  }) => {
+    const emailClean = params.email.trim().toLowerCase();
+    const users = mergeUsersMaps(getAllUsers(), allUsersMap);
+    const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
+    const newUser = createDefaultUserObject(
+      params.name || emailClean.split('@')[0],
+      emailClean,
+      params.password,
+      params.age || '21',
+      params.phone
+    );
+    newUser.subscriptionStatus = 'active';
+    newUser.subscriptionUntil = Date.now() + twoWeeksMs;
+    newUser.paymentMethod = '2-Week Free Access';
+    newUser.signupSource = 'Admin Registered';
+    newUser.lastUpdatedAt = new Date().toISOString();
+
+    users[emailClean] = newUser;
+    saveAllUsers(users, emailClean, true);
+    setAllUsersMap({ ...users });
+    showToast(
+      `✅ Registered ${newUser.name} (${newUser.email}) with 2 weeks free access! Total people in app: ${Object.keys(users).length}.`,
+      'success'
+    );
+  };
+
+  const handleDeleteUserByAdmin = (targetEmail: string) => {
+    const emailKey = targetEmail.toLowerCase().trim();
+    const users = mergeUsersMaps(getAllUsers(), allUsersMap);
+    const targetName = users[emailKey]?.name || emailKey;
+    delete users[emailKey];
+    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(users));
+    setAllUsersMap({ ...users });
+    deleteUserFromFirestore(emailKey).catch(() => {});
+    fetch('/api/users/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: emailKey }),
+    }).catch(() => {});
+    showToast(`🗑️ Removed ${targetName} (${emailKey}) from the app directory.`, 'info');
+  };
+
   const handleApproveUserPayment = (targetEmail: string) => {
     const emailKey = targetEmail.toLowerCase().trim();
-    const users = getAllUsers();
+    const users = mergeUsersMaps(getAllUsers(), allUsersMap);
     const target = users[emailKey];
     if (!target) return;
 
@@ -686,7 +965,7 @@ export default function App() {
     };
 
     users[emailKey] = updatedUser;
-    saveAllUsers(users, emailKey);
+    saveAllUsers(users, emailKey, true);
     setAllUsersMap({ ...users });
     if (currentUserEmail === emailKey) {
       setUserData(updatedUser);
@@ -700,7 +979,7 @@ export default function App() {
 
   const handleRejectOrExpireUser = (targetEmail: string, mode: 'reject' | 'expire') => {
     const emailKey = targetEmail.toLowerCase().trim();
-    const users = getAllUsers();
+    const users = mergeUsersMaps(getAllUsers(), allUsersMap);
     const target = users[emailKey];
     if (!target) return;
 
@@ -720,7 +999,7 @@ export default function App() {
     };
 
     users[emailKey] = updatedUser;
-    saveAllUsers(users, emailKey);
+    saveAllUsers(users, emailKey, true);
     setAllUsersMap({ ...users });
     if (currentUserEmail === emailKey) {
       setUserData(updatedUser);
@@ -729,7 +1008,7 @@ export default function App() {
     showToast(
       mode === 'reject'
         ? `❌ Rejected payment for ${updatedUser.name}. Account remains locked.`
-        : `🔒 Expired 30-day pass for ${updatedUser.name}. User must renew via Orange Money or Free Password.`,
+        : `🔒 Expired access pass for ${updatedUser.name}. User must renew via Orange Money.`,
       'info'
     );
   };
@@ -823,25 +1102,59 @@ export default function App() {
     }
   };
 
-  const handleAuthSubmit = (e: React.FormEvent) => {
+  const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const nameTrim = authName.trim();
     const ageTrim = authAge.trim();
     const phoneTrim = authPhone.trim();
     const emailTrim = authEmail.trim().toLowerCase();
-    const passVal = authPassword;
+    const passVal = authPassword.trim();
 
     if (!emailTrim || !passVal) {
       showToast('Please enter your email and password.', 'warning');
       return;
     }
 
+    // Fetch latest users & adminConfig from both Cloud Firestore and server before authenticating so Sign-In works across all devices/browsers/deployments
+    let latestServerUsers: Record<string, UserData> = {};
+    let latestAdminCfg: AdminConfig = adminConfig;
+    try {
+      const cloudUsers = await fetchAllUsersFromFirestore();
+      if (cloudUsers && Object.keys(cloudUsers).length > 0) {
+        latestServerUsers = mergeUsersMaps(latestServerUsers, cloudUsers);
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      const syncRes = await fetch(`/api/users/sync?email=${encodeURIComponent(emailTrim)}`);
+      if (syncRes.ok) {
+        const syncData = await syncRes.json();
+        if (syncData?.adminConfig && typeof syncData.adminConfig === 'object') {
+          latestAdminCfg = syncData.adminConfig;
+          setAdminConfig(syncData.adminConfig);
+          saveAdminConfig(syncData.adminConfig);
+        }
+        if (syncData?.users && typeof syncData.users === 'object') {
+          latestServerUsers = mergeUsersMaps(
+            latestServerUsers,
+            syncData.users as Record<string, UserData>
+          );
+        }
+      }
+    } catch {
+      // Offline fallback: use local storage
+    }
+
     // Automatic Owner / Added Admin Routing if admin logs in via regular login/signup screen
-    if (isOwnerAdminCredentials(emailTrim, passVal, adminConfig)) {
+    if (isOwnerAdminCredentials(emailTrim, passVal, latestAdminCfg)) {
+      const mergedAll = mergeUsersMaps(mergeUsersMaps(getAllUsers(), allUsersMap), latestServerUsers);
+      localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(mergedAll));
+      setAllUsersMap(mergedAll);
       setIsAdminView(true);
       localStorage.setItem(STORAGE_ADMIN_SESSION_KEY, 'true');
       showToast(
-        `🛡️ Admin Recognized (${emailTrim})! Routing directly to Admin Dashboard.`,
+        `🛡️ Admin Recognized (${emailTrim})! Showing all ${Object.keys(mergedAll).length} people in the app.`,
         'success'
       );
       return;
@@ -852,172 +1165,102 @@ export default function App() {
       return;
     }
 
-    const users = getAllUsers();
-    const enteredFreePassCode =
-      isSecretVipPassword(passVal, adminConfig.freeAccessPassword) ||
-      isSecretVipPassword(authFreeAccessPassInput, adminConfig.freeAccessPassword);
+    const users = mergeUsersMaps(mergeUsersMaps(getAllUsers(), allUsersMap), latestServerUsers);
+    const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
+    const nowIso = new Date().toISOString();
 
     if (authMode === 'signup') {
-      if (signupPlanChoice === 'free_password') {
-        if (!enteredFreePassCode) {
-          showToast(
-            `Please enter the valid Free 30-Day Access Password (e.g., ${adminConfig.freeAccessPassword}) or switch to Orange Money Payment.`,
-            'warning'
-          );
-          return;
-        }
+      const newUser = createDefaultUserObject(
+        nameTrim || emailTrim.split('@')[0],
+        emailTrim,
+        passVal,
+        ageTrim,
+        phoneTrim
+      );
+      newUser.isVip = false;
+      newUser.usedFreeAccessPassword = false;
+      newUser.subscriptionStatus = 'active';
+      newUser.subscriptionUntil = Date.now() + twoWeeksMs;
+      newUser.paymentMethod = '2-Week Free Access';
+      newUser.lastUpdatedAt = nowIso;
+      newUser.lastSignInAt = nowIso;
+      newUser.signInCount = 1;
+      newUser.signupSource = 'Create Account';
 
+      users[emailTrim] = newUser;
+      saveAllUsers(users, emailTrim, true);
+      setAllUsersMap({ ...users });
+      loginUserSession(emailTrim, users);
+      showToast(
+        `🌸 Welcome, ${newUser.name}! Your account is active with 2 weeks (14 days) of free access.`,
+        'success'
+      );
+      return;
+    } else {
+      // SIGN IN MODE — Find user case-insensitively across local + Cloud Firestore + server store, or auto-register with 2 weeks free access
+      const matchedKey = Object.keys(users).find(
+        (k) =>
+          k.toLowerCase().trim() === emailTrim ||
+          (users[k]?.email && users[k].email.toLowerCase().trim() === emailTrim)
+      );
+      const existing = matchedKey ? users[matchedKey] : undefined;
+
+      if (!existing) {
         const newUser = createDefaultUserObject(
-          nameTrim || 'Student',
+          nameTrim || emailTrim.split('@')[0],
           emailTrim,
           passVal,
-          ageTrim,
+          ageTrim || '21',
           phoneTrim
         );
-        newUser.isVip = true;
-        newUser.usedFreeAccessPassword = true;
-        newUser.subscriptionStatus = 'free_password';
-        newUser.subscriptionUntil = Date.now() + 30 * 24 * 60 * 60 * 1000;
-        newUser.paymentMethod = `Free 30-Day Access Password (${adminConfig.freeAccessPassword})`;
+        newUser.isVip = false;
+        newUser.usedFreeAccessPassword = false;
+        newUser.subscriptionStatus = 'active';
+        newUser.subscriptionUntil = Date.now() + twoWeeksMs;
+        newUser.paymentMethod = '2-Week Free Access';
+        newUser.lastUpdatedAt = nowIso;
+        newUser.lastSignInAt = nowIso;
+        newUser.signInCount = 1;
+        newUser.signupSource = 'Sign In';
 
         users[emailTrim] = newUser;
-        saveAllUsers(users, emailTrim);
+        saveAllUsers(users, emailTrim, true);
         setAllUsersMap({ ...users });
         loginUserSession(emailTrim, users);
         showToast(
-          '🔑 Free 30-Day Access Password Verified! Your account is unlocked for 30 days.',
+          `🌸 Welcome, ${newUser.name}! Signed in with 2 weeks (14 days) of free access.`,
           'success'
         );
         return;
-      } else {
-        // Orange Money Payment at Sign-Up -> Pending Owner Verification
-        const senderPhone = orangePhoneInput.trim() || phoneTrim;
-        const txId = orangeTxIdInput.trim();
-        if (!senderPhone || !txId) {
-          showToast(
-            'Please enter your Orange Money sender number and SMS Transaction ID for verification.',
-            'warning'
-          );
-          return;
-        }
-
-        const newUser = createDefaultUserObject(
-          nameTrim || 'Student',
-          emailTrim,
-          passVal,
-          ageTrim,
-          senderPhone
-        );
-        newUser.phone = senderPhone;
-        newUser.usedFreeAccessPassword = false;
-        newUser.subscriptionStatus = 'pending_verification';
-        newUser.subscriptionUntil = null;
-        newUser.paymentMethod = 'Orange Money (Pending Verification)';
-        newUser.pendingPayment = {
-          id: `pay-${Date.now()}`,
-          senderPhone,
-          transactionId: txId,
-          amount: 'Le 30',
-          method: 'Orange Money',
-          submittedAt: new Date().toISOString(),
-          status: 'pending',
-        };
-        newUser.paymentHistory = [
-          {
-            date: new Date().toISOString(),
-            amount: 'Le 30',
-            details: `🟧 Orange Money (To 073604401) | Sender: ${senderPhone} | SMS Tx ID: ${txId}`,
-            status: 'pending',
-            senderPhone,
-            transactionId: txId,
-          },
-        ];
-
-        users[emailTrim] = newUser;
-        saveAllUsers(users, emailTrim);
-        setAllUsersMap({ ...users });
-        loginUserSession(emailTrim, users);
-
-        const emailSubject = `🟧 New Orange Money Payment Pending Verification — ${newUser.name}`;
-        const emailBody =
-          `Hello ${CREATOR_NAME} (${OWNER_ADMIN_EMAIL}),\n\n` +
-          `A user has submitted an Orange Money payment of Le 30 for 30-day access verification:\n\n` +
-          `• Student Name: ${newUser.name}\n` +
-          `• Email: ${newUser.email}\n` +
-          `• Orange Money Sender Phone: ${senderPhone}\n` +
-          `• SMS Transaction ID: ${txId}\n` +
-          `• Submitted At: ${new Date().toLocaleString()}\n\n` +
-          `Please log into the Owner Admin Dashboard to click Approve (+30 Days) or Reject.`;
-
-        triggerOwnerEmailAndServerAlert({
-          userName: newUser.name,
-          userEmail: newUser.email,
-          userPhone: senderPhone,
-          subject: emailSubject,
-          message: emailBody,
-          type: 'payment',
-          openMailClient: true,
-        });
-
-        setIsPaywallPreview(false);
-        setShowPaywallModal(true);
-        showToast(
-          '⏳ Orange Money Transaction submitted! Showing Pending Approval screen until verified by the owner.',
-          'info'
-        );
-        return;
       }
-    } else {
-      // SIGN IN MODE
-      const existing = users[emailTrim];
-      if (!existing) {
-        if (enteredFreePassCode) {
-          const newUser = createDefaultUserObject(
-            nameTrim || 'Student',
-            emailTrim,
-            passVal,
-            ageTrim || '21',
-            phoneTrim
-          );
-          newUser.isVip = true;
-          newUser.usedFreeAccessPassword = true;
-          newUser.subscriptionStatus = 'free_password';
-          newUser.subscriptionUntil = Date.now() + 30 * 24 * 60 * 60 * 1000;
-          newUser.paymentMethod = `Free 30-Day Access Password (${adminConfig.freeAccessPassword})`;
-          users[emailTrim] = newUser;
-          saveAllUsers(users, emailTrim);
-          setAllUsersMap({ ...users });
-          loginUserSession(emailTrim, users);
-          showToast(
-            '🔑 Free 30-Day Access Password Recognized! Account created & unlocked for 30 days.',
-            'success'
-          );
-          return;
-        }
+
+      // Check account password (case-tolerant / trimmed)
+      const storedPass = (existing.password || '').trim();
+      const passMatches =
+        !storedPass ||
+        storedPass === passVal ||
+        storedPass.toLowerCase() === passVal.toLowerCase();
+
+      if (!passMatches) {
         showToast(
-          'No account found with that email. Switch to "Create Account" to sign up.',
+          `Incorrect password for ${emailTrim}. Please enter your account password.`,
           'warning'
         );
         return;
       }
 
-      if (existing.password !== passVal && !enteredFreePassCode) {
-        showToast('Incorrect password. Please try again.', 'warning');
-        return;
-      }
+      showToast(`🌸 Welcome back, ${existing.name || emailTrim}!`, 'success');
 
-      if (enteredFreePassCode) {
-        existing.isVip = true;
-        existing.usedFreeAccessPassword = true;
-        existing.subscriptionStatus = 'free_password';
-        existing.subscriptionUntil = Date.now() + 30 * 24 * 60 * 60 * 1000;
-        existing.paymentMethod = `Free 30-Day Access Password (${adminConfig.freeAccessPassword})`;
-        showToast('🔑 Free 30-Day Access Password Recognized! Unlocked for 30 days.', 'success');
-      }
       if (nameTrim) existing.name = nameTrim;
       if (ageTrim) existing.age = ageTrim;
       if (phoneTrim) existing.phone = phoneTrim;
-      saveAllUsers(users, emailTrim);
+      existing.email = emailTrim;
+      existing.lastUpdatedAt = nowIso;
+      existing.lastSignInAt = nowIso;
+      existing.signInCount = (existing.signInCount || 1) + 1;
+
+      users[emailTrim] = existing;
+      saveAllUsers(users, emailTrim, true);
       setAllUsersMap({ ...users });
       loginUserSession(emailTrim, users);
     }
@@ -1768,7 +2011,11 @@ export default function App() {
           supportInquiries={supportInquiries}
           onUpdateAdminConfig={handleUpdateAdminConfig}
           onApproveUserPayment={handleApproveUserPayment}
+          onExtendUserFreeAccess={handleExtendUserFreeAccess}
           onRejectOrExpireUser={handleRejectOrExpireUser}
+          onRegisterNewUserByAdmin={handleRegisterNewUserByAdmin}
+          onDeleteUser={handleDeleteUserByAdmin}
+          onRefreshUsers={syncLatestUsersFromEverywhere}
           onExitAdmin={() => {
             setIsAdminView(false);
             localStorage.removeItem(STORAGE_ADMIN_SESSION_KEY);
@@ -1825,9 +2072,9 @@ export default function App() {
                 College Period, Cycle Stage, Study &amp; Sidratu Skincare Companion
               </p>
               <div className="mt-2.5 flex items-center justify-center gap-2 text-xs font-semibold text-sage-800">
-                <span>🔒 30-Day Access Cycle</span>
+                <span>🎁 2 Weeks (14 Days) Free Access</span>
                 <span aria-hidden="true">·</span>
-                <span>🟧 Orange Money or 🔑 Free Access Password</span>
+                <span>🌸 Instant Sign In &amp; Cycle Tracking</span>
               </div>
             </div>
 
@@ -1965,140 +2212,12 @@ export default function App() {
                 />
               </div>
 
-              {/* SIGN-UP UNLOCK OPTIONS: (A) FREE 30-DAY PASSWORD vs (B) ORANGE MONEY PAYMENT */}
-              {authMode === 'signup' && (
-                <div className="space-y-3 pt-1">
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600">
-                    Choose How to Unlock Your 30-Day Access Pass
-                  </label>
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <button
-                      type="button"
-                      onClick={() => setSignupPlanChoice('free_password')}
-                      className={`p-3 rounded-2xl border-2 text-left transition-all ${
-                        signupPlanChoice === 'free_password'
-                          ? 'border-lavender-600 bg-lavender-50/90 text-lavender-900 shadow-xs'
-                          : 'border-slate-200 bg-cream text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      <div className="font-display font-extrabold text-xs sm:text-sm flex items-center justify-between">
-                        <span>🔑 Free Access Code</span>
-                        {signupPlanChoice === 'free_password' && <span>✓</span>}
-                      </div>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        30-day free pass password
-                      </p>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setSignupPlanChoice('orange_money')}
-                      className={`p-3 rounded-2xl border-2 text-left transition-all ${
-                        signupPlanChoice === 'orange_money'
-                          ? 'border-orange-500 bg-orange-50/90 text-slate-900 shadow-xs'
-                          : 'border-slate-200 bg-cream text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      <div className="font-display font-extrabold text-xs sm:text-sm flex items-center justify-between">
-                        <span>🟧 Orange Money</span>
-                        {signupPlanChoice === 'orange_money' && <span>✓</span>}
-                      </div>
-                      <p className="text-[11px] text-orange-800 font-semibold mt-0.5">
-                        Le 30 / 30 Days (Verified)
-                      </p>
-                    </button>
-                  </div>
-
-                  {signupPlanChoice === 'free_password' ? (
-                    <div className="rounded-2xl bg-lavender-50/80 border-2 border-lavender-200 p-3.5 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <label className="text-xs font-extrabold text-lavender-900">
-                          🔑 Enter Free 30-Day Access Password / Promo Code *
-                        </label>
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white text-lavender-700 border border-lavender-200">
-                          Unlocks 30 Days
-                        </span>
-                      </div>
-                      <input
-                        type="text"
-                        value={authFreeAccessPassInput}
-                        onChange={(e) => setAuthFreeAccessPassInput(e.target.value)}
-                        placeholder="Enter 30-day free access password (e.g., Bobson@565)"
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-lavender-300 bg-white text-xs sm:text-sm font-mono font-bold text-slate-900 outline-none focus:border-lavender-600"
-                      />
-                      <p className="text-[11px] text-slate-600">
-                        💡 Immediately unlocks the app for <strong>30 days</strong>. Once those 30 days end, the app locks again and requires a valid password or Orange Money renewal.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="rounded-2xl bg-orange-50/90 border-2 border-orange-300 p-3.5 space-y-2.5">
-                      <div className="bg-white rounded-xl p-2.5 border border-orange-300 flex items-center justify-between gap-2">
-                        <div>
-                          <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                            Step 1 — Send Le 30 To Orange Money:
-                          </span>
-                          <span className="font-display font-extrabold text-base text-slate-900 font-mono tabular-nums">
-                            073604401
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            copyTextToClipboard(
-                              '073604401',
-                              '🟧 Orange Money number 073604401 copied!'
-                            )
-                          }
-                          className="px-2.5 py-1 rounded-lg bg-orange-100 hover:bg-orange-200 text-orange-900 font-bold text-xs shrink-0"
-                        >
-                          📋 Copy
-                        </button>
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          Step 2 — Your Orange Money Number (Sender) *
-                        </label>
-                        <input
-                          type="tel"
-                          required={authMode === 'signup' && signupPlanChoice === 'orange_money'}
-                          value={orangePhoneInput}
-                          onChange={(e) => setOrangePhoneInput(e.target.value)}
-                          placeholder="e.g., 076 123 456"
-                          className="w-full px-3 py-2 rounded-xl border border-orange-300 text-xs font-semibold text-slate-800 bg-white outline-none focus:border-orange-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                          Step 3 — Orange Money SMS Transaction ID / Ref *
-                        </label>
-                        <input
-                          type="text"
-                          required={authMode === 'signup' && signupPlanChoice === 'orange_money'}
-                          value={orangeTxIdInput}
-                          onChange={(e) => setOrangeTxIdInput(e.target.value)}
-                          placeholder="e.g., MP261020.1234.A12345"
-                          className="w-full px-3 py-2 rounded-xl border border-orange-200 text-xs font-medium text-slate-800 bg-white outline-none focus:border-orange-500"
-                        />
-                      </div>
-
-                      <p className="text-[11px] text-orange-900">
-                        ⏳ Submitting shows a <strong>Pending Approval</strong> screen and notifies the owner ({OWNER_ADMIN_EMAIL}) to verify and unlock your 30-day pass.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-
               <button
                 type="submit"
-                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-lavender-500 to-rose-500 hover:from-lavender-700 hover:to-rose-700 text-white font-bold text-base shadow-lg shadow-lavender-200 transition-all active:scale-[0.99]"
+                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-lavender-500 to-rose-500 hover:from-lavender-700 hover:to-rose-700 text-white font-bold text-base shadow-lg shadow-lavender-200 transition-all active:scale-[0.99] cursor-pointer"
               >
                 {authMode === 'signup'
-                  ? signupPlanChoice === 'orange_money'
-                    ? 'Submit Orange Money & Create Account 🟧'
-                    : 'Unlock 30-Day Free Access Pass 🔑'
+                  ? 'Create Account & Start 2-Week Free Access 🌸'
                   : 'Sign In to My Tracker 🌸'}
               </button>
             </form>
@@ -2122,7 +2241,10 @@ export default function App() {
                 className="w-full py-2.5 px-4 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-500 font-extrabold text-xs border border-gold-500/40 shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
                 <span>🛡️</span>
-                <span>Owner / Admin Login ({OWNER_ADMIN_EMAIL})</span>
+                <span>
+                  Owner / Admin Dashboard — View All Sign-Ups ({Object.keys(allUsersMap).length}{' '}
+                  {Object.keys(allUsersMap).length === 1 ? 'Person' : 'People'} in App)
+                </span>
               </button>
             </div>
 
@@ -2161,7 +2283,7 @@ export default function App() {
                 Sign In to Owner / Admin Dashboard
               </h3>
               <p className="text-xs text-slate-600 mt-1 mb-4">
-                For <strong>{CREATOR_NAME}</strong> ({OWNER_ADMIN_EMAIL}) or any authorized admin added with an email &amp; password.
+                See all sign-ups and know how many people are in the app ({Object.keys(allUsersMap).length} currently synced). For <strong>{CREATOR_NAME}</strong> ({OWNER_ADMIN_EMAIL}) or any authorized admin.
               </p>
 
               <form onSubmit={handleAdminLoginSubmit} className="space-y-3">
@@ -2195,9 +2317,20 @@ export default function App() {
                   type="submit"
                   className="w-full py-3 px-5 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-500 font-extrabold text-xs sm:text-sm shadow-md transition-all cursor-pointer"
                 >
-                  Open Owner Admin Dashboard 🛡️
+                  Open Admin Dashboard ({Object.keys(allUsersMap).length} Sign-Ups) 🛡️
                 </button>
               </form>
+
+              <div className="mt-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={handleGoogleAdminLogin}
+                  className="w-full py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  <span>🔐</span>
+                  <span>Verify Owner Admin with Google ({OWNER_ADMIN_EMAIL})</span>
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -2394,10 +2527,10 @@ export default function App() {
                 </button>
               </div>
 
-              {/* 30-Day Subscription Pass Card */}
+              {/* 2-Week Free Access & Subscription Status Card */}
               <div className="rounded-2xl bg-cream border border-lavender-200 p-3.5 space-y-2">
                 <div className="text-[10px] font-extrabold uppercase tracking-wider text-lavender-800">
-                  30-Day Subscription Status
+                  2-Week Free Access &amp; Pass Status
                 </div>
                 <div className="text-xs font-bold text-slate-900">{trialInfo.label}</div>
                 <button
@@ -2409,7 +2542,7 @@ export default function App() {
                   }}
                   className="w-full py-2 px-3 rounded-xl bg-lavender-600 hover:bg-lavender-800 text-white font-bold text-xs transition-all"
                 >
-                  🔑 Manage 30-Day Pass / Renew
+                  🟧 View Access Status / Renew
                 </button>
               </div>
 
@@ -2529,19 +2662,33 @@ export default function App() {
               {/* Owner / Admin Login Button inside Main App Sidebar */}
               <div className="pt-3 border-t border-slate-100 space-y-2">
                 <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 px-1">
-                  Owner Administration
+                  Owner Administration ({Object.keys(allUsersMap).length} People in App)
                 </div>
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     setShowSidebarDrawer(false);
-                    setAdminLoginEmail(OWNER_ADMIN_EMAIL);
-                    setShowAdminLoginModal(true);
+                    const isCurrentUserAdmin =
+                      currentUserEmail &&
+                      (currentUserEmail.toLowerCase() === OWNER_ADMIN_EMAIL.toLowerCase() ||
+                        (adminConfig.additionalAdmins || []).some(
+                          (a) => a.email.trim().toLowerCase() === currentUserEmail.toLowerCase()
+                        ));
+                    if (isCurrentUserAdmin) {
+                      setIsAdminView(true);
+                      localStorage.setItem(STORAGE_ADMIN_SESSION_KEY, 'true');
+                      await syncLatestUsersFromEverywhere();
+                    } else {
+                      setAdminLoginEmail(OWNER_ADMIN_EMAIL);
+                      setShowAdminLoginModal(true);
+                    }
                   }}
                   className="w-full py-3 px-4 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-500 font-extrabold text-xs border border-gold-500/40 shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
                 >
                   <span>🛡️</span>
-                  <span>Owner / Admin Login</span>
+                  <span>
+                    Admin Dashboard ({Object.keys(allUsersMap).length} Sign-Ups)
+                  </span>
                 </button>
               </div>
             </div>
@@ -2679,15 +2826,27 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => {
-                setAdminLoginEmail(OWNER_ADMIN_EMAIL);
-                setShowAdminLoginModal(true);
+              onClick={async () => {
+                const isCurrentUserAdmin =
+                  currentUserEmail &&
+                  (currentUserEmail.toLowerCase() === OWNER_ADMIN_EMAIL.toLowerCase() ||
+                    (adminConfig.additionalAdmins || []).some(
+                      (a) => a.email.trim().toLowerCase() === currentUserEmail.toLowerCase()
+                    ));
+                if (isCurrentUserAdmin) {
+                  setIsAdminView(true);
+                  localStorage.setItem(STORAGE_ADMIN_SESSION_KEY, 'true');
+                  await syncLatestUsersFromEverywhere();
+                } else {
+                  setAdminLoginEmail(OWNER_ADMIN_EMAIL);
+                  setShowAdminLoginModal(true);
+                }
               }}
               className="px-3 py-2 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-500 text-xs font-extrabold flex items-center gap-1.5 border border-gold-500/40 transition-all whitespace-nowrap shrink-0 cursor-pointer"
-              title="Owner / Admin Login"
+              title="Open Owner Admin Dashboard to see all sign-ups and total people in app"
             >
               <span>🛡️</span>
-              <span className="hidden lg:inline">Owner Admin</span>
+              <span>Admin ({Object.keys(allUsersMap).length})</span>
             </button>
 
             <button
@@ -4378,7 +4537,7 @@ export default function App() {
                 }}
                 className="px-3 py-1.5 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-800 font-bold border border-orange-200"
               >
-                🔑 30-Day Pass &amp; Orange Money
+                🎁 2-Week Free Access &amp; Renewal
               </button>
               <button
                 type="button"
@@ -4391,13 +4550,13 @@ export default function App() {
                   setIsPaywallPreview(false);
                   setShowPaywallModal(true);
                   showToast(
-                    '🔒 Simulated 30-Day Pass Expiration! Enter Free Password (Bobson@565) or submit Orange Money to unlock.',
+                    '🔒 Simulated 2-Week Free Access Expiration! Submit Orange Money to renew.',
                     'warning'
                   );
                 }}
                 className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold border border-rose-200"
               >
-                🔒 Simulate 30-Day Expiry Lock
+                🔒 Simulate 2-Week Expiry Lock
               </button>
               <button
                 type="button"
@@ -4739,7 +4898,7 @@ export default function App() {
       )}
 
       {/* ===================================================================== */}
-      {/* MODAL 3: 30-DAY RENEWAL LOCK & PENDING ORANGE MONEY APPROVAL SCREEN   */}
+      {/* MODAL 3: 2-WEEK FREE ACCESS & ORANGE MONEY RENEWAL SCREEN             */}
       {/* ===================================================================== */}
       {(showPaywallModal || isAccountLocked) && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4">
@@ -4749,8 +4908,8 @@ export default function App() {
                 {trialInfo.status === 'pending_verification'
                   ? '⏳ Pending Owner Verification'
                   : trialInfo.status === 'expired'
-                  ? '🔒 30-Day Pass Expired — Renewal Lock'
-                  : '🔑 30-Day Access Pass · Le 30 / Month'}
+                  ? '🔒 2-Week Free Access Expired — Renewal'
+                  : '🎁 2-Week Free Access · Orange Money Renewal'}
               </span>
               {!isAccountLocked && (
                 <button
@@ -4773,7 +4932,7 @@ export default function App() {
                   </div>
                   <p className="text-xs text-orange-900 leading-relaxed">
                     Your Orange Money payment details have been submitted to the owner (
-                    <strong>{CREATOR_NAME}</strong> · <strong>{OWNER_ADMIN_EMAIL}</strong>). As soon as the owner clicks <strong>Approve</strong> on the Admin Dashboard, your account will unlock for <strong>30 days</strong>!
+                    <strong>{CREATOR_NAME}</strong> · <strong>{OWNER_ADMIN_EMAIL}</strong>). As soon as the owner clicks <strong>Approve</strong> on the Admin Dashboard, your account will unlock!
                   </p>
                   {userData.pendingPayment && (
                     <div className="bg-white rounded-xl p-3 border border-orange-200 text-xs font-mono space-y-1 text-slate-800">
@@ -4805,203 +4964,93 @@ export default function App() {
                     ✉️ Send Email Reminder to Owner ({OWNER_ADMIN_EMAIL})
                   </a>
                 </div>
-
-                {/* Option to unlock immediately with Free 30-Day Access Password */}
-                <form
-                  onSubmit={applyVipCodeFromModal}
-                  className="rounded-2xl bg-lavender-50/90 border border-lavender-200 p-4 space-y-2"
-                >
-                  <label className="block text-xs font-extrabold text-lavender-900">
-                    🔑 Or Unlock Immediately with Free 30-Day Access Password:
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={vipSecretCodeInput}
-                      onChange={(e) => setVipSecretCodeInput(e.target.value)}
-                      placeholder="Enter free 30-day password..."
-                      className="flex-1 px-3.5 py-2 rounded-xl border border-lavender-300 bg-white text-xs font-mono font-bold outline-none focus:border-lavender-600"
-                    />
-                    <button
-                      type="submit"
-                      className="px-4 py-2 rounded-xl bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-xs shrink-0"
-                    >
-                      Unlock 30d
-                    </button>
-                  </div>
-                </form>
               </div>
             ) : (
               <>
                 <h3 className="font-display font-extrabold text-xl sm:text-2xl text-slate-900">
                   {trialInfo.status === 'expired'
-                    ? 'Your 30-Day Access Pass Has Expired. Unlock for Another 30 Days to Continue.'
-                    : `Your 30-Day Pass is Active (${trialInfo.daysLeft} days left).`}
+                    ? 'Your 2-Week Free Access Has Ended. Renew via Orange Money to Continue.'
+                    : `Your Free Access is Active (${trialInfo.daysLeft} days left).`}
                 </h3>
                 <p className="text-xs sm:text-sm text-slate-600 mt-1 mb-4">
-                  Choose one of the two ways below to unlock BloomCampus for <strong>30 days</strong>:
+                  Every account includes <strong>2 weeks (14 days) of free access</strong>. To extend or renew your access pass after your 2-week free trial, submit your Orange Money details below:
                 </p>
 
-                {/* Two Ways to Unlock Tabs: (a) Orange Money vs (b) Free 30-Day Access Password */}
-                <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-2xl mb-4">
-                  <button
-                    type="button"
-                    onClick={() => setPaymentTab('orange')}
-                    className={`py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 ${
-                      paymentTab === 'orange'
-                        ? 'bg-orange-500 text-white shadow-xs'
-                        : 'text-slate-700 hover:text-slate-900'
-                    }`}
-                  >
-                    <span>🟧</span>
-                    <span>Orange Money (Le 30)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentTab('free_password')}
-                    className={`py-2.5 px-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-1.5 ${
-                      paymentTab === 'free_password'
-                        ? 'bg-lavender-700 text-white shadow-xs'
-                        : 'text-slate-700 hover:text-slate-900'
-                    }`}
-                  >
-                    <span>🔑</span>
-                    <span>Free 30-Day Password</span>
-                  </button>
-                </div>
-
-                {paymentTab === 'orange' ? (
-                  <form onSubmit={processOrangeMoneySubmission} className="space-y-3.5">
-                    <div className="rounded-2xl bg-orange-50 border border-orange-200 p-4 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-extrabold uppercase tracking-wider text-orange-800">
-                          Orange Money Verification
-                        </span>
-                        <span className="font-display font-extrabold text-base text-orange-600 tabular-nums">
-                          Le 30 / 30 Days
-                        </span>
-                      </div>
-
-                      <div className="bg-white rounded-xl p-3 border-2 border-orange-300 flex items-center justify-between gap-2">
-                        <div>
-                          <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                            Step 1 — Send Le 30 To Orange Money:
-                          </span>
-                          <span className="font-display font-extrabold text-lg text-slate-900 tracking-wide font-mono tabular-nums">
-                            073604401
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            copyTextToClipboard(
-                              '073604401',
-                              '🟧 Orange Money number 073604401 copied!'
-                            )
-                          }
-                          className="px-3 py-1.5 rounded-lg bg-orange-100 hover:bg-orange-200 text-orange-900 font-bold text-xs transition-all shrink-0"
-                        >
-                          📋 Copy
-                        </button>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Step 2 — Your Orange Money Sender Number *
-                        </label>
-                        <input
-                          type="tel"
-                          required
-                          value={orangePhoneInput}
-                          onChange={(e) => setOrangePhoneInput(e.target.value)}
-                          placeholder="e.g., 076 123 456"
-                          className="w-full px-3.5 py-2.5 rounded-xl border border-orange-300 focus:border-orange-500 outline-none text-xs sm:text-sm font-semibold text-slate-800 bg-white"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Step 3 — Orange Money SMS Transaction ID *
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={orangeTxIdInput}
-                          onChange={(e) => setOrangeTxIdInput(e.target.value)}
-                          placeholder="e.g., MP261020.1234.A12345"
-                          className="w-full px-3.5 py-2.5 rounded-xl border border-orange-200 focus:border-orange-500 outline-none text-xs sm:text-sm font-medium text-slate-800 bg-white"
-                        />
-                      </div>
-
-                      <p className="text-[11px] text-orange-900">
-                        ⏳ Submitting shows a <strong>Pending Approval</strong> screen and notifies{' '}
-                        <strong>{OWNER_ADMIN_EMAIL}</strong> to verify and unlock your 30-day pass.
-                      </p>
+                <form onSubmit={processOrangeMoneySubmission} className="space-y-3.5">
+                  <div className="rounded-2xl bg-orange-50 border border-orange-200 p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-extrabold uppercase tracking-wider text-orange-800">
+                        Orange Money Renewal
+                      </span>
+                      <span className="font-display font-extrabold text-base text-orange-600 tabular-nums">
+                        Le 30 / Pass
+                      </span>
                     </div>
 
-                    <button
-                      type="submit"
-                      className="w-full py-3.5 px-5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-extrabold text-sm shadow-md transition-all cursor-pointer"
-                    >
-                      Submit Orange Money for 30-Day Verification 🟧
-                    </button>
-                  </form>
-                ) : (
-                  <form onSubmit={applyVipCodeFromModal} className="space-y-3.5">
-                    <div className="rounded-2xl bg-lavender-50 border-2 border-lavender-200 p-4 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-extrabold uppercase tracking-wider text-lavender-900">
-                          Free 30-Day Access Password / Promo Code
+                    <div className="bg-white rounded-xl p-3 border-2 border-orange-300 flex items-center justify-between gap-2">
+                      <div>
+                        <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          Step 1 — Send Le 30 To Orange Money:
                         </span>
-                        <span className="text-[11px] font-bold text-sage-800">
-                          ⚡ Instant 30-Day Unlock
+                        <span className="font-display font-extrabold text-lg text-slate-900 tracking-wide font-mono tabular-nums">
+                          073604401
                         </span>
                       </div>
-                      <p className="text-xs text-slate-600 leading-relaxed">
-                        Enter the active Free 30-Day Access Password to unlock the app immediately for 30 days. Once those 30 days end, the app will lock again and require renewal.
-                      </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          copyTextToClipboard(
+                            '073604401',
+                            '🟧 Orange Money number 073604401 copied!'
+                          )
+                        }
+                        className="px-3 py-1.5 rounded-lg bg-orange-100 hover:bg-orange-200 text-orange-900 font-bold text-xs transition-all shrink-0"
+                      >
+                        📋 Copy
+                      </button>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Step 2 — Your Orange Money Sender Number *
+                      </label>
+                      <input
+                        type="tel"
+                        required
+                        value={orangePhoneInput}
+                        onChange={(e) => setOrangePhoneInput(e.target.value)}
+                        placeholder="e.g., 076 123 456"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-orange-300 focus:border-orange-500 outline-none text-xs sm:text-sm font-semibold text-slate-800 bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Step 3 — Orange Money SMS Transaction ID *
+                      </label>
                       <input
                         type="text"
                         required
-                        value={vipSecretCodeInput}
-                        onChange={(e) => setVipSecretCodeInput(e.target.value)}
-                        placeholder="Enter Free 30-Day Password..."
-                        className="w-full px-4 py-3 rounded-xl border border-lavender-300 bg-white font-mono font-extrabold text-sm text-slate-900 outline-none focus:border-lavender-600"
+                        value={orangeTxIdInput}
+                        onChange={(e) => setOrangeTxIdInput(e.target.value)}
+                        placeholder="e.g., MP261020.1234.A12345"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-orange-200 focus:border-orange-500 outline-none text-xs sm:text-sm font-medium text-slate-800 bg-white"
                       />
                     </div>
-                    <button
-                      type="submit"
-                      className="w-full py-3.5 px-5 rounded-2xl bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-sm shadow-md transition-all cursor-pointer"
-                    >
-                      Unlock App for 30 Days Now 🔑
-                    </button>
-                  </form>
-                )}
 
-                {/* Always-visible quick Free Password box when on Orange tab */}
-                {paymentTab === 'orange' && (
-                  <div className="mt-4 pt-3 border-t border-slate-200">
-                    <label className="block text-xs font-bold text-slate-600 mb-1.5">
-                      🔑 Have the Free 30-Day Access Password / Promo Code?
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={vipSecretCodeInput}
-                        onChange={(e) => setVipSecretCodeInput(e.target.value)}
-                        placeholder="Enter free access password..."
-                        className="flex-1 px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-mono font-bold outline-none focus:border-lavender-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => applyVipCodeFromModal()}
-                        className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs cursor-pointer"
-                      >
-                        Unlock 30d
-                      </button>
-                    </div>
+                    <p className="text-[11px] text-orange-900">
+                      ⏳ Submitting shows a <strong>Pending Approval</strong> screen and notifies{' '}
+                      <strong>{OWNER_ADMIN_EMAIL}</strong> to verify and unlock your pass.
+                    </p>
                   </div>
-                )}
+
+                  <button
+                    type="submit"
+                    className="w-full py-3.5 px-5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-extrabold text-sm shadow-md transition-all cursor-pointer"
+                  >
+                    Submit Orange Money for Verification 🟧
+                  </button>
+                </form>
               </>
             )}
 
@@ -5145,7 +5194,7 @@ export default function App() {
               Sign In to Owner / Admin Dashboard
             </h3>
             <p className="text-xs text-slate-600 mt-1 mb-4">
-              For <strong>{CREATOR_NAME}</strong> ({OWNER_ADMIN_EMAIL}) or any authorized admin added with an email &amp; password.
+              See all sign-ups and know how many people are in the app ({Object.keys(allUsersMap).length} currently synced). For <strong>{CREATOR_NAME}</strong> ({OWNER_ADMIN_EMAIL}) or any authorized admin.
             </p>
 
             <form onSubmit={handleAdminLoginSubmit} className="space-y-3">
@@ -5179,9 +5228,20 @@ export default function App() {
                 type="submit"
                 className="w-full py-3 px-5 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-500 font-extrabold text-xs sm:text-sm shadow-md transition-all cursor-pointer"
               >
-                Open Owner Admin Dashboard 🛡️
+                Open Admin Dashboard ({Object.keys(allUsersMap).length} Sign-Ups) 🛡️
               </button>
             </form>
+
+            <div className="mt-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={handleGoogleAdminLogin}
+                className="w-full py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                <span>🔐</span>
+                <span>Verify Owner Admin with Google ({OWNER_ADMIN_EMAIL})</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

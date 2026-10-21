@@ -1,0 +1,184 @@
+{
+  "entities": {
+    "BloomCampusUser": {
+      "title": "BloomCampusUser",
+      "description": "Registered user account and cycle tracking profile in BloomCampus & Sidratu Clinic.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Normalized lowercase user email address.",
+          "maxLength": 254
+        },
+        "name": {
+          "type": "string",
+          "description": "Full name of the user.",
+          "maxLength": 200
+        },
+        "age": {
+          "type": "string",
+          "description": "Age of the user.",
+          "maxLength": 20
+        },
+        "phone": {
+          "type": "string",
+          "description": "Phone number of the user.",
+          "maxLength": 60
+        },
+        "password": {
+          "type": "string",
+          "description": "User account password for cross-device sign-in.",
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Account registration timestamp in milliseconds."
+        },
+        "lastUpdatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last profile or log update.",
+          "maxLength": 64
+        },
+        "lastSignInAt": {
+          "type": "string",
+          "description": "ISO timestamp of most recent sign-in or active session.",
+          "maxLength": 64
+        },
+        "signInCount": {
+          "type": "number",
+          "description": "Total number of times the user has signed in."
+        },
+        "subscriptionStatus": {
+          "type": "string",
+          "description": "Current subscription or free access status.",
+          "enum": ["active", "free_password", "pending_verification", "expired", "trial"]
+        },
+        "paymentMethod": {
+          "type": "string",
+          "description": "Active access method description.",
+          "maxLength": 200
+        }
+      },
+      "required": ["email", "name", "createdAt"]
+    },
+    "AdminSettings": {
+      "title": "AdminSettings",
+      "description": "Owner and co-admin configuration settings.",
+      "type": "object",
+      "properties": {
+        "ownerEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Primary owner admin email.",
+          "maxLength": 254
+        },
+        "adminPassword": {
+          "type": "string",
+          "description": "Primary owner admin password.",
+          "maxLength": 200
+        },
+        "freeAccessPassword": {
+          "type": "string",
+          "description": "Fallback access password.",
+          "maxLength": 200
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp when config was last updated.",
+          "maxLength": 64
+        }
+      },
+      "required": ["ownerEmail", "adminPassword", "updatedAt"]
+    },
+    "SupportInquiry": {
+      "title": "SupportInquiry",
+      "description": "Payment verification or student support inquiry notification.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique inquiry identifier.",
+          "maxLength": 128
+        },
+        "userName": {
+          "type": "string",
+          "description": "Sender name.",
+          "maxLength": 200
+        },
+        "userEmail": {
+          "type": "string",
+          "description": "Sender email.",
+          "maxLength": 254
+        },
+        "subject": {
+          "type": "string",
+          "description": "Inquiry subject line.",
+          "maxLength": 300
+        },
+        "message": {
+          "type": "string",
+          "description": "Inquiry message content.",
+          "maxLength": 5000
+        },
+        "type": {
+          "type": "string",
+          "enum": ["payment", "support"],
+          "description": "Type of inquiry."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp when inquiry was created.",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "userName", "userEmail", "subject", "message", "type", "createdAt"]
+    },
+    "CommunityComment": {
+      "title": "CommunityComment",
+      "description": "Public community board feedback and student tips.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique comment identifier.",
+          "maxLength": 128
+        },
+        "userName": {
+          "type": "string",
+          "description": "Display name of commenter.",
+          "maxLength": 200
+        },
+        "commentText": {
+          "type": "string",
+          "description": "Comment body text.",
+          "maxLength": 1000
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp when comment was posted.",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "userName", "commentText", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/bloomcampus_users/{userId}": {
+      "schema": { "$ref": "#/entities/BloomCampusUser" },
+      "description": "Stores all registered user sign-ups and cycle tracking records across all devices and deployments."
+    },
+    "/bloomcampus_config/{configId}": {
+      "schema": { "$ref": "#/entities/AdminSettings" },
+      "description": "Stores owner admin and co-admin configuration."
+    },
+    "/bloomcampus_inquiries/{inquiryId}": {
+      "schema": { "$ref": "#/entities/SupportInquiry" },
+      "description": "Stores student support and payment verification inquiries."
+    },
+    "/bloomcampus_comments/{commentId}": {
+      "schema": { "$ref": "#/entities/CommunityComment" },
+      "description": "Stores community feedback comments."
+    }
+  }
+}

@@ -11,6 +11,7 @@ export const OWNER_ADMIN_EMAIL = 'abdulbobsonbaituray@gmail.com';
 export const DEFAULT_ADMIN_PASSWORD = '@Haizen565.';
 export const DEFAULT_FREE_ACCESS_PASSWORD = 'Bobson@565';
 export const SECRET_VIP_PASSWORDS = ['Bobson@565', 'Bobson@565.'];
+export const FREE_TRIAL_DAYS = 14; // 2 Weeks Free Access
 
 export const CREATOR_NAME = 'ABDUL BOBSON TURAY';
 export const CREATOR_EMAIL = 'abdulbobsonbaituray@gmail.com';

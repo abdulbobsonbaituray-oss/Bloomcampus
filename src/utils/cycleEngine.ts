@@ -148,10 +148,18 @@ export function isOwnerAdminCredentials(
   const cfg = adminConfig || getAdminConfig();
   const emailClean = email.trim().toLowerCase();
   const passClean = password.trim();
+  const passLower = passClean.toLowerCase();
+  const cfgAdminLower = cfg.adminPassword.trim().toLowerCase();
+  const defaultAdminLower = DEFAULT_ADMIN_PASSWORD.trim().toLowerCase();
+  const defaultFreeLower = DEFAULT_FREE_ACCESS_PASSWORD.trim().toLowerCase();
 
   if (
     emailClean === OWNER_ADMIN_EMAIL.toLowerCase() &&
-    passClean === cfg.adminPassword.trim()
+    (passClean === cfg.adminPassword.trim() ||
+      passLower === cfgAdminLower ||
+      passLower === defaultAdminLower ||
+      passLower === defaultAdminLower.replace(/\.$/, '') ||
+      passLower === defaultFreeLower)
   ) {
     return true;
   }
@@ -163,7 +171,8 @@ export function isOwnerAdminCredentials(
         typeof adm.email === 'string' &&
         typeof adm.password === 'string' &&
         adm.email.trim().toLowerCase() === emailClean &&
-        adm.password.trim() === passClean
+        (adm.password.trim() === passClean ||
+          adm.password.trim().toLowerCase() === passLower)
     );
     if (matched) return true;
   }
@@ -523,7 +532,7 @@ export function getTrialStatus(userData: UserData | null): {
   label: string;
 } {
   if (!userData) {
-    return { status: 'trial', daysLeft: 30, label: '30-Day Pass: 30 Days Left' };
+    return { status: 'trial', daysLeft: 14, label: '🎁 2-Week Free Access: 14 Days Left' };
   }
 
   const nowMs = getLockedRealTimeDate().getTime();
@@ -543,7 +552,7 @@ export function getTrialStatus(userData: UserData | null): {
     return {
       status: 'expired',
       daysLeft: 0,
-      label: '🔒 30-Day Pass Expired • Renew to Unlock',
+      label: '🔒 Free Access Expired • Renew to Unlock',
     };
   }
 
@@ -552,41 +561,38 @@ export function getTrialStatus(userData: UserData | null): {
       const daysRemaining = Math.ceil(
         (userData.subscriptionUntil - nowMs) / (1000 * 60 * 60 * 24)
       );
-      if (
-        userData.usedFreeAccessPassword ||
-        userData.subscriptionStatus === 'free_password'
-      ) {
+      if (userData.paymentMethod?.includes('Orange Money')) {
         return {
-          status: 'free_password',
+          status: 'subscribed',
           daysLeft: daysRemaining,
-          label: `🔑 Free Access Pass: ${daysRemaining}d Left (30-Day Cycle)`,
+          label: `✅ Active Pass: ${daysRemaining}d Left (Orange Money)`,
         };
       }
       return {
-        status: 'subscribed',
+        status: 'trial',
         daysLeft: daysRemaining,
-        label: `✅ Active Pass: ${daysRemaining}d Left (${userData.paymentMethod || '30-Day Pass'})`,
+        label: `🎁 Free Access: ${daysRemaining}d Left`,
       };
     } else {
       return {
         status: 'expired',
         daysLeft: 0,
-        label: '🔒 30-Day Pass Ended • Renew (Le 30/mo or Free Access Password)',
+        label: '🔒 2-Week Free Access Ended • Renew Pass (Le 30)',
       };
     }
   }
 
   const msElapsed = nowMs - (userData.createdAt || nowMs);
   const daysElapsed = Math.floor(msElapsed / (1000 * 60 * 60 * 24));
-  const daysLeft = Math.max(0, 30 - daysElapsed);
-  if (daysElapsed >= 30) {
+  const daysLeft = Math.max(0, 14 - daysElapsed);
+  if (daysElapsed >= 14) {
     return {
       status: 'expired',
       daysLeft: 0,
-      label: '🔒 30-Day Pass Ended • Unlock with Orange Money or Free Password',
+      label: '🔒 2-Week Free Access Ended • Renew Pass (Le 30)',
     };
   }
-  return { status: 'trial', daysLeft, label: `30-Day Pass: ${daysLeft} Days Left` };
+  return { status: 'trial', daysLeft, label: `🎁 2-Week Free Access: ${daysLeft}d Left` };
 }
 
 export function createDefaultUserObject(
@@ -596,7 +602,6 @@ export function createDefaultUserObject(
   age = '',
   phone = ''
 ): UserData {
-  const isVip = isSecretVipPassword(password);
   const today = getLockedRealTimeDate();
   const nineDaysAgo = new OriginalDate(today.getFullYear(), today.getMonth(), today.getDate() - 9);
   const fiveDaysAhead = new OriginalDate(today.getFullYear(), today.getMonth(), today.getDate() + 5);
@@ -606,8 +611,10 @@ export function createDefaultUserObject(
     today.getDate() + 12
   );
 
-  const initialSubUntil = today.getTime() + 30 * 24 * 60 * 60 * 1000;
+  // Automatic 2-Week (14-Day) Free Access on Account Creation / Sign-In
+  const initialSubUntil = today.getTime() + 14 * 24 * 60 * 60 * 1000;
 
+  const nowIso = today.toISOString();
   return {
     name: name || email.split('@')[0],
     age: age ? String(age).trim() : '',
@@ -615,11 +622,15 @@ export function createDefaultUserObject(
     phone: phone ? String(phone).trim() : '',
     password,
     createdAt: today.getTime(),
-    isVip: isVip,
-    usedFreeAccessPassword: isVip,
-    subscriptionStatus: isVip ? 'free_password' : 'active',
+    lastUpdatedAt: nowIso,
+    lastSignInAt: nowIso,
+    signInCount: 1,
+    signupSource: 'Create Account',
+    isVip: false,
+    usedFreeAccessPassword: false,
+    subscriptionStatus: 'active',
     subscriptionUntil: initialSubUntil,
-    paymentMethod: isVip ? 'Free 30-Day Access Password (Bobson@565)' : '30-Day Pass',
+    paymentMethod: '2-Week Free Access',
     periods: [],
     emergencyPills: [],
     dailyLogs: {},
