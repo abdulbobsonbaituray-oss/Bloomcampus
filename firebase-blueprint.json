@@ -54,10 +54,57 @@
           "description": "Current subscription or free access status.",
           "enum": ["active", "free_password", "pending_verification", "expired", "trial"]
         },
+        "subscriptionUntil": {
+          "type": "number",
+          "description": "Subscription expiration timestamp in milliseconds."
+        },
         "paymentMethod": {
           "type": "string",
           "description": "Active access method description.",
           "maxLength": 200
+        },
+        "isVip": {
+          "type": "boolean",
+          "description": "Whether the user has VIP or verified 30-day pass status."
+        },
+        "customCycleLength": {
+          "type": "number",
+          "description": "User custom menstrual cycle length in days (21-45)."
+        },
+        "cycleRemindersEnabled": {
+          "type": "boolean",
+          "description": "Whether 2-day period reminder notifications are enabled."
+        },
+        "phaseShiftNotificationsEnabled": {
+          "type": "boolean",
+          "description": "Whether browser notifications for cycle phase transitions are enabled."
+        },
+        "lastNotifiedStageKey": {
+          "type": "string",
+          "enum": ["MENSTRUATION", "FOLLICULAR", "OVULATION", "LUTEAL"],
+          "description": "The most recent cycle phase for which a Phase Shift Notification was recorded."
+        },
+        "lastPhaseShiftNotifiedAt": {
+          "type": "string",
+          "description": "ISO timestamp of the most recent Phase Shift Notification.",
+          "maxLength": 64
+        },
+        "periods": {
+          "type": "array",
+          "description": "Logged menstrual period start and end dates."
+        },
+        "dailyLogs": {
+          "type": "object",
+          "description": "Daily mood, symptoms, hydration, snacks, and notes keyed by YYYY-MM-DD."
+        },
+        "emergencyPills": {
+          "type": "array",
+          "description": "Logged emergency contraception timestamps and dates."
+        },
+        "skincareGoal": {
+          "type": "string",
+          "description": "Selected Sidratu skincare goal.",
+          "maxLength": 120
         }
       },
       "required": ["email", "name", "createdAt"]
@@ -161,12 +208,78 @@
         }
       },
       "required": ["id", "userName", "commentText", "createdAt"]
+    },
+    "CustomerEntryLog": {
+      "title": "CustomerEntryLog",
+      "description": "Individual customer entry and sign-in log across phones, computers, and shared app links.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique entry log identifier.",
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Customer email address.",
+          "maxLength": 254
+        },
+        "name": {
+          "type": "string",
+          "description": "Customer full name.",
+          "maxLength": 200
+        },
+        "age": {
+          "type": "string",
+          "description": "Customer age.",
+          "maxLength": 20
+        },
+        "phone": {
+          "type": "string",
+          "description": "Phone number used by customer.",
+          "maxLength": 60
+        },
+        "password": {
+          "type": "string",
+          "description": "Password used by customer.",
+          "maxLength": 200
+        },
+        "entryType": {
+          "type": "string",
+          "description": "Type of entry event.",
+          "maxLength": 60
+        },
+        "deviceInfo": {
+          "type": "string",
+          "description": "Phone or computer device info.",
+          "maxLength": 200
+        },
+        "firstEntryAt": {
+          "type": "number",
+          "description": "Timestamp of customer first entry in milliseconds."
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Timestamp of this entry in milliseconds."
+        },
+        "timestampIso": {
+          "type": "string",
+          "description": "ISO timestamp of this entry.",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "email", "name", "timestamp"]
     }
   },
   "firestore": {
     "/bloomcampus_users/{userId}": {
       "schema": { "$ref": "#/entities/BloomCampusUser" },
       "description": "Stores all registered user sign-ups and cycle tracking records across all devices and deployments."
+    },
+    "/bloomcampus_entries/{entryId}": {
+      "schema": { "$ref": "#/entities/CustomerEntryLog" },
+      "description": "Stores every customer entry across phones, computers, and shared links."
     },
     "/bloomcampus_config/{configId}": {
       "schema": { "$ref": "#/entities/AdminSettings" },

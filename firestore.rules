@@ -17,7 +17,22 @@ service cloud.firestore {
     function isValidBloomCampusUser(data) {
       return data is map
         && data.keys().hasAll(['email', 'name'])
-        && data.keys().size() <= 45
+        && data.keys().size() <= 80
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 254
+        && data.name is string
+        && data.name.size() >= 1
+        && data.name.size() <= 200;
+    }
+
+    function isValidCustomerEntry(data) {
+      return data is map
+        && data.keys().hasAll(['id', 'email', 'name'])
+        && data.keys().size() <= 30
+        && data.id is string
+        && data.id.size() >= 1
+        && data.id.size() <= 128
         && data.email is string
         && data.email.size() >= 3
         && data.email.size() <= 254
@@ -29,7 +44,7 @@ service cloud.firestore {
     function isValidAdminSettings(data) {
       return data is map
         && data.keys().hasAll(['ownerEmail', 'adminPassword'])
-        && data.keys().size() <= 15
+        && data.keys().size() <= 20
         && data.ownerEmail is string
         && data.ownerEmail.size() >= 3
         && data.ownerEmail.size() <= 254
@@ -41,7 +56,7 @@ service cloud.firestore {
     function isValidSupportInquiry(data) {
       return data is map
         && data.keys().hasAll(['id', 'userName', 'userEmail', 'subject', 'message', 'type', 'createdAt'])
-        && data.keys().size() <= 15
+        && data.keys().size() <= 20
         && data.id is string
         && data.id.size() <= 128
         && data.userName is string
@@ -60,7 +75,7 @@ service cloud.firestore {
     function isValidCommunityComment(data) {
       return data is map
         && data.keys().hasAll(['id', 'userName', 'commentText', 'createdAt'])
-        && data.keys().size() <= 12
+        && data.keys().size() <= 15
         && data.id is string
         && data.id.size() <= 128
         && data.userName is string
@@ -74,38 +89,41 @@ service cloud.firestore {
 
     // Connection health check path
     match /test/{docId} {
-      allow get: if isValidDocId(docId);
-      allow list, write: if false;
+      allow get, list: if true;
+      allow write: if false;
     }
 
     // Registered users & sign-ups directory across all devices and URLs
     match /bloomcampus_users/{userId} {
-      allow get: if isValidDocId(userId);
-      allow list: if resource.data.email is string && resource.data.email.size() <= 254;
+      allow get, list: if true;
       allow create, update: if isValidDocId(userId) && isValidBloomCampusUser(incoming());
       allow delete: if isValidDocId(userId);
     }
 
+    // Individual customer entries across all phones, computers, and shared links
+    match /bloomcampus_entries/{entryId} {
+      allow get, list: if true;
+      allow create, update: if isValidDocId(entryId) && isValidCustomerEntry(incoming());
+      allow delete: if isValidDocId(entryId);
+    }
+
     // Owner Admin & Co-Admin settings
     match /bloomcampus_config/{configId} {
-      allow get: if isValidDocId(configId);
-      allow list: if resource.data.ownerEmail is string;
+      allow get, list: if true;
       allow create, update: if isValidDocId(configId) && isValidAdminSettings(incoming());
       allow delete: if false;
     }
 
     // Payment & support inquiries
     match /bloomcampus_inquiries/{inquiryId} {
-      allow get: if isValidDocId(inquiryId);
-      allow list: if resource.data.id is string;
+      allow get, list: if true;
       allow create, update: if isValidDocId(inquiryId) && isValidSupportInquiry(incoming());
       allow delete: if isValidDocId(inquiryId);
     }
 
     // Community board comments
     match /bloomcampus_comments/{commentId} {
-      allow get: if isValidDocId(commentId);
-      allow list: if resource.data.id is string;
+      allow get, list: if true;
       allow create, update: if isValidDocId(commentId) && isValidCommunityComment(incoming());
       allow delete: if isValidDocId(commentId);
     }

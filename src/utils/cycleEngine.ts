@@ -663,5 +663,6 @@ export function createDefaultUserObject(
         completed: false,
       },
     ],
+    phaseShiftNotificationsEnabled: true,
   };
 }

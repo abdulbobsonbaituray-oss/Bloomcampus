@@ -1,26 +1,128 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+  User as FirebaseUser,
+} from 'firebase/auth';
 import {
   collection,
   deleteDoc,
+  disableNetwork,
   doc,
   getDoc,
   getDocFromServer,
   getDocs,
+  getFirestore,
   onSnapshot,
   setDoc,
+  setLogLevel,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
-import { AdminConfig, SupportInquiry, UserData } from './types';
+import { AdminConfig, CustomerEntryRecord, SupportInquiry, UserData } from './types';
+
+// Silence internal @firebase/firestore SDK backoff / quota console.error spam
+try {
+  setLogLevel('silent');
+} catch {
+  // ignore
+}
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestoreWithDatabaseId();
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
-import { getFirestore } from 'firebase/firestore';
-function getFirestoreWithDatabaseId() {
-  return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// Circuit breaker & write-deduplication cache to prevent exhausting free-tier daily Firestore writes
+let firestoreQuotaExhausted = false;
+const lastWrittenHashByPath = new Map<string, string>();
+
+function isFirestoreQuotaOrBackoffError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error || '');
+  const code = (error as { code?: string })?.code || '';
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('Quota exceeded') ||
+    msg.includes('maximum backoff delay') ||
+    msg.includes('firestore-timeout')
+  );
+}
+
+function tripFirestoreQuotaBreaker() {
+  if (!firestoreQuotaExhausted) {
+    firestoreQuotaExhausted = true;
+    disableNetwork(db).catch(() => {});
+  }
+}
+
+function withFirestoreTimeout<T>(promise: Promise<T>, timeoutMs = 2500): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('firestore-timeout'));
+    }, timeoutMs);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+async function testConnection() {
+  try {
+    await withFirestoreTimeout(getDocFromServer(doc(db, 'test', 'connection')), 2500);
+  } catch (error) {
+    if (isFirestoreQuotaOrBackoffError(error)) {
+      tripFirestoreQuotaBreaker();
+      return;
+    }
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.warn('Firestore client is offline; using local and server storage.');
+    }
+  }
+}
+testConnection();
+
+function computeUserWriteFingerprint(user: UserData): string {
+  return JSON.stringify({
+    // 1. User Profile
+    email: user.email,
+    name: user.name,
+    age: user.age || '',
+    phone: user.phone || '',
+    password: user.password || '',
+    customerNumber: user.customerNumber || 0,
+    firstEntryAt: user.firstEntryAt || user.createdAt || 0,
+    skincareGoal: user.skincareGoal || '',
+    themeMode: user.themeMode || 'light',
+    // 2. Subscription Status
+    subscriptionStatus: user.subscriptionStatus || 'active',
+    subscriptionUntil: user.subscriptionUntil || 0,
+    paymentMethod: user.paymentMethod || '2-Week Free Access',
+    isVip: Boolean(user.isVip),
+    usedFreeAccessPassword: Boolean(user.usedFreeAccessPassword),
+    pendingPayment: user.pendingPayment || null,
+    paymentHistoryLen: Array.isArray(user.paymentHistory) ? user.paymentHistory.length : 0,
+    // 3. Period Tracking Information
+    periods: Array.isArray(user.periods) ? user.periods : [],
+    customCycleLength: user.customCycleLength || 28,
+    cycleRemindersEnabled: Boolean(user.cycleRemindersEnabled),
+    emergencyPills: Array.isArray(user.emergencyPills) ? user.emergencyPills : [],
+    dailyLogs: user.dailyLogs || {},
+    journalEntriesLen: Array.isArray(user.journalEntries) ? user.journalEntries.length : 0,
+    appointmentsLen: Array.isArray(user.appointments) ? user.appointments.length : 0,
+    therapyLogsLen: Array.isArray(user.therapyLogs) ? user.therapyLogs.length : 0,
+    academicTasksLen: Array.isArray(user.academicTasks) ? user.academicTasks.length : 0,
+    badgesCount: user.unlockedBadges ? Object.keys(user.unlockedBadges).length : 0,
+  });
 }
 
 export enum OperationType {
@@ -53,7 +155,11 @@ export function handleFirestoreError(
   error: unknown,
   operationType: OperationType,
   path: string | null
-): never {
+): void {
+  if (isFirestoreQuotaOrBackoffError(error)) {
+    tripFirestoreQuotaBreaker();
+    return;
+  }
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -71,20 +177,28 @@ export function handleFirestoreError(
     operationType,
     path,
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.warn('Firestore notice:', JSON.stringify(errInfo));
 }
 
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration.');
-    }
+export function getClientDeviceLabel(): string {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return 'WebApp Link';
   }
+  const ua = navigator.userAgent || '';
+  const isPhone = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+  let osLabel = 'Web Browser';
+  if (/Android/i.test(ua)) osLabel = 'Android Phone';
+  else if (/iPhone|iPad|iPod/i.test(ua)) osLabel = 'iPhone / iOS';
+  else if (/Windows/i.test(ua)) osLabel = 'Windows Computer';
+  else if (/Mac/i.test(ua)) osLabel = 'Mac Computer';
+  else if (/Linux/i.test(ua)) osLabel = 'Linux Computer';
+  const hostType = window.location.hostname.includes('ais-pre')
+    ? 'Shared Link'
+    : window.location.hostname.includes('ais-dev')
+    ? 'Dev Link'
+    : 'WebApp Link';
+  return `${isPhone ? '📱' : '💻'} ${osLabel} (${hostType})`;
 }
-testConnection();
 
 export function emailToDocId(email: string): string {
   return email
@@ -98,27 +212,197 @@ export function cleanFirestorePayload<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj));
 }
 
+export function resolveCustomerPhoneUsed(user: Partial<UserData> | null | undefined): string {
+  if (!user) return '';
+  if (typeof user.phone === 'string' && user.phone.trim()) {
+    return user.phone.trim();
+  }
+  if (user.pendingPayment?.senderPhone && user.pendingPayment.senderPhone.trim()) {
+    return user.pendingPayment.senderPhone.trim();
+  }
+  if (Array.isArray(user.paymentHistory)) {
+    for (const ph of user.paymentHistory) {
+      if (ph?.senderPhone && ph.senderPhone.trim()) {
+        return ph.senderPhone.trim();
+      }
+    }
+  }
+  if (Array.isArray(user.entryHistory)) {
+    for (const eh of user.entryHistory) {
+      if (eh?.phone && eh.phone.trim()) {
+        return eh.phone.trim();
+      }
+    }
+  }
+  return '';
+}
+
+export function assignSequentialCustomerNumbers(
+  usersMap: Record<string, UserData>
+): Record<string, UserData> {
+  const validEntries = Object.entries(usersMap || {}).filter(
+    ([k, u]) => u && typeof u === 'object' && (u.email || k)
+  );
+  // Sort strictly by each customer's FIRST entry timestamp (ascending) so Customer #1 is the first customer entry
+  validEntries.sort(([, a], [, b]) => {
+    const aFirst = Number(a.firstEntryAt || a.createdAt || Number.MAX_SAFE_INTEGER);
+    const bFirst = Number(b.firstEntryAt || b.createdAt || Number.MAX_SAFE_INTEGER);
+    if (aFirst !== bFirst) return aFirst - bFirst;
+    return (a.email || '').localeCompare(b.email || '');
+  });
+
+  const numbered: Record<string, UserData> = {};
+  validEntries.forEach(([key, u], index) => {
+    const emailClean = (u.email || key).trim().toLowerCase();
+    const firstTs =
+      Number(u.firstEntryAt) > 0
+        ? Number(u.firstEntryAt)
+        : Number(u.createdAt) > 0
+        ? Number(u.createdAt)
+        : Date.now();
+    numbered[emailClean] = {
+      ...u,
+      email: emailClean,
+      customerNumber: index + 1,
+      firstEntryAt: firstTs,
+      createdAt: firstTs,
+      phone: resolveCustomerPhoneUsed(u),
+    };
+  });
+  return numbered;
+}
+
 export function prepareUserForFirestore(user: UserData, fallbackEmail?: string): UserData | null {
   const emailClean = (user?.email || fallbackEmail || '').trim().toLowerCase().slice(0, 254);
   if (!emailClean || emailClean.length < 3) return null;
   const nameClean = (user?.name || emailClean.split('@')[0] || 'Student').trim().slice(0, 200);
+  const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
+  const firstEntryMs =
+    Number(user?.firstEntryAt) > 0
+      ? Number(user.firstEntryAt)
+      : Number(user?.createdAt) > 0
+      ? Number(user.createdAt)
+      : Date.now();
+  const phoneUsed = resolveCustomerPhoneUsed(user).slice(0, 60);
+  const ageUsed = String(user?.age || '').trim().slice(0, 20);
+  const passwordUsed = String(user?.password || '').trim().slice(0, 200);
+
+  const normalizedPeriods = Array.isArray(user?.periods)
+    ? user.periods
+        .filter((p) => p && typeof p.startDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.startDate))
+        .map((p) => ({
+          startDate: p.startDate,
+          endDate: p.endDate && /^\d{4}-\d{2}-\d{2}$/.test(p.endDate) ? p.endDate : null,
+        }))
+    : [];
+
   const cleaned = cleanFirestorePayload({
     ...user,
+    // 1. User Profile
     email: emailClean,
     name: nameClean || 'Student',
-    createdAt: Number(user?.createdAt) > 0 ? Number(user.createdAt) : Date.now(),
+    age: ageUsed,
+    phone: phoneUsed,
+    password: passwordUsed,
+    firstEntryAt: firstEntryMs,
+    createdAt: firstEntryMs,
+    deviceInfo: (user?.deviceInfo || getClientDeviceLabel()).slice(0, 200),
+    lastAppUrl:
+      user?.lastAppUrl ||
+      (typeof window !== 'undefined' ? window.location.origin : ''),
     lastUpdatedAt: user?.lastUpdatedAt || new Date().toISOString(),
+    // 2. Subscription Status
+    subscriptionStatus: user?.subscriptionStatus || 'active',
+    subscriptionUntil:
+      user?.subscriptionUntil !== undefined
+        ? user.subscriptionUntil
+        : firstEntryMs + twoWeeksMs,
+    paymentMethod: (user?.paymentMethod || '2-Week Free Access').slice(0, 200),
+    isVip: Boolean(user?.isVip),
+    usedFreeAccessPassword: Boolean(user?.usedFreeAccessPassword),
+    pendingPayment: user?.pendingPayment || null,
+    paymentHistory: Array.isArray(user?.paymentHistory) ? user.paymentHistory : [],
+    // 3. Period Tracking Information
+    periods: normalizedPeriods,
+    customCycleLength:
+      typeof user?.customCycleLength === 'number' && user.customCycleLength >= 21 && user.customCycleLength <= 45
+        ? user.customCycleLength
+        : 28,
+    cycleRemindersEnabled: Boolean(user?.cycleRemindersEnabled),
+    emergencyPills: Array.isArray(user?.emergencyPills) ? user.emergencyPills : [],
+    dailyLogs: user?.dailyLogs && typeof user.dailyLogs === 'object' ? user.dailyLogs : {},
+    journalEntries: Array.isArray(user?.journalEntries) ? user.journalEntries : [],
+    unlockedBadges: user?.unlockedBadges && typeof user.unlockedBadges === 'object' ? user.unlockedBadges : {},
   });
   return cleaned;
 }
 
+export async function logCustomerEntryToFirestore(
+  user: UserData,
+  entryType: CustomerEntryRecord['entryType'] = 'Sign In'
+): Promise<void> {
+  if (firestoreQuotaExhausted) return;
+  const prepared = prepareUserForFirestore(user);
+  if (!prepared) return;
+  const docId = emailToDocId(prepared.email);
+  const userPath = `bloomcampus_users/${docId}`;
+  const fingerprint = computeUserWriteFingerprint(prepared) + `|${entryType}`;
+  if (lastWrittenHashByPath.get(userPath) === fingerprint) {
+    return;
+  }
+
+  const nowMs = Date.now();
+  const latestEmailEntryId = `entry_${docId}`.slice(0, 128);
+  const entryDoc: CustomerEntryRecord = {
+    id: latestEmailEntryId,
+    customerNumber: prepared.customerNumber,
+    name: prepared.name.slice(0, 200),
+    email: prepared.email.slice(0, 254),
+    age: String(prepared.age || '').slice(0, 20),
+    phone: String(prepared.phone || '').slice(0, 60),
+    password: String(prepared.password || '').slice(0, 200),
+    entryType,
+    deviceInfo: (prepared.deviceInfo || getClientDeviceLabel()).slice(0, 200),
+    appUrl:
+      typeof window !== 'undefined' ? window.location.origin.slice(0, 200) : '',
+    firstEntryAt: prepared.firstEntryAt || prepared.createdAt || nowMs,
+    timestamp: nowMs,
+    timestampIso: new Date(nowMs).toISOString(),
+  };
+
+  try {
+    await withFirestoreTimeout(
+      setDoc(doc(db, 'bloomcampus_users', docId), prepared, { merge: true })
+    );
+    await withFirestoreTimeout(
+      setDoc(
+        doc(db, 'bloomcampus_entries', latestEmailEntryId),
+        cleanFirestorePayload(entryDoc),
+        { merge: true }
+      )
+    );
+    lastWrittenHashByPath.set(userPath, fingerprint);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, userPath);
+  }
+}
+
 export async function syncUserToFirestore(user: UserData, fallbackEmail?: string): Promise<void> {
+  if (firestoreQuotaExhausted) return;
   const prepared = prepareUserForFirestore(user, fallbackEmail);
   if (!prepared) return;
   const docId = emailToDocId(prepared.email);
   const path = `bloomcampus_users/${docId}`;
+  const fingerprint = computeUserWriteFingerprint(prepared);
+  if (lastWrittenHashByPath.get(path) === fingerprint) {
+    return;
+  }
+
   try {
-    await setDoc(doc(db, 'bloomcampus_users', docId), prepared, { merge: true });
+    await withFirestoreTimeout(
+      setDoc(doc(db, 'bloomcampus_users', docId), prepared, { merge: true })
+    );
+    lastWrittenHashByPath.set(path, fingerprint);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -127,50 +411,139 @@ export async function syncUserToFirestore(user: UserData, fallbackEmail?: string
 export async function syncAllUsersToFirestore(
   usersMap: Record<string, UserData>
 ): Promise<void> {
-  const entries = Object.entries(usersMap || {});
+  if (firestoreQuotaExhausted) return;
+  const numbered = assignSequentialCustomerNumbers(usersMap || {});
+  const entries = Object.entries(numbered);
   for (const [key, u] of entries) {
+    if (firestoreQuotaExhausted) break;
     if (!u || typeof u !== 'object') continue;
     const prepared = prepareUserForFirestore(u, key);
     if (!prepared) continue;
     const docId = emailToDocId(prepared.email);
+    const path = `bloomcampus_users/${docId}`;
+    const fingerprint = computeUserWriteFingerprint(prepared);
+    if (lastWrittenHashByPath.get(path) === fingerprint) {
+      continue;
+    }
     try {
-      await setDoc(doc(db, 'bloomcampus_users', docId), prepared, { merge: true });
+      await withFirestoreTimeout(
+        setDoc(doc(db, 'bloomcampus_users', docId), prepared, { merge: true })
+      );
+      lastWrittenHashByPath.set(path, fingerprint);
     } catch (error) {
-      try {
-        handleFirestoreError(error, OperationType.WRITE, `bloomcampus_users/${docId}`);
-      } catch {
-        // Logged via handleFirestoreError
-      }
+      handleFirestoreError(error, OperationType.WRITE, path);
     }
   }
+}
+
+function mergeEntryLogIntoUser(
+  existing: UserData | undefined,
+  entry: CustomerEntryRecord
+): UserData {
+  const emailClean = entry.email.trim().toLowerCase();
+  const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
+  const firstTs =
+    existing && Number(existing.firstEntryAt || existing.createdAt) > 0
+      ? Math.min(
+          Number(existing.firstEntryAt || existing.createdAt),
+          Number(entry.firstEntryAt || entry.timestamp || Date.now())
+        )
+      : Number(entry.firstEntryAt || entry.timestamp || Date.now());
+
+  if (!existing) {
+    return {
+      name: entry.name || emailClean.split('@')[0] || 'Student',
+      age: entry.age || '',
+      email: emailClean,
+      phone: entry.phone || '',
+      password: entry.password || '',
+      firstEntryAt: firstTs,
+      createdAt: firstTs,
+      lastUpdatedAt: new Date(firstTs).toISOString(),
+      lastSignInAt: entry.timestampIso || new Date().toISOString(),
+      signInCount: 1,
+      signupSource: entry.entryType || 'Sign In',
+      deviceInfo: entry.deviceInfo || 'WebApp Link',
+      isVip: false,
+      usedFreeAccessPassword: false,
+      subscriptionStatus: 'active',
+      subscriptionUntil: firstTs + twoWeeksMs,
+      paymentMethod: '2-Week Free Access',
+      periods: [],
+      emergencyPills: [],
+      dailyLogs: {},
+    };
+  }
+
+  return {
+    ...existing,
+    email: emailClean,
+    name:
+      existing.name && existing.name !== emailClean.split('@')[0]
+        ? existing.name
+        : entry.name || existing.name || 'Student',
+    age: existing.age || entry.age || '',
+    phone: resolveCustomerPhoneUsed(existing) || entry.phone || '',
+    password: existing.password || entry.password || '',
+    firstEntryAt: firstTs,
+    createdAt: firstTs,
+    deviceInfo: entry.deviceInfo || existing.deviceInfo || 'WebApp Link',
+  };
 }
 
 export async function fetchAllUsersFromFirestore(): Promise<Record<string, UserData>> {
+  if (firestoreQuotaExhausted) return {};
   const path = 'bloomcampus_users';
+  const result: Record<string, UserData> = {};
   try {
-    const snap = await getDocs(collection(db, path));
-    const result: Record<string, UserData> = {};
+    const snap = await withFirestoreTimeout(getDocs(collection(db, path)));
     snap.forEach((docSnap) => {
       const data = docSnap.data() as UserData;
       if (data && data.email) {
-        result[data.email.trim().toLowerCase()] = data;
+        const emailClean = data.email.trim().toLowerCase();
+        result[emailClean] = {
+          ...data,
+          email: emailClean,
+          phone: resolveCustomerPhoneUsed(data),
+        };
       }
     });
-    return result;
   } catch (error) {
-    try {
-      handleFirestoreError(error, OperationType.LIST, path);
-    } catch {
-      return {};
-    }
+    handleFirestoreError(error, OperationType.LIST, path);
   }
+
+  if (firestoreQuotaExhausted) {
+    return assignSequentialCustomerNumbers(result);
+  }
+
+  try {
+    const entriesSnap = await withFirestoreTimeout(
+      getDocs(collection(db, 'bloomcampus_entries'))
+    );
+    entriesSnap.forEach((docSnap) => {
+      const entry = docSnap.data() as CustomerEntryRecord;
+      if (entry && entry.email) {
+        const emailClean = entry.email.trim().toLowerCase();
+        result[emailClean] = mergeEntryLogIntoUser(result[emailClean], entry);
+      }
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'bloomcampus_entries');
+  }
+
+  return assignSequentialCustomerNumbers(result);
 }
 
 export async function deleteUserFromFirestore(email: string): Promise<void> {
+  if (firestoreQuotaExhausted) return;
   const docId = emailToDocId(email);
   const path = `bloomcampus_users/${docId}`;
   try {
-    await deleteDoc(doc(db, 'bloomcampus_users', docId));
+    await withFirestoreTimeout(deleteDoc(doc(db, 'bloomcampus_users', docId)));
+    await withFirestoreTimeout(
+      deleteDoc(doc(db, 'bloomcampus_entries', `entry_${docId}`.slice(0, 128)))
+    );
+    lastWrittenHashByPath.delete(path);
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
@@ -179,8 +552,25 @@ export async function deleteUserFromFirestore(email: string): Promise<void> {
 export function subscribeToAllUsersFirestore(
   onUpdate: (users: Record<string, UserData>) => void
 ): () => void {
+  if (firestoreQuotaExhausted) {
+    return () => {};
+  }
   const path = 'bloomcampus_users';
-  return onSnapshot(
+  let latestUsersSnap: Record<string, UserData> = {};
+  let latestEntriesSnap: CustomerEntryRecord[] = [];
+
+  const emitCombined = () => {
+    const combined: Record<string, UserData> = { ...latestUsersSnap };
+    for (const entry of latestEntriesSnap) {
+      if (entry && typeof entry.email === 'string') {
+        const emailKey = entry.email.trim().toLowerCase();
+        combined[emailKey] = mergeEntryLogIntoUser(combined[emailKey], entry);
+      }
+    }
+    onUpdate(assignSequentialCustomerNumbers(combined));
+  };
+
+  const unsubUsers = onSnapshot(
     collection(db, path),
     (snapshot) => {
       const users: Record<string, UserData> = {};
@@ -188,22 +578,47 @@ export function subscribeToAllUsersFirestore(
         const data = docSnap.data() as UserData;
         if (data && typeof data.email === 'string') {
           const emailKey = data.email.trim().toLowerCase();
-          users[emailKey] = data;
+          users[emailKey] = {
+            ...data,
+            email: emailKey,
+            phone: resolveCustomerPhoneUsed(data),
+          };
         }
       });
-      onUpdate(users);
+      latestUsersSnap = users;
+      emitCombined();
     },
     (error) => {
-      try {
-        handleFirestoreError(error, OperationType.LIST, path);
-      } catch {
-        // Logged via handleFirestoreError
-      }
+      handleFirestoreError(error, OperationType.LIST, path);
     }
   );
+
+  const unsubEntries = onSnapshot(
+    collection(db, 'bloomcampus_entries'),
+    (snapshot) => {
+      const entries: CustomerEntryRecord[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data() as CustomerEntryRecord;
+        if (data && typeof data.email === 'string') {
+          entries.push(data);
+        }
+      });
+      latestEntriesSnap = entries;
+      emitCombined();
+    },
+    (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'bloomcampus_entries');
+    }
+  );
+
+  return () => {
+    unsubUsers();
+    unsubEntries();
+  };
 }
 
 export async function syncAdminConfigToFirestore(cfg: AdminConfig): Promise<void> {
+  if (firestoreQuotaExhausted) return;
   const path = 'bloomcampus_config/admin';
   const cleaned = cleanFirestorePayload({
     ownerEmail: (cfg.ownerEmail || 'abdulbobsonbaituray@gmail.com').slice(0, 254),
@@ -212,33 +627,46 @@ export async function syncAdminConfigToFirestore(cfg: AdminConfig): Promise<void
     additionalAdmins: Array.isArray(cfg.additionalAdmins) ? cfg.additionalAdmins : [],
     updatedAt: cfg.updatedAt || new Date().toISOString(),
   });
+  const fingerprint = JSON.stringify({
+    ownerEmail: cleaned.ownerEmail,
+    adminPassword: cleaned.adminPassword,
+    freeAccessPassword: cleaned.freeAccessPassword,
+    additionalAdmins: cleaned.additionalAdmins,
+  });
+  if (lastWrittenHashByPath.get(path) === fingerprint) {
+    return;
+  }
   try {
-    await setDoc(doc(db, 'bloomcampus_config', 'admin'), cleaned, { merge: true });
+    await withFirestoreTimeout(
+      setDoc(doc(db, 'bloomcampus_config', 'admin'), cleaned, { merge: true })
+    );
+    lastWrittenHashByPath.set(path, fingerprint);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
 export async function fetchAdminConfigFromFirestore(): Promise<AdminConfig | null> {
+  if (firestoreQuotaExhausted) return null;
   const path = 'bloomcampus_config/admin';
   try {
-    const snap = await getDoc(doc(db, 'bloomcampus_config', 'admin'));
+    const snap = await withFirestoreTimeout(getDoc(doc(db, 'bloomcampus_config', 'admin')));
     if (snap.exists()) {
       return snap.data() as AdminConfig;
     }
     return null;
   } catch (error) {
-    try {
-      handleFirestoreError(error, OperationType.GET, path);
-    } catch {
-      return null;
-    }
+    handleFirestoreError(error, OperationType.GET, path);
+    return null;
   }
 }
 
 export function subscribeToAdminConfigFirestore(
   onUpdate: (cfg: AdminConfig) => void
 ): () => void {
+  if (firestoreQuotaExhausted) {
+    return () => {};
+  }
   const path = 'bloomcampus_config/admin';
   return onSnapshot(
     doc(db, 'bloomcampus_config', 'admin'),
@@ -248,18 +676,18 @@ export function subscribeToAdminConfigFirestore(
       }
     },
     (error) => {
-      try {
-        handleFirestoreError(error, OperationType.GET, path);
-      } catch {
-        // Logged via handleFirestoreError
-      }
+      handleFirestoreError(error, OperationType.GET, path);
     }
   );
 }
 
 export async function syncSupportInquiryToFirestore(inq: SupportInquiry): Promise<void> {
+  if (firestoreQuotaExhausted) return;
   const docId = emailToDocId(inq.id || `inq-${Date.now()}`);
   const path = `bloomcampus_inquiries/${docId}`;
+  if (lastWrittenHashByPath.has(path)) {
+    return;
+  }
   const cleaned = cleanFirestorePayload({
     id: String(inq.id || docId).slice(0, 128),
     userName: String(inq.userName || 'Student').slice(0, 200),
@@ -271,7 +699,10 @@ export async function syncSupportInquiryToFirestore(inq: SupportInquiry): Promis
     createdAt: String(inq.createdAt || new Date().toISOString()).slice(0, 64),
   });
   try {
-    await setDoc(doc(db, 'bloomcampus_inquiries', docId), cleaned, { merge: true });
+    await withFirestoreTimeout(
+      setDoc(doc(db, 'bloomcampus_inquiries', docId), cleaned, { merge: true })
+    );
+    lastWrittenHashByPath.set(path, 'written');
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
@@ -280,6 +711,9 @@ export async function syncSupportInquiryToFirestore(inq: SupportInquiry): Promis
 export function subscribeToSupportInquiriesFirestore(
   onUpdate: (inquiries: SupportInquiry[]) => void
 ): () => void {
+  if (firestoreQuotaExhausted) {
+    return () => {};
+  }
   const path = 'bloomcampus_inquiries';
   return onSnapshot(
     collection(db, path),
@@ -292,16 +726,48 @@ export function subscribeToSupportInquiriesFirestore(
       onUpdate(items);
     },
     (error) => {
-      try {
-        handleFirestoreError(error, OperationType.LIST, path);
-      } catch {
-        // Logged via handleFirestoreError
-      }
+      handleFirestoreError(error, OperationType.LIST, path);
     }
   );
+}
+
+export async function fetchSingleUserFromFirestore(email: string): Promise<UserData | null> {
+  if (firestoreQuotaExhausted || !email) return null;
+  const emailClean = email.trim().toLowerCase();
+  const docId = emailToDocId(emailClean);
+  const path = `bloomcampus_users/${docId}`;
+  try {
+    const snap = await withFirestoreTimeout(getDoc(doc(db, 'bloomcampus_users', docId)));
+    if (snap.exists()) {
+      const data = snap.data() as UserData;
+      return {
+        ...data,
+        email: emailClean,
+        phone: resolveCustomerPhoneUsed(data),
+      };
+    }
+    return null;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+    return null;
+  }
 }
 
 export async function signInWithGooglePopup() {
   const result = await signInWithPopup(auth, googleProvider);
   return result.user;
+}
+
+export function subscribeToFirebaseAuth(
+  onUserChanged: (user: FirebaseUser | null) => void
+): () => void {
+  return onAuthStateChanged(auth, onUserChanged);
+}
+
+export async function signOutFirebase(): Promise<void> {
+  try {
+    await signOut(auth);
+  } catch {
+    // ignore
+  }
 }

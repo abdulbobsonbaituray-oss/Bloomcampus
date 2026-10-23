@@ -10,16 +10,29 @@ import { initializeApp as initFirebaseApp } from 'firebase/app';
 import {
   getFirestore,
   collection,
+  disableNetwork,
   doc,
   getDocs,
   setDoc,
   deleteDoc,
+  setLogLevel,
 } from 'firebase/firestore';
 
 dotenv.config();
 
+try {
+  setLogLevel('silent');
+} catch {
+  // ignore
+}
+
 const FIREBASE_CFG_PATH = path.join(process.cwd(), 'firebase-applet-config.json');
 let firestoreDb: ReturnType<typeof getFirestore> | null = null;
+let serverFirestoreQuotaExhausted = false;
+const serverWrittenFingerprints = new Map<string, string>();
+let lastCloudPullAt = 0;
+let cachedCloudUsers: Record<string, Record<string, unknown>> = {};
+
 try {
   if (fs.existsSync(FIREBASE_CFG_PATH)) {
     const fbCfg = JSON.parse(fs.readFileSync(FIREBASE_CFG_PATH, 'utf-8'));
@@ -32,6 +45,45 @@ try {
   console.error('Could not initialize Firestore in server.ts:', err);
 }
 
+function isServerFirestoreQuotaError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err || '');
+  const code = (err as { code?: string })?.code || '';
+  return (
+    code === 'resource-exhausted' ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('Quota limit exceeded') ||
+    msg.includes('Quota exceeded') ||
+    msg.includes('maximum backoff delay') ||
+    msg.includes('firestore-timeout')
+  );
+}
+
+function tripServerFirestoreCircuitBreaker() {
+  if (!serverFirestoreQuotaExhausted) {
+    serverFirestoreQuotaExhausted = true;
+    if (firestoreDb) {
+      disableNetwork(firestoreDb).catch(() => {});
+    }
+  }
+}
+
+function withServerFirestoreTimeout<T>(promise: Promise<T>, timeoutMs = 2000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('firestore-timeout'));
+    }, timeoutMs);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
 function emailToFirestoreDocId(email: string): string {
   return email
     .trim()
@@ -40,9 +92,82 @@ function emailToFirestoreDocId(email: string): string {
     .slice(0, 240);
 }
 
+function extractBestPhone(rawUser: Record<string, unknown>): string {
+  if (typeof rawUser.phone === 'string' && rawUser.phone.trim()) {
+    return rawUser.phone.trim();
+  }
+  const pending = rawUser.pendingPayment as Record<string, unknown> | undefined;
+  if (pending && typeof pending.senderPhone === 'string' && pending.senderPhone.trim()) {
+    return pending.senderPhone.trim();
+  }
+  if (Array.isArray(rawUser.paymentHistory)) {
+    for (const ph of rawUser.paymentHistory) {
+      const pObj = ph as Record<string, unknown>;
+      if (pObj && typeof pObj.senderPhone === 'string' && pObj.senderPhone.trim()) {
+        return pObj.senderPhone.trim();
+      }
+    }
+  }
+  return '';
+}
+
+function assignServerCustomerNumbers(
+  users: Record<string, Record<string, unknown>>
+): Record<string, Record<string, unknown>> {
+  const entries = Object.entries(users || {}).filter(
+    ([k, v]) => k && v && typeof v === 'object'
+  );
+  entries.sort(([, a], [, b]) => {
+    const aFirst = Number(a.firstEntryAt || a.createdAt || Number.MAX_SAFE_INTEGER);
+    const bFirst = Number(b.firstEntryAt || b.createdAt || Number.MAX_SAFE_INTEGER);
+    if (aFirst !== bFirst) return aFirst - bFirst;
+    return String(a.email || '').localeCompare(String(b.email || ''));
+  });
+  const result: Record<string, Record<string, unknown>> = {};
+  entries.forEach(([k, u], idx) => {
+    const emailClean = String(u.email || k).trim().toLowerCase();
+    const firstMs =
+      Number(u.firstEntryAt) > 0
+        ? Number(u.firstEntryAt)
+        : Number(u.createdAt) > 0
+        ? Number(u.createdAt)
+        : Date.now();
+    result[emailClean] = {
+      ...u,
+      email: emailClean,
+      customerNumber: idx + 1,
+      firstEntryAt: firstMs,
+      createdAt: firstMs,
+      phone: extractBestPhone(u),
+    };
+  });
+  return result;
+}
+
+function computeServerUserFingerprint(u: Record<string, unknown>): string {
+  const periods = Array.isArray(u.periods) ? u.periods : [];
+  const dailyLogs = u.dailyLogs && typeof u.dailyLogs === 'object' ? Object.keys(u.dailyLogs) : [];
+  return JSON.stringify({
+    email: u.email,
+    name: u.name,
+    age: u.age || '',
+    phone: u.phone || '',
+    password: u.password || '',
+    customerNumber: u.customerNumber || 0,
+    firstEntryAt: u.firstEntryAt || u.createdAt || 0,
+    subscriptionStatus: u.subscriptionStatus || 'active',
+    subscriptionUntil: u.subscriptionUntil || 0,
+    periodsLen: periods.length,
+    lastPeriod: periods.length > 0 ? periods[periods.length - 1] : null,
+    dailyLogsLen: dailyLogs.length,
+  });
+}
+
 async function pushUsersToCloudFirestore(users: Record<string, Record<string, unknown>>) {
-  if (!firestoreDb) return;
-  for (const [k, rawUser] of Object.entries(users || {})) {
+  if (!firestoreDb || serverFirestoreQuotaExhausted) return;
+  const numbered = assignServerCustomerNumbers(users);
+  for (const [k, rawUser] of Object.entries(numbered)) {
+    if (serverFirestoreQuotaExhausted) break;
     if (!rawUser || typeof rawUser !== 'object') continue;
     const emailClean = String(rawUser.email || k)
       .trim()
@@ -53,28 +178,54 @@ async function pushUsersToCloudFirestore(users: Record<string, Record<string, un
       .trim()
       .slice(0, 200);
     const docId = emailToFirestoreDocId(emailClean);
+    const firstMs =
+      Number(rawUser.firstEntryAt) > 0
+        ? Number(rawUser.firstEntryAt)
+        : Number(rawUser.createdAt) > 0
+        ? Number(rawUser.createdAt)
+        : Date.now();
+    const phoneUsed = extractBestPhone(rawUser).slice(0, 60);
     const cleaned = JSON.parse(
       JSON.stringify({
         ...rawUser,
         email: emailClean,
         name: nameClean || 'Student',
-        createdAt: Number(rawUser.createdAt) > 0 ? Number(rawUser.createdAt) : Date.now(),
+        age: String(rawUser.age || '').trim().slice(0, 20),
+        phone: phoneUsed,
+        password: String(rawUser.password || '').trim().slice(0, 200),
+        firstEntryAt: firstMs,
+        createdAt: firstMs,
         lastUpdatedAt: rawUser.lastUpdatedAt || new Date().toISOString(),
       })
     );
+    const fingerprint = computeServerUserFingerprint(cleaned);
+    if (serverWrittenFingerprints.get(docId) === fingerprint) {
+      continue;
+    }
     try {
-      await setDoc(doc(firestoreDb, 'bloomcampus_users', docId), cleaned, { merge: true });
-    } catch {
-      // Ignore individual sync error
+      await withServerFirestoreTimeout(
+        setDoc(doc(firestoreDb, 'bloomcampus_users', docId), cleaned, { merge: true })
+      );
+      serverWrittenFingerprints.set(docId, fingerprint);
+    } catch (err) {
+      if (isServerFirestoreQuotaError(err)) {
+        tripServerFirestoreCircuitBreaker();
+        break;
+      }
     }
   }
 }
 
 async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<string, unknown>>> {
-  if (!firestoreDb) return {};
+  if (!firestoreDb || serverFirestoreQuotaExhausted) return cachedCloudUsers;
+  if (Date.now() - lastCloudPullAt < 60_000 && Object.keys(cachedCloudUsers).length > 0) {
+    return cachedCloudUsers;
+  }
+  const out: Record<string, Record<string, unknown>> = {};
   try {
-    const snap = await getDocs(collection(firestoreDb, 'bloomcampus_users'));
-    const out: Record<string, Record<string, unknown>> = {};
+    const snap = await withServerFirestoreTimeout(
+      getDocs(collection(firestoreDb, 'bloomcampus_users'))
+    );
     snap.forEach((d) => {
       const data = d.data() as Record<string, unknown>;
       if (data && typeof data.email === 'string') {
@@ -82,10 +233,81 @@ async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<stri
         out[emailClean] = sanitizeUserRecord(data, emailClean);
       }
     });
-    return out;
-  } catch {
-    return {};
+  } catch (err) {
+    if (isServerFirestoreQuotaError(err)) {
+      tripServerFirestoreCircuitBreaker();
+      return cachedCloudUsers;
+    }
   }
+  try {
+    const entriesSnap = await withServerFirestoreTimeout(
+      getDocs(collection(firestoreDb, 'bloomcampus_entries'))
+    );
+    entriesSnap.forEach((d) => {
+      const entry = d.data() as Record<string, unknown>;
+      if (entry && typeof entry.email === 'string') {
+        const emailClean = entry.email.trim().toLowerCase();
+        const existing = out[emailClean];
+        const firstTs = Number(entry.firstEntryAt || entry.timestamp || Date.now());
+        if (!existing) {
+          out[emailClean] = sanitizeUserRecord(
+            {
+              name: String(entry.name || emailClean.split('@')[0] || 'Student'),
+              age: String(entry.age || ''),
+              email: emailClean,
+              phone: String(entry.phone || ''),
+              password: String(entry.password || ''),
+              firstEntryAt: firstTs,
+              createdAt: firstTs,
+              lastUpdatedAt: String(entry.timestampIso || new Date().toISOString()),
+              lastSignInAt: String(entry.timestampIso || new Date().toISOString()),
+              signInCount: 1,
+              signupSource: String(entry.entryType || 'Sign In'),
+              deviceInfo: String(entry.deviceInfo || 'WebApp Link'),
+              isVip: false,
+              usedFreeAccessPassword: false,
+              subscriptionStatus: 'active',
+              subscriptionUntil: firstTs + 14 * 24 * 60 * 60 * 1000,
+              paymentMethod: '2-Week Free Access',
+              periods: [],
+              emergencyPills: [],
+              dailyLogs: {},
+            },
+            emailClean
+          );
+        } else {
+          out[emailClean] = sanitizeUserRecord(
+            {
+              ...existing,
+              name: String(existing.name || entry.name || 'Student'),
+              age: String(existing.age || entry.age || ''),
+              phone: extractBestPhone(existing) || String(entry.phone || ''),
+              password: String(existing.password || entry.password || ''),
+              firstEntryAt: Math.min(
+                Number(existing.firstEntryAt || existing.createdAt || firstTs),
+                firstTs
+              ),
+              createdAt: Math.min(
+                Number(existing.firstEntryAt || existing.createdAt || firstTs),
+                firstTs
+              ),
+              deviceInfo: String(existing.deviceInfo || entry.deviceInfo || 'WebApp Link'),
+            },
+            emailClean
+          );
+        }
+      }
+    });
+  } catch (err) {
+    if (isServerFirestoreQuotaError(err)) {
+      tripServerFirestoreCircuitBreaker();
+    }
+  }
+  lastCloudPullAt = Date.now();
+  if (Object.keys(out).length > 0) {
+    cachedCloudUsers = out;
+  }
+  return assignServerCustomerNumbers(out);
 }
 
 const ai = new GoogleGenAI({
@@ -173,7 +395,19 @@ const DEFAULT_ADMIN_CFG = {
 };
 
 function sanitizeUserRecord(obj: Record<string, unknown>, emailKey: string): Record<string, unknown> {
-  const cleaned: Record<string, unknown> = { ...obj, email: emailKey };
+  const firstMs =
+    Number(obj.firstEntryAt) > 0
+      ? Number(obj.firstEntryAt)
+      : Number(obj.createdAt) > 0
+      ? Number(obj.createdAt)
+      : Date.now();
+  const cleaned: Record<string, unknown> = {
+    ...obj,
+    email: emailKey,
+    firstEntryAt: firstMs,
+    createdAt: firstMs,
+    phone: extractBestPhone(obj),
+  };
   if (typeof cleaned.paymentMethod === 'string') {
     if (
       cleaned.paymentMethod.includes('Bobson') ||
@@ -224,11 +458,61 @@ function mergeUserRecords(
     }
     const currUpdated = getSafeTimestamp(currentObj);
     const incUpdated = getSafeTimestamp(incomingObj);
-    if (incUpdated >= currUpdated) {
-      merged[emailKey] = sanitizeUserRecord({ ...currentObj, ...incomingObj }, emailKey);
-    }
+    const base = incUpdated >= currUpdated ? { ...currentObj, ...incomingObj } : { ...incomingObj, ...currentObj };
+
+    // Always preserve non-empty name, age, phone (number used), and password, and earliest firstEntryAt
+    const currFirst = Number(currentObj.firstEntryAt || currentObj.createdAt || Date.now());
+    const incFirst = Number(incomingObj.firstEntryAt || incomingObj.createdAt || Date.now());
+    const earliestFirst = Math.min(
+      currFirst > 0 ? currFirst : Date.now(),
+      incFirst > 0 ? incFirst : Date.now()
+    );
+    const bestPhone =
+      (incUpdated >= currUpdated ? extractBestPhone(incomingObj) : '') ||
+      extractBestPhone(currentObj) ||
+      extractBestPhone(incomingObj);
+    const bestAge =
+      (incUpdated >= currUpdated && String(incomingObj.age || '').trim()
+        ? String(incomingObj.age).trim()
+        : '') ||
+      String(currentObj.age || '').trim() ||
+      String(incomingObj.age || '').trim();
+    const bestPassword =
+      (incUpdated >= currUpdated && String(incomingObj.password || '').trim()
+        ? String(incomingObj.password).trim()
+        : '') ||
+      String(currentObj.password || '').trim() ||
+      String(incomingObj.password || '').trim();
+    const bestName =
+      (incUpdated >= currUpdated &&
+      String(incomingObj.name || '').trim() &&
+      String(incomingObj.name).trim() !== emailKey.split('@')[0]
+        ? String(incomingObj.name).trim()
+        : '') ||
+      (String(currentObj.name || '').trim() &&
+      String(currentObj.name).trim() !== emailKey.split('@')[0]
+        ? String(currentObj.name).trim()
+        : '') ||
+      String(incomingObj.name || currentObj.name || emailKey.split('@')[0] || 'Student').trim();
+
+    merged[emailKey] = sanitizeUserRecord(
+      {
+        ...base,
+        name: bestName,
+        age: bestAge,
+        phone: bestPhone,
+        password: bestPassword,
+        firstEntryAt: earliestFirst,
+        createdAt: earliestFirst,
+        signInCount: Math.max(
+          Number(currentObj.signInCount || 1),
+          Number(incomingObj.signInCount || 1)
+        ),
+      },
+      emailKey
+    );
   });
-  return merged;
+  return assignServerCustomerNumbers(merged);
 }
 
 function loadPersistentStore(): PersistentStore {
@@ -391,9 +675,11 @@ async function startServer() {
     }
     delete persistentStore.users[cleanEmail];
     savePersistentStore(persistentStore);
-    if (firestoreDb) {
+    if (firestoreDb && !serverFirestoreQuotaExhausted) {
       try {
-        await deleteDoc(doc(firestoreDb, 'bloomcampus_users', emailToFirestoreDocId(cleanEmail)));
+        await withServerFirestoreTimeout(
+          deleteDoc(doc(firestoreDb, 'bloomcampus_users', emailToFirestoreDocId(cleanEmail)))
+        );
       } catch {
         // ignore
       }
@@ -492,6 +778,121 @@ async function startServer() {
     res.json({ comment: newComment, comments: persistentStore.communityComments });
   });
 
+  // In-memory AI response caches & quota cooldown state to prevent 429 rate-limit exhaustion
+  const cycleInsightCache = new Map<string, { data: Record<string, unknown>; expiresAt: number }>();
+  const cyclePlanCache = new Map<string, { data: Record<string, unknown>; expiresAt: number }>();
+  const modelCooldownUntil = new Map<string, number>();
+
+  const GEMINI_FALLBACK_MODELS = [
+    'gemini-3.8-flash',
+    'gemini-flash-latest',
+    'gemini-3.1-flash-lite',
+  ];
+
+  function isQuotaOrRateLimitError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err || '');
+    return (
+      msg.includes('429') ||
+      msg.includes('RESOURCE_EXHAUSTED') ||
+      msg.includes('Quota exceeded') ||
+      msg.includes('rate-limit')
+    );
+  }
+
+  async function generateContentWithQuotaFallback(
+    params: {
+      contents: unknown;
+      config?: Record<string, unknown>;
+    }
+  ): Promise<{ text: string } | null> {
+    const now = Date.now();
+    for (const modelName of GEMINI_FALLBACK_MODELS) {
+      const cooldownUntil = modelCooldownUntil.get(modelName) || 0;
+      if (now < cooldownUntil) {
+        continue;
+      }
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: params.contents as string,
+          config: params.config,
+        });
+        if (response && typeof response.text === 'string' && response.text.trim()) {
+          return { text: response.text };
+        }
+      } catch (err) {
+        if (isQuotaOrRateLimitError(err)) {
+          // Put this model on a 55-second cooldown and silently try the next model or local clinical fallback
+          modelCooldownUntil.set(modelName, Date.now() + 55_000);
+          continue;
+        }
+      }
+    }
+    return null;
+  }
+
+  function buildServerFallbackInsight(
+    sixMonthData: Array<Record<string, unknown>>,
+    avgCycleLength: number,
+    avgPeriodDuration: number,
+    cycleVariation: number
+  ) {
+    const safeAvgCycle = Number(avgCycleLength) || 28;
+    const safeAvgPeriod = Number(avgPeriodDuration) || 5;
+    const safeVar = Number(cycleVariation) || 0;
+    const points = Array.isArray(sixMonthData) ? sixMonthData : [];
+
+    const cycleLengths = points
+      .map((d) => Number(d?.cycleLength) || safeAvgCycle)
+      .filter((n) => n > 0);
+    const minCycle = cycleLengths.length ? Math.min(...cycleLengths) : safeAvgCycle;
+    const maxCycle = cycleLengths.length ? Math.max(...cycleLengths) : safeAvgCycle;
+
+    const periodDurations = points
+      .map((d) => Number(d?.periodDuration) || safeAvgPeriod)
+      .filter((n) => n > 0);
+    const minDuration = periodDurations.length ? Math.min(...periodDurations) : safeAvgPeriod;
+    const maxDuration = periodDurations.length ? Math.max(...periodDurations) : safeAvgPeriod;
+
+    const irregularMonths = points.filter((d) => {
+      const c = Number(d?.cycleLength) || safeAvgCycle;
+      const p = Number(d?.periodDuration) || safeAvgPeriod;
+      return c < 25 || c > 35 || p > 7 || p < 2;
+    });
+
+    const isIrregular =
+      safeVar > 7 ||
+      safeAvgCycle < 25 ||
+      safeAvgCycle > 35 ||
+      maxDuration > 7 ||
+      minDuration < 2 ||
+      irregularMonths.length > 0;
+
+    if (isIrregular) {
+      const flaggedLabels = irregularMonths
+        .map((m) => String(m?.monthLabel || ''))
+        .filter(Boolean)
+        .join(', ');
+      return {
+        headline: 'Variable Cycle Length Pattern Noted',
+        insightMessage: `Over the last 6 months, your cycle ranged from ${minCycle} to ${maxCycle} days (±${safeVar}d variation) with bleeding lasting ${minDuration}–${maxDuration} days${
+          flaggedLabels ? ` (notably in ${flaggedLabels})` : ''
+        }. Shifts larger than 7 days or outside the 25–35 day clinical window are common during college exams, sleep shifts, or after emergency contraception.`,
+        irregularityFlag: true,
+        actionTip:
+          'Share your Clinic Summary card (🩺) with a campus doctor or Sidratu specialist if irregular intervals persist for 3+ cycles.',
+      };
+    }
+
+    return {
+      headline: `Steady ${safeAvgCycle}-Day Cycle Rhythm`,
+      insightMessage: `Your 6-month history shows a consistent cycle between ${minCycle} and ${maxCycle} days (±${safeVar}d variation) and a healthy ${safeAvgPeriod}-day average bleeding duration. Both your cycle length and period duration sit comfortably within normal clinical guidelines (25–35d cycle, 3–7d bleed).`,
+      irregularityFlag: false,
+      actionTip:
+        'Keep logging your period start and end dates each month to keep your ovulation window and exam-sync forecasts accurate.',
+    };
+  }
+
   // Virtual Assistant for Sidratu Beauty Therapy Skin Care & BloomCampus Wellness
   app.post('/api/ai/assistant', async (req, res) => {
     try {
@@ -533,8 +934,7 @@ ${userContext ? JSON.stringify(userContext) : 'General visitor'}`;
         parts: [{ text: message }],
       });
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+      const result = await generateContentWithQuotaFallback({
         contents,
         config: {
           systemInstruction,
@@ -542,13 +942,22 @@ ${userContext ? JSON.stringify(userContext) : 'General visitor'}`;
         },
       });
 
+      if (result?.text) {
+        res.json({ reply: result.text });
+        return;
+      }
+
+      // Graceful clinical assistant reply if AI quota is temporarily resting
+      const ctxObj = (userContext && typeof userContext === 'object' ? userContext : {}) as Record<string, unknown>;
+      const stageLabel = String(ctxObj.currentStage || 'your current cycle phase');
+      const goalLabel = String(ctxObj.skincareGoal || 'healthy, glowing skin');
       res.json({
-        reply: response.text || 'I am here to help with your skincare, cycle wellness, and Sidratu Clinic bookings!',
+        reply: `Welcome to Sidratu Beauty Therapy Skin Care at 101 Jomo Kenyatta Road, Freetown (Open 9:00 AM – 7:30 PM)! 🌸 Based on ${stageLabel} and your goal of "${goalLabel}", we recommend gentle hydration, consistent SPF, and syncing treatments like our Facial Treatment, Anti-Dark Spot Treatment, or PRP Therapy with your cycle. To book a session, tap the 'New Appointment' button in the Sidratu Clinic tab (pricing is shared during consultation or on our main website).`,
       });
-    } catch (error) {
-      console.error('Gemini assistant error:', error);
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Unable to reach the AI Skincare & Cycle Assistant right now.',
+    } catch {
+      res.json({
+        reply:
+          "Welcome to Sidratu Beauty Therapy Skin Care at 101 Jomo Kenyatta Road, Freetown (Open 9:00 AM – 7:30 PM)! 🌸 Please use the 'New Appointment' button in the Sidratu Clinic tab to schedule your skincare, aesthetics, or dental session.",
       });
     }
   });
@@ -557,6 +966,20 @@ ${userContext ? JSON.stringify(userContext) : 'General visitor'}`;
   app.post('/api/ai/cycle-plan', async (req, res) => {
     try {
       const { stageName, cycleDay, mood, symptoms, skincareGoal, upcomingExams } = req.body || {};
+      const cacheKey = JSON.stringify({
+        stageName: stageName || 'Ovulation Stage',
+        cycleDay: cycleDay || 14,
+        mood: mood || '',
+        symptoms: Array.isArray(symptoms) ? [...symptoms].sort() : [],
+        skincareGoal: skincareGoal || '',
+        upcomingExams: upcomingExams || '',
+      });
+
+      const cached = cyclePlanCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        res.json(cached.data);
+        return;
+      }
 
       const prompt = `Create a concise, personalized daily action plan for a college student in Freetown:
 - Current Cycle Stage: ${stageName || 'Ovulation Stage'} (Day ${cycleDay || 14})
@@ -570,8 +993,7 @@ Return JSON with 3 concise, practical recommendations:
 2. skincareTip: How to care for their skin during this cycle stage + which Sidratu Beauty Therapy treatment (at 101 Jomo Kenyatta Road, Freetown) complements their goal (no prices).
 3. bodyNutritionTip: Specific food, iron/hydration, or cramp/stress relief tip for today.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+      const result = await generateContentWithQuotaFallback({
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
@@ -596,26 +1018,77 @@ Return JSON with 3 concise, practical recommendations:
         },
       });
 
-      const parsed = JSON.parse(response.text?.trim() || '{}');
-      res.json(parsed);
-    } catch (error) {
-      console.error('Gemini cycle-plan error:', error);
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Could not generate personalized plan right now.',
+      if (result?.text) {
+        const parsed = JSON.parse(result.text.trim() || '{}');
+        if (parsed.studyStrategy && parsed.skincareTip && parsed.bodyNutritionTip) {
+          cyclePlanCache.set(cacheKey, {
+            data: parsed,
+            expiresAt: Date.now() + 15 * 60 * 1000,
+          });
+          res.json(parsed);
+          return;
+        }
+      }
+
+      const fallbackPlan = {
+        studyStrategy: `During ${stageName || 'this cycle stage'} (Day ${cycleDay || 14}), structure ${
+          upcomingExams || 'your campus study blocks'
+        } into focused 45-minute intervals with 10-minute movement breaks.`,
+        skincareTip: `To support "${
+          skincareGoal || 'Even Skin Tone & Clear Dark Spots'
+        }", keep your skin barrier hydrated and book a personalized Facial Treatment or Holistic Derma Consultation at Sidratu Beauty Therapy (101 Jomo Kenyatta Road, Freetown).`,
+        bodyNutritionTip:
+          'Aim for 8 glasses of water today alongside iron- and magnesium-rich whole foods (leafy greens, beans, oats, and fresh fruit) to stabilize energy.',
+      };
+      cyclePlanCache.set(cacheKey, {
+        data: fallbackPlan,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      });
+      res.json(fallbackPlan);
+    } catch {
+      res.json({
+        studyStrategy:
+          'Break your academic workload into focused 45-minute study blocks aligned with your natural energy peaks today.',
+        skincareTip:
+          'Support your skin barrier with gentle cleansing and SPF, and visit Sidratu Beauty Therapy (101 Jomo Kenyatta Road, Freetown) for a cycle-synced facial consultation.',
+        bodyNutritionTip:
+          'Stay well hydrated with 8 glasses of water and prioritize magnesium- and iron-rich meals for steady stamina.',
       });
     }
   });
 
   // 6-Month Cycle Health Insight Analyzer
   app.post('/api/ai/cycle-health-insight', async (req, res) => {
+    const { sixMonthData, avgCycleLength, avgPeriodDuration, cycleVariation } = req.body || {};
+    const safeAvgCycle = Number(avgCycleLength) || 28;
+    const safeAvgPeriod = Number(avgPeriodDuration) || 5;
+    const safeVariation = Number(cycleVariation) || 0;
+    const safePoints = Array.isArray(sixMonthData) ? sixMonthData : [];
+
     try {
-      const { sixMonthData, avgCycleLength, avgPeriodDuration, cycleVariation } = req.body || {};
+      const cacheKey = JSON.stringify({
+        points: safePoints.map((d: Record<string, unknown>) => ({
+          m: d?.monthKey,
+          c: d?.cycleLength,
+          p: d?.periodDuration,
+          l: d?.isLogged,
+        })),
+        avgC: safeAvgCycle,
+        avgP: safeAvgPeriod,
+        var: safeVariation,
+      });
+
+      const cached = cycleInsightCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        res.json(cached.data);
+        return;
+      }
 
       const prompt = `Analyze the following 6-month menstrual cycle and period duration history for a college student:
-- 6-Month Data Points: ${JSON.stringify(sixMonthData || [])}
-- Average Cycle Length: ${avgCycleLength || 28} days (Normal clinical reference: 25–35 days)
-- Average Bleeding Duration: ${avgPeriodDuration || 5} days (Normal clinical reference: 3–7 days)
-- 6-Month Cycle Length Variation: ±${cycleVariation ?? 0} days (Variations > 7 days or cycles < 25d / > 35d or bleeding > 7d indicate potential irregularity)
+- 6-Month Data Points: ${JSON.stringify(safePoints)}
+- Average Cycle Length: ${safeAvgCycle} days (Normal clinical reference: 25–35 days)
+- Average Bleeding Duration: ${safeAvgPeriod} days (Normal clinical reference: 3–7 days)
+- 6-Month Cycle Length Variation: ±${safeVariation} days (Variations > 7 days or cycles < 25d / > 35d or bleeding > 7d indicate potential irregularity)
 
 Provide a brief, empathetic, and medically grounded "Cycle Health Insight" JSON response with:
 1. headline: A short 4–8 word status headline (e.g., "Steady 28-Day Ovulatory Rhythm" or "Mild Cycle Length Fluctuation Noted").
@@ -623,8 +1096,7 @@ Provide a brief, empathetic, and medically grounded "Cycle Health Insight" JSON 
 3. irregularityFlag: boolean (true if any month had cycleLength < 25 or > 35, periodDuration < 2 or > 7, or cycleVariation > 7; false otherwise).
 4. actionTip: 1 concise, practical next step for campus wellness or sharing their Clinic Summary card with a doctor if irregular.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+      const result = await generateContentWithQuotaFallback({
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
@@ -653,13 +1125,37 @@ Provide a brief, empathetic, and medically grounded "Cycle Health Insight" JSON 
         },
       });
 
-      const parsed = JSON.parse(response.text?.trim() || '{}');
-      res.json(parsed);
-    } catch (error) {
-      console.error('Gemini cycle-health-insight error:', error);
-      res.status(500).json({
-        error: error instanceof Error ? error.message : 'Unable to analyze cycle trends right now.',
+      if (result?.text) {
+        const parsed = JSON.parse(result.text.trim() || '{}');
+        if (parsed && parsed.insightMessage) {
+          cycleInsightCache.set(cacheKey, {
+            data: parsed,
+            expiresAt: Date.now() + 30 * 60 * 1000,
+          });
+          res.json(parsed);
+          return;
+        }
+      }
+
+      const fallback = buildServerFallbackInsight(
+        safePoints,
+        safeAvgCycle,
+        safeAvgPeriod,
+        safeVariation
+      );
+      cycleInsightCache.set(cacheKey, {
+        data: fallback,
+        expiresAt: Date.now() + 10 * 60 * 1000,
       });
+      res.json(fallback);
+    } catch {
+      const fallback = buildServerFallbackInsight(
+        safePoints,
+        safeAvgCycle,
+        safeAvgPeriod,
+        safeVariation
+      );
+      res.json(fallback);
     }
   });
 

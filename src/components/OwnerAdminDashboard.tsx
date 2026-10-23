@@ -23,6 +23,8 @@ import {
   Eye,
   EyeOff,
   PlusCircle,
+  Edit3,
+  Smartphone,
 } from 'lucide-react';
 import { AdminAccount, AdminConfig, SupportInquiry, UserData } from '../types';
 import {
@@ -33,6 +35,7 @@ import {
   OWNER_ADMIN_EMAIL,
 } from '../constants';
 import { getTrialStatus } from '../utils/cycleEngine';
+import { resolveCustomerPhoneUsed } from '../firebase';
 
 interface OwnerAdminDashboardProps {
   usersMap: Record<string, UserData>;
@@ -42,12 +45,14 @@ interface OwnerAdminDashboardProps {
   onApproveUserPayment: (email: string) => void;
   onExtendUserFreeAccess?: (email: string, days: number) => void;
   onRejectOrExpireUser: (email: string, mode: 'reject' | 'expire') => void;
+  onClearPendingVerification?: (email: string) => void;
   onRegisterNewUserByAdmin?: (params: {
     name: string;
     age: string;
     email: string;
     phone: string;
     password: string;
+    originalEmail?: string;
   }) => void;
   onDeleteUser?: (email: string) => void;
   onRefreshUsers?: () => Promise<number>;
@@ -63,6 +68,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
   onApproveUserPayment,
   onExtendUserFreeAccess,
   onRejectOrExpireUser,
+  onClearPendingVerification,
   onRegisterNewUserByAdmin,
   onDeleteUser,
   onRefreshUsers,
@@ -78,10 +84,17 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
   const [statusFilter, setStatusFilter] = useState<
     'ALL' | 'pending_verification' | 'active' | 'free_password' | 'expired'
   >('ALL');
+  const [sortOrder, setSortOrder] = useState<'FIRST_ENTRY_ASC' | 'LATEST_ACTIVE_DESC'>(
+    'FIRST_ENTRY_ASC'
+  );
   const [lastApprovedUserEmail, setLastApprovedUserEmail] = useState<string | null>(null);
   const [isSyncingUsers, setIsSyncingUsers] = useState<boolean>(false);
-  const [showUserPasswords, setShowUserPasswords] = useState<boolean>(false);
+  // Always show passwords by default so the admin immediately sees Name, Email, Age, Number Used, and Password
+  const [showUserPasswords, setShowUserPasswords] = useState<boolean>(true);
   const [showAddUserForm, setShowAddUserForm] = useState<boolean>(false);
+  const [editingCustomerOriginalEmail, setEditingCustomerOriginalEmail] = useState<string | null>(
+    null
+  );
   const [manualUserName, setManualUserName] = useState<string>('');
   const [manualUserAge, setManualUserAge] = useState<string>('21');
   const [manualUserEmail, setManualUserEmail] = useState<string>('');
@@ -93,28 +106,42 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     [adminConfig.additionalAdmins]
   );
 
+  // Assign each customer their permanent sequential number (#1, #2, #3...) strictly by their FIRST entry
   const usersList = useMemo(() => {
-    const entries = Object.values(usersMap || {}).filter(
+    const rawEntries = Object.values(usersMap || {}).filter(
       (u) => u && typeof u === 'object' && typeof u.email === 'string' && u.email.trim().length > 0
     );
-    return entries.sort((a, b) => {
-      const aPending =
-        a.subscriptionStatus === 'pending_verification' ||
-        a.pendingPayment?.status === 'pending'
-          ? 1
-          : 0;
-      const bPending =
-        b.subscriptionStatus === 'pending_verification' ||
-        b.pendingPayment?.status === 'pending'
-          ? 1
-          : 0;
-      if (aPending !== bPending) return bPending - aPending;
-      const aUpdated = a.lastUpdatedAt ? new Date(a.lastUpdatedAt).getTime() : a.createdAt || 0;
-      const bUpdated = b.lastUpdatedAt ? new Date(b.lastUpdatedAt).getTime() : b.createdAt || 0;
-      if (bUpdated !== aUpdated) return bUpdated - aUpdated;
-      return (b.createdAt || 0) - (a.createdAt || 0);
+
+    // First sort chronologically by firstEntryAt / createdAt ascending to assign Customer #1, #2, #3...
+    const chronologicalByFirstEntry = [...rawEntries].sort((a, b) => {
+      const aFirst = Number(a.firstEntryAt || a.createdAt || Number.MAX_SAFE_INTEGER);
+      const bFirst = Number(b.firstEntryAt || b.createdAt || Number.MAX_SAFE_INTEGER);
+      if (aFirst !== bFirst) return aFirst - bFirst;
+      return (a.email || '').localeCompare(b.email || '');
     });
-  }, [usersMap]);
+
+    const withCustomerNumbers = chronologicalByFirstEntry.map((u, idx) => ({
+      ...u,
+      customerNumber: idx + 1,
+      firstEntryAt: Number(u.firstEntryAt || u.createdAt || Date.now()),
+      phone: resolveCustomerPhoneUsed(u),
+    }));
+
+    if (sortOrder === 'FIRST_ENTRY_ASC') {
+      return withCustomerNumbers;
+    }
+
+    return [...withCustomerNumbers].sort((a, b) => {
+      const aUpdated = a.lastUpdatedAt
+        ? new Date(a.lastUpdatedAt).getTime()
+        : a.firstEntryAt || a.createdAt || 0;
+      const bUpdated = b.lastUpdatedAt
+        ? new Date(b.lastUpdatedAt).getTime()
+        : b.firstEntryAt || b.createdAt || 0;
+      if (bUpdated !== aUpdated) return bUpdated - aUpdated;
+      return (b.customerNumber || 0) - (a.customerNumber || 0);
+    });
+  }, [usersMap, sortOrder]);
 
   const stats = useMemo(() => {
     let pending = 0;
@@ -137,12 +164,15 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
       else if (st.status === 'expired') expired += 1;
       else activePaid += 1;
 
-      const createdMs = Number(u.createdAt || 0);
+      const createdMs = Number(u.firstEntryAt || u.createdAt || 0);
       const updatedMs = u.lastUpdatedAt ? new Date(u.lastUpdatedAt).getTime() : createdMs;
       if (createdMs > 0 && nowMs - createdMs <= oneDayMs) {
         signedUpToday += 1;
       }
-      if ((updatedMs > 0 && nowMs - updatedMs <= sevenDaysMs) || (createdMs > 0 && nowMs - createdMs <= sevenDaysMs)) {
+      if (
+        (updatedMs > 0 && nowMs - updatedMs <= sevenDaysMs) ||
+        (createdMs > 0 && nowMs - createdMs <= sevenDaysMs)
+      ) {
         activeLast7Days += 1;
       }
       totalPeriodsLogged += Array.isArray(u.periods) ? u.periods.length : 0;
@@ -180,52 +210,71 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
+        const matchNum = `#${u.customerNumber || ''}`.includes(q);
         const matchName = (u.name || '').toLowerCase().includes(q);
         const matchEmail = (u.email || '').toLowerCase().includes(q);
-        const matchPhone = (u.phone || u.pendingPayment?.senderPhone || '')
-          .toLowerCase()
-          .includes(q);
+        const matchPhone = resolveCustomerPhoneUsed(u).toLowerCase().includes(q);
+        const matchPass = (u.password || '').toLowerCase().includes(q);
         const matchTx = (u.pendingPayment?.transactionId || '').toLowerCase().includes(q);
-        return matchName || matchEmail || matchPhone || matchTx;
+        return matchNum || matchName || matchEmail || matchPhone || matchPass || matchTx;
       }
       return true;
     });
   }, [usersList, statusFilter, searchQuery]);
 
+  const handleOpenEditCustomerEntry = (u: UserData) => {
+    setEditingCustomerOriginalEmail(u.email);
+    setManualUserName(u.name || '');
+    setManualUserAge(u.age || '21');
+    setManualUserEmail(u.email || '');
+    setManualUserPhone(resolveCustomerPhoneUsed(u));
+    setManualUserPassword(u.password || '');
+    setShowAddUserForm(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   const handleExportAllSignupsCsv = () => {
     const headers = [
-      'Number',
+      'Customer Entry # (First Entry)',
       'Full Name',
       'Email Address',
-      'Phone Number',
       'Age',
-      'Sign-Up Date',
+      'Number Used (Phone)',
+      'Password',
+      'Device / Link Used',
+      'First Entry Date',
       'Last Active',
-      'Sign-In Count',
+      'Total Entries',
       'Status',
       'Days Remaining',
       'Logged Periods',
-      'Daily Check-Ins',
     ];
     const rows = usersList.map((u, idx) => {
       const st = getTrialStatus(u);
-      const createdStr = u.createdAt ? new Date(u.createdAt).toLocaleString() : 'Recorded';
-      const updatedStr = u.lastSignInAt || u.lastUpdatedAt
-        ? new Date(u.lastSignInAt || u.lastUpdatedAt || '').toLocaleString()
-        : createdStr;
+      const custNum = u.customerNumber || idx + 1;
+      const phoneUsed = resolveCustomerPhoneUsed(u) || 'Not entered';
+      const firstEntryStr =
+        u.firstEntryAt || u.createdAt
+          ? new Date(u.firstEntryAt || u.createdAt).toLocaleString()
+          : 'Recorded';
+      const updatedStr =
+        u.lastSignInAt || u.lastUpdatedAt
+          ? new Date(u.lastSignInAt || u.lastUpdatedAt || '').toLocaleString()
+          : firstEntryStr;
       return [
-        idx + 1,
+        custNum,
         `"${(u.name || 'Student').replace(/"/g, '""')}"`,
         `"${(u.email || '').replace(/"/g, '""')}"`,
-        `"${(u.phone || u.pendingPayment?.senderPhone || 'Not provided').replace(/"/g, '""')}"`,
-        `"${u.age || '—'}"`,
-        `"${createdStr}"`,
+        `"${(u.age || '—').replace(/"/g, '""')}"`,
+        `"${phoneUsed.replace(/"/g, '""')}"`,
+        `"${(u.password || '—').replace(/"/g, '""')}"`,
+        `"${(u.deviceInfo || 'WebApp Link').replace(/"/g, '""')}"`,
+        `"${firstEntryStr}"`,
         `"${updatedStr}"`,
         u.signInCount || 1,
         `"${st.status}"`,
         st.daysLeft,
         Array.isArray(u.periods) ? u.periods.length : 0,
-        u.dailyLogs ? Object.keys(u.dailyLogs).length : 0,
       ].join(',');
     });
     const csvContent = [headers.join(','), ...rows].join('\n');
@@ -233,35 +282,44 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `bloomcampus-all-signups-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `bloomcampus-admin-customer-entries-${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    showToast(`📥 Downloaded CSV with all ${usersList.length} registered people in the app!`, 'success');
+    showToast(
+      `📥 Downloaded Admin Report CSV with all ${usersList.length} customer entries!`,
+      'success'
+    );
   };
 
   const handleCopyAllSignupsSummary = () => {
     const lines = [
-      `🌸 BloomCampus & Sidratu Clinic — All Sign-Ups Report (${usersList.length} Total People in App)`,
+      `🌸 BloomCampus & Sidratu Clinic — Admin Customer Entry Report (${usersList.length} Total Customers)`,
       `Generated: ${new Date().toLocaleString()}`,
-      `------------------------------------------------------------`,
+      `-----------------------------------------------------------------------------------`,
       ...usersList.map((u, idx) => {
-        const st = getTrialStatus(u);
-        const phone = u.phone || u.pendingPayment?.senderPhone || 'No phone';
-        const created = u.createdAt ? new Date(u.createdAt).toLocaleDateString() : 'Synced';
-        return `${idx + 1}. ${u.name || 'Student'} (Age ${u.age || '—'}) | ${u.email} | Phone: ${phone} | Joined: ${created} | ${st.daysLeft}d left`;
+        const custNum = u.customerNumber || idx + 1;
+        const phoneUsed = resolveCustomerPhoneUsed(u) || 'Not entered';
+        const firstDate =
+          u.firstEntryAt || u.createdAt
+            ? new Date(u.firstEntryAt || u.createdAt).toLocaleDateString()
+            : 'Synced';
+        return `#${custNum} (1st Entry: ${firstDate}) | Name: ${u.name || 'Student'} | Email: ${u.email} | Age: ${u.age || '—'} | Number Used: ${phoneUsed} | Password: ${u.password || '—'}`;
       }),
     ];
     navigator.clipboard?.writeText(lines.join('\n'));
-    showToast(`📋 Copied full list of all ${usersList.length} people in the app to clipboard!`, 'success');
+    showToast(
+      `📋 Copied full Admin Report (${usersList.length} customers with Name, Email, Age, Number Used & Password)!`,
+      'success'
+    );
   };
 
   const handleManualUserSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!onRegisterNewUserByAdmin) return;
     if (!manualUserEmail.trim() || !manualUserPassword.trim()) {
-      showToast('Please enter an email and password for the new user.', 'warning');
+      showToast('Please enter an email and password for the customer entry.', 'warning');
       return;
     }
     onRegisterNewUserByAdmin({
@@ -270,7 +328,9 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
       email: manualUserEmail.trim().toLowerCase(),
       phone: manualUserPhone.trim(),
       password: manualUserPassword.trim(),
+      originalEmail: editingCustomerOriginalEmail || undefined,
     });
+    setEditingCustomerOriginalEmail(null);
     setManualUserName('');
     setManualUserAge('21');
     setManualUserEmail('');
@@ -384,7 +444,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
   };
 
   const buildSmsHref = (u: UserData) => {
-    const phone = (u.phone || u.pendingPayment?.senderPhone || '').replace(/\s+/g, '');
+    const phone = resolveCustomerPhoneUsed(u).replace(/\s+/g, '');
     const expDateStr = u.subscriptionUntil
       ? new Date(u.subscriptionUntil).toLocaleDateString('en-US', {
           month: 'short',
@@ -397,7 +457,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
   };
 
   const buildWhatsAppHref = (u: UserData) => {
-    const rawPhone = (u.phone || u.pendingPayment?.senderPhone || '').replace(/\D/g, '');
+    const rawPhone = resolveCustomerPhoneUsed(u).replace(/\D/g, '');
     const intlPhone =
       rawPhone.startsWith('0') && rawPhone.length === 9
         ? `232${rawPhone.slice(1)}`
@@ -455,15 +515,16 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[10px] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded-md bg-gold-500 text-plum-900">
-                  Owner Admin Console
+                  Owner Admin Report Console
                 </span>
                 <span className="text-xs text-lavender-200 font-mono">{OWNER_ADMIN_EMAIL}</span>
                 <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
-                  ● Cloud Firestore Live Sync ({stats.total} {stats.total === 1 ? 'Person' : 'People'} in App)
+                  ● Cross-Phone &amp; Computer Live Sync ({stats.total}{' '}
+                  {stats.total === 1 ? 'Customer Entry' : 'Customer Entries'})
                 </span>
               </div>
               <h1 className="font-display font-extrabold text-lg sm:text-xl text-white mt-0.5">
-                All App Sign-Ups, Live User Count &amp; Access Control Dashboard
+                Customer First-Entry Report: Name, Email, Age, Number Used &amp; Password
               </h1>
             </div>
           </div>
@@ -478,7 +539,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                   const count = await onRefreshUsers();
                   setIsSyncingUsers(false);
                   showToast(
-                    `🔄 Synced all registered sign-ups from Cloud Firestore! Total people in app: ${count}.`,
+                    `🔄 Synced all entries across phones & computers! Total customer entries: ${count}.`,
                     'success'
                   );
                 }}
@@ -486,7 +547,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
               >
                 <RotateCcw className={`w-4 h-4 ${isSyncingUsers ? 'animate-spin' : ''}`} />
                 <span>
-                  {isSyncingUsers ? 'Syncing Sign-Ups...' : `Sync All Sign-Ups (${stats.total})`}
+                  {isSyncingUsers ? 'Syncing Entries...' : `Sync All Entries (${stats.total})`}
                 </span>
               </button>
             )}
@@ -503,30 +564,38 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
       </header>
 
       <main className="max-w-7xl mx-auto w-full px-4 sm:px-6 py-6 space-y-6 flex-1">
-        {/* LIVE POPULATION & TOTAL SIGN-UPS HERO BANNER */}
+        {/* LIVE POPULATION & TOTAL CUSTOMER ENTRIES HERO BANNER */}
         <section className="rounded-3xl bg-gradient-to-r from-plum-900 via-lavender-900 to-plum-900 text-white p-5 sm:p-6 shadow-lg border-2 border-gold-500/40">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
             <div className="space-y-1.5">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-xl bg-gold-500/20 border border-gold-500/40 text-gold-400 text-xs font-extrabold uppercase tracking-wider">
                 <Users className="w-4 h-4" />
-                <span>Real-Time App Population &amp; Sign-Up Monitor</span>
+                <span>Cross-Phone &amp; Computer Customer First-Entry Report</span>
               </div>
               <h2 className="font-display font-extrabold text-2xl sm:text-3xl text-white">
-                {stats.total} {stats.total === 1 ? 'Person Is' : 'People Are'} Registered in the App
+                {stats.total} {stats.total === 1 ? 'Customer Entry' : 'Customer Entries'} Recorded Across All Links
               </h2>
               <p className="text-xs sm:text-sm text-lavender-100 max-w-2xl">
-                Every student who creates an account or signs in on any phone, browser, or shared link is automatically saved to Cloud Firestore and listed in the directory below.
+                Every customer who uses the webapp or shared link on any phone or computer is numbered sequentially by their first entry (<strong>#1, #2, #3...</strong>) with their <strong>Name, Email, Age, Number Used, and Password</strong> shown below.
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
               <button
                 type="button"
-                onClick={() => setShowAddUserForm((prev) => !prev)}
+                onClick={() => {
+                  setEditingCustomerOriginalEmail(null);
+                  setManualUserName('');
+                  setManualUserAge('21');
+                  setManualUserEmail('');
+                  setManualUserPhone('');
+                  setManualUserPassword('');
+                  setShowAddUserForm((prev) => !prev);
+                }}
                 className="px-4 py-2.5 rounded-2xl bg-gold-500 hover:bg-amber-400 text-plum-900 font-extrabold text-xs sm:text-sm flex items-center gap-1.5 shadow-sm cursor-pointer transition-all"
               >
                 <PlusCircle className="w-4 h-4" />
-                <span>{showAddUserForm ? 'Close Add Person Form' : 'Register / Add Person'}</span>
+                <span>{showAddUserForm ? 'Close Entry Form' : 'Add / Fix Customer Entry'}</span>
               </button>
 
               <button
@@ -535,7 +604,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                 className="px-3.5 py-2.5 rounded-2xl bg-white/15 hover:bg-white/25 text-white border border-white/20 font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer transition-all"
               >
                 <Copy className="w-4 h-4" />
-                <span>Copy Sign-Ups List</span>
+                <span>Copy Full Report</span>
               </button>
 
               <button
@@ -553,12 +622,12 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-5">
             <div className="bg-white/10 backdrop-blur-xs rounded-2xl border border-white/15 p-3.5">
               <span className="text-[10px] font-extrabold uppercase tracking-wider text-gold-400 block">
-                Total People in App
+                Total Customer Entries
               </span>
               <span className="font-display font-extrabold text-2xl sm:text-3xl text-white font-mono mt-0.5 block">
                 {stats.total}
               </span>
-              <span className="text-[11px] text-lavender-200">All sign-ups synced</span>
+              <span className="text-[11px] text-lavender-200">Numbered #1 to #{stats.total || 1}</span>
             </div>
 
             <div className="bg-white/10 backdrop-blur-xs rounded-2xl border border-white/15 p-3.5">
@@ -610,7 +679,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* Optional Manual Add / Register User Form */}
+          {/* Add or Edit Customer Entry Form */}
           {showAddUserForm && (
             <form
               onSubmit={handleManualUserSubmit}
@@ -618,11 +687,16 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
             >
               <div className="flex items-center justify-between">
                 <h3 className="font-display font-extrabold text-sm sm:text-base text-slate-900">
-                  ➕ Register a New Person Directly into the App (Instant 2-Week Free Access)
+                  {editingCustomerOriginalEmail
+                    ? `✏️ Edit / Fix Customer Entry (${editingCustomerOriginalEmail})`
+                    : '➕ Register / Fix a Customer Entry Directly (Synced Across All Phones & Computers)'}
                 </h3>
                 <button
                   type="button"
-                  onClick={() => setShowAddUserForm(false)}
+                  onClick={() => {
+                    setShowAddUserForm(false);
+                    setEditingCustomerOriginalEmail(null);
+                  }}
                   className="text-xs font-bold text-slate-500 hover:text-slate-800"
                 >
                   Close ✕
@@ -631,7 +705,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end">
                 <div className="lg:col-span-2">
                   <label className="text-[11px] font-extrabold uppercase text-slate-600 block mb-1">
-                    Full Name *
+                    Customer Name *
                   </label>
                   <input
                     type="text"
@@ -639,20 +713,6 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                     value={manualUserName}
                     onChange={(e) => setManualUserName(e.target.value)}
                     placeholder="e.g., Mariama Sesay"
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-medium"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] font-extrabold uppercase text-slate-600 block mb-1">
-                    Age *
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    min="13"
-                    max="65"
-                    value={manualUserAge}
-                    onChange={(e) => setManualUserAge(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-medium"
                   />
                 </div>
@@ -671,10 +731,25 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                 </div>
                 <div>
                   <label className="text-[11px] font-extrabold uppercase text-slate-600 block mb-1">
-                    Phone
+                    Age *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="10"
+                    max="80"
+                    value={manualUserAge}
+                    onChange={(e) => setManualUserAge(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] font-extrabold uppercase text-slate-600 block mb-1">
+                    Number Used (Phone) *
                   </label>
                   <input
                     type="tel"
+                    required
                     value={manualUserPhone}
                     onChange={(e) => setManualUserPhone(e.target.value)}
                     placeholder="076 123 456"
@@ -695,19 +770,33 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                   />
                 </div>
               </div>
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2">
+                {editingCustomerOriginalEmail && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingCustomerOriginalEmail(null);
+                      setShowAddUserForm(false);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                )}
                 <button
                   type="submit"
                   className="px-4 py-2 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-500 font-extrabold text-xs cursor-pointer"
                 >
-                  Save &amp; Add Person to App Directory
+                  {editingCustomerOriginalEmail
+                    ? '💾 Save Updated Customer Entry'
+                    : '💾 Save & Sync Customer Entry'}
                 </button>
               </div>
             </form>
           )}
         </section>
 
-        {/* SECTION 1 (TOP PRIORITY): ALL SIGN-UPS & REGISTERED PEOPLE DIRECTORY */}
+        {/* SECTION 1 (TOP PRIORITY): ADMIN CUSTOMER FIRST-ENTRY REPORT TABLE & CARDS */}
         <section className="bg-white rounded-3xl border-2 border-lavender-200 p-5 sm:p-6 shadow-xs">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-5">
             <div className="flex items-center gap-2.5">
@@ -717,19 +806,33 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="font-display font-extrabold text-lg sm:text-xl text-slate-900">
-                    All Sign-Ups &amp; People in the App ({stats.total})
+                    Admin Customer Entries Report — Numbered by First Entry ({stats.total})
                   </h2>
                   <span className="px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-extrabold">
-                    Showing {filteredUsers.length} of {stats.total} People
+                    Showing {filteredUsers.length} of {stats.total} Customers
                   </span>
                 </div>
                 <p className="text-xs text-slate-600">
-                  Complete list of everyone who signed up or signed in, with their email, phone number, sign-up date, cycle logs, and access status.
+                  Every customer entry across all phones, computers, and links, numbered by first entry (<strong>#1, #2, #3...</strong>) with <strong>Name, Email, Age, Number Used, and Password</strong>.
                 </p>
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setSortOrder((prev) =>
+                    prev === 'FIRST_ENTRY_ASC' ? 'LATEST_ACTIVE_DESC' : 'FIRST_ENTRY_ASC'
+                  )
+                }
+                className="px-3 py-1.5 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-900 border border-lavender-200 font-bold text-xs cursor-pointer"
+              >
+                {sortOrder === 'FIRST_ENTRY_ASC'
+                  ? '🔢 Ordered by 1st Entry (#1 → #' + Math.max(1, stats.total) + ')'
+                  : '🕒 Ordered by Latest Activity'}
+              </button>
+
               <button
                 type="button"
                 onClick={() => setShowUserPasswords((prev) => !prev)}
@@ -754,14 +857,14 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search name, email, phone..."
+                  placeholder="Search #, name, email, phone..."
                   className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs font-medium bg-cream focus:bg-white outline-none"
                 />
               </div>
 
               {(
                 [
-                  { id: 'ALL', label: `All Sign-Ups (${stats.total})` },
+                  { id: 'ALL', label: `All Entries (${stats.total})` },
                   { id: 'pending_verification', label: `⏳ Pending (${stats.pending})` },
                   { id: 'active', label: `✅ Active (${stats.activePaid + stats.freePass})` },
                   { id: 'expired', label: `🔒 Expired (${stats.expired})` },
@@ -783,83 +886,89 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
             </div>
           </div>
 
-          {/* Quick Scannable Sign-Up Summary Table */}
+          {/* Complete Scannable Customer First-Entry Report Table */}
           {filteredUsers.length > 0 && (
-            <div className="mb-5 overflow-x-auto rounded-2xl border border-slate-200">
+            <div className="mb-5 overflow-x-auto rounded-2xl border-2 border-slate-200 shadow-2xs">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="bg-slate-900 text-white font-extrabold uppercase tracking-wider text-[10px]">
-                    <th className="py-2.5 px-3">#</th>
-                    <th className="py-2.5 px-3">Person Name &amp; Age</th>
-                    <th className="py-2.5 px-3">Email Address</th>
-                    <th className="py-2.5 px-3">Phone</th>
-                    {showUserPasswords && <th className="py-2.5 px-3">Account Password</th>}
-                    <th className="py-2.5 px-3">Signed Up Date</th>
-                    <th className="py-2.5 px-3">Last Active</th>
-                    <th className="py-2.5 px-3">Cycle &amp; App Data</th>
-                    <th className="py-2.5 px-3">Access Status</th>
+                  <tr className="bg-plum-900 text-white font-extrabold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-3">Customer # (1st Entry)</th>
+                    <th className="py-3 px-3">Name</th>
+                    <th className="py-3 px-3">Email</th>
+                    <th className="py-3 px-3">Age</th>
+                    <th className="py-3 px-3">Number Used (Phone)</th>
+                    {showUserPasswords && <th className="py-3 px-3">Password</th>}
+                    <th className="py-3 px-3">First Entry &amp; Device</th>
+                    <th className="py-3 px-3">Access Status</th>
+                    <th className="py-3 px-3">Fix / Edit</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 bg-white">
                   {filteredUsers.map((u, idx) => {
                     const st = getTrialStatus(u);
-                    const periodsCount = Array.isArray(u.periods) ? u.periods.length : 0;
-                    const logsCount = u.dailyLogs ? Object.keys(u.dailyLogs).length : 0;
-                    const latestPeriod =
-                      periodsCount > 0 ? u.periods[u.periods.length - 1] : null;
-                    const createdDateStr = u.createdAt
-                      ? new Date(u.createdAt).toLocaleDateString('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                          year: 'numeric',
-                        })
-                      : 'Synced';
-                    const lastActiveStr =
-                      u.lastSignInAt || u.lastUpdatedAt
-                        ? new Date(u.lastSignInAt || u.lastUpdatedAt || '').toLocaleString('en-US', {
+                    const custNum = u.customerNumber || idx + 1;
+                    const phoneUsed = resolveCustomerPhoneUsed(u);
+                    const firstEntryDateStr =
+                      u.firstEntryAt || u.createdAt
+                        ? new Date(u.firstEntryAt || u.createdAt).toLocaleString('en-US', {
                             month: 'short',
                             day: 'numeric',
+                            year: 'numeric',
                             hour: 'numeric',
                             minute: '2-digit',
                           })
-                        : createdDateStr;
+                        : 'Synced';
 
                     return (
-                      <tr key={`row-${u.email}`} className="hover:bg-lavender-50/50 transition-colors">
-                        <td className="py-2.5 px-3 font-mono font-extrabold text-slate-500">
-                          #{idx + 1}
+                      <tr
+                        key={`row-${u.email}`}
+                        className="hover:bg-lavender-50/60 transition-colors"
+                      >
+                        <td className="py-3 px-3">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-plum-900 text-gold-400 font-mono font-extrabold text-xs">
+                            #{custNum}
+                          </span>
                         </td>
-                        <td className="py-2.5 px-3 font-bold text-slate-900">
-                          {u.name || 'Student'}{' '}
-                          {u.age ? (
-                            <span className="text-[11px] font-normal text-slate-500">
-                              (Age {u.age})
-                            </span>
-                          ) : null}
+                        <td className="py-3 px-3 font-extrabold text-slate-900">
+                          {u.name || 'Student'}
                         </td>
-                        <td className="py-2.5 px-3 font-mono text-lavender-900 font-semibold">
+                        <td className="py-3 px-3 font-mono text-lavender-900 font-bold">
                           {u.email}
                         </td>
-                        <td className="py-2.5 px-3 font-mono text-slate-700">
-                          {u.phone || u.pendingPayment?.senderPhone || '—'}
+                        <td className="py-3 px-3 font-mono font-bold text-slate-800">
+                          {u.age ? `${u.age} yrs` : '—'}
+                        </td>
+                        <td className="py-3 px-3 font-mono font-bold text-sage-900">
+                          {phoneUsed ? (
+                            <span className="px-2 py-0.5 rounded-md bg-sage-50 border border-sage-200">
+                              {phoneUsed}
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditCustomerEntry(u)}
+                              className="text-[11px] font-bold text-amber-700 underline cursor-pointer"
+                            >
+                              + Add Number
+                            </button>
+                          )}
                         </td>
                         {showUserPasswords && (
-                          <td className="py-2.5 px-3 font-mono font-bold text-rose-800">
-                            {u.password || '—'}
+                          <td className="py-3 px-3 font-mono font-extrabold text-rose-800">
+                            <span className="px-2 py-0.5 rounded-md bg-rose-50 border border-rose-200">
+                              {u.password || '—'}
+                            </span>
                           </td>
                         )}
-                        <td className="py-2.5 px-3 text-slate-600 font-mono text-[11px]">
-                          {createdDateStr}
+                        <td className="py-3 px-3 text-slate-600 text-[11px]">
+                          <div className="font-mono font-semibold text-slate-800">
+                            {firstEntryDateStr}
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            {u.deviceInfo || '📱/💻 WebApp Link'} • {u.signInCount || 1} entry(s)
+                          </div>
                         </td>
-                        <td className="py-2.5 px-3 text-slate-600 font-mono text-[11px]">
-                          {lastActiveStr}
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-700">
-                          <span className="font-semibold">{periodsCount} period(s)</span>
-                          {latestPeriod ? ` (LMP: ${latestPeriod.startDate})` : ''} •{' '}
-                          <span>{logsCount} log(s)</span>
-                        </td>
-                        <td className="py-2.5 px-3">
+                        <td className="py-3 px-3">
                           <span
                             className={`inline-block px-2 py-0.5 rounded-md font-extrabold text-[10px] ${
                               st.status === 'expired'
@@ -872,6 +981,16 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                             {st.daysLeft}d left ({st.status === 'trial' ? '2-Wk Free' : st.status})
                           </span>
                         </td>
+                        <td className="py-3 px-3">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditCustomerEntry(u)}
+                            className="px-2.5 py-1 rounded-lg bg-lavender-100 hover:bg-lavender-200 text-lavender-900 font-extrabold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+                        </td>
                       </tr>
                     );
                   })}
@@ -880,16 +999,17 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
             </div>
           )}
 
-          {/* Detailed Individual User Cards with Full Controls */}
+          {/* Detailed Individual Customer Cards with Full Entry Details & Controls */}
           {filteredUsers.length === 0 ? (
             <div className="rounded-2xl bg-cream p-6 text-center text-xs text-slate-500">
-              No sign-ups match the selected filter. Click &ldquo;Sync All Sign-Ups&rdquo; at the top right to refresh from Cloud Firestore.
+              No customer entries match the selected filter. Click &ldquo;Sync All Entries&rdquo; at the top right to refresh from Cloud Firestore.
             </div>
           ) : (
             <div className="space-y-3.5">
               {filteredUsers.map((u, idx) => {
                 const st = getTrialStatus(u);
-                const phoneDisplay = u.phone || u.pendingPayment?.senderPhone || 'Not provided';
+                const custNum = u.customerNumber || idx + 1;
+                const phoneDisplay = resolveCustomerPhoneUsed(u) || 'Not entered yet';
                 const hasPending =
                   st.status === 'pending_verification' || u.pendingPayment?.status === 'pending';
                 const isRecentlyApproved = lastApprovedUserEmail === u.email;
@@ -910,8 +1030,18 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                   );
                 } else if (st.status === 'pending_verification') {
                   statusBadge = (
-                    <span className="px-2.5 py-1 rounded-lg bg-orange-100 text-orange-800 border border-orange-300 text-xs font-extrabold">
-                      ⏳ Pending Verification
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-orange-100 text-orange-800 border border-orange-300 text-xs font-extrabold">
+                      <span>⏳ Pending Verification</span>
+                      {onClearPendingVerification && (
+                        <button
+                          type="button"
+                          onClick={() => onClearPendingVerification(u.email)}
+                          title="Remove Pending Owner Verification"
+                          className="w-4 h-4 rounded-full bg-white hover:bg-rose-100 text-orange-900 hover:text-rose-700 border border-orange-300 flex items-center justify-center text-[10px] font-extrabold cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      )}
                     </span>
                   );
                 } else if (st.status === 'expired') {
@@ -925,7 +1055,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                 return (
                   <div
                     key={u.email}
-                    className={`rounded-2xl p-4 border transition-all ${
+                    className={`relative rounded-2xl p-4 border transition-all ${
                       hasPending
                         ? 'bg-orange-50/70 border-2 border-orange-400 shadow-xs'
                         : isRecentlyApproved
@@ -933,88 +1063,125 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                         : 'bg-cream/60 border-slate-200'
                     }`}
                   >
+                    {hasPending && onClearPendingVerification && (
+                      <button
+                        type="button"
+                        onClick={() => onClearPendingVerification(u.email)}
+                        title="Remove Pending Owner Verification"
+                        aria-label="Remove Pending Owner Verification"
+                        className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white hover:bg-rose-100 text-orange-900 hover:text-rose-700 border border-orange-300 font-extrabold text-xs flex items-center justify-center shadow-2xs transition-all cursor-pointer z-10"
+                      >
+                        ✕
+                      </button>
+                    )}
                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                      {/* User Info & Contact Details */}
-                      <div className="space-y-1.5">
+                      {/* Customer Entry Info & 5 Core Fields */}
+                      <div className="space-y-2 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="px-2 py-0.5 rounded-md bg-slate-900 text-gold-400 font-mono text-xs font-extrabold">
-                            #{idx + 1}
+                          <span className="px-2.5 py-1 rounded-lg bg-plum-900 text-gold-400 font-mono text-xs font-extrabold">
+                            Customer #{custNum} (First Entry)
                           </span>
                           <span className="font-display font-extrabold text-base text-slate-900">
                             {u.name || 'Student'}
                           </span>
-                          {u.age && (
-                            <span className="text-xs font-bold text-slate-500">
-                              (Age {u.age})
-                            </span>
-                          )}
                           {statusBadge}
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">
-                          <span className="inline-flex items-center gap-1 font-semibold">
-                            <Mail className="w-3.5 h-3.5 text-lavender-700" />
-                            <span>{u.email}</span>
-                          </span>
-                          <span className="inline-flex items-center gap-1 font-semibold">
-                            <Phone className="w-3.5 h-3.5 text-sage-700" />
-                            <span>Phone: {phoneDisplay}</span>
-                          </span>
-                          {showUserPasswords && (
-                            <span className="inline-flex items-center gap-1 font-mono bg-white px-2 py-0.5 rounded-md border border-slate-200 text-rose-800 font-bold">
-                              <span>Password: {u.password || '—'}</span>
+                        {/* Highlighted 5 Required Fields Grid: Name, Email, Age, Number Used, Password */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 bg-white p-3 rounded-xl border border-slate-200 text-xs">
+                          <div>
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                              1. Customer Name
                             </span>
-                          )}
-                          <span className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-500">
+                            <span className="font-extrabold text-slate-900">{u.name || 'Student'}</span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                              2. Email Address
+                            </span>
+                            <span className="font-mono font-bold text-lavender-900 break-all">
+                              {u.email}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                              3. Age
+                            </span>
+                            <span className="font-mono font-bold text-slate-800">
+                              {u.age ? `${u.age} years` : 'Not set'}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                              4. Number Used (Phone)
+                            </span>
+                            <span className="font-mono font-bold text-sage-900">
+                              {phoneDisplay}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                              5. Password
+                            </span>
+                            <span className="font-mono font-extrabold text-rose-800">
+                              {showUserPasswords ? u.password || '—' : '••••••••'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
+                          <span className="inline-flex items-center gap-1 font-mono">
                             <Calendar className="w-3.5 h-3.5 text-slate-400" />
                             <span>
-                              Signed Up:{' '}
+                              1st Entry:{' '}
                               <strong>
-                                {u.createdAt
-                                  ? new Date(u.createdAt).toLocaleDateString('en-US', {
+                                {u.firstEntryAt || u.createdAt
+                                  ? new Date(u.firstEntryAt || u.createdAt).toLocaleString('en-US', {
                                       month: 'short',
                                       day: 'numeric',
                                       year: 'numeric',
+                                      hour: 'numeric',
+                                      minute: '2-digit',
                                     })
                                   : 'Recorded'}
                               </strong>
                             </span>
                           </span>
-                          <span className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-500">
+                          <span className="inline-flex items-center gap-1 font-mono">
+                            <Smartphone className="w-3.5 h-3.5 text-slate-400" />
+                            <span>{u.deviceInfo || '📱/💻 WebApp Link'}</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1 font-mono">
                             <Clock className="w-3.5 h-3.5 text-slate-400" />
                             <span>
                               Remaining: <strong>{st.daysLeft} days</strong>
-                              {u.subscriptionUntil
-                                ? ` (Until ${new Date(u.subscriptionUntil).toLocaleDateString()})`
-                                : ''}
                             </span>
                           </span>
-                        </div>
-
-                        {/* Activity Badge Row */}
-                        <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-white border border-slate-200 text-slate-700 font-semibold">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 font-semibold">
                             <Activity className="w-3 h-3 text-rose-600" />
-                            <span>{periodsCount} Logged Period(s)</span>
-                          </span>
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-white border border-slate-200 text-slate-700 font-semibold">
-                            <span>📝 {logsCount} Daily Mood/Symptom Log(s)</span>
+                            <span>{periodsCount} Period(s) • {logsCount} Log(s)</span>
                           </span>
                           {appointmentsCount > 0 && (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-white border border-slate-200 text-plum-900 font-semibold">
-                              <span>✨ {appointmentsCount} Sidratu Clinic Booking(s)</span>
-                            </span>
-                          )}
-                          {u.skincareGoal && (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-lavender-50 border border-lavender-200 text-lavender-900 font-semibold">
-                              <span>Goal: {u.skincareGoal}</span>
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-slate-200 text-plum-900 font-semibold">
+                              <span>✨ {appointmentsCount} Booking(s)</span>
                             </span>
                           )}
                         </div>
 
                         {/* Submitted Orange Money Details Box */}
                         {u.pendingPayment && (
-                          <div className="mt-2 p-3 rounded-xl bg-white border border-orange-200 text-xs space-y-1">
+                          <div className="relative mt-2 p-3 pr-9 rounded-xl bg-white border border-orange-200 text-xs space-y-1">
+                            {onClearPendingVerification && (
+                              <button
+                                type="button"
+                                onClick={() => onClearPendingVerification(u.email)}
+                                title="Remove Pending Owner Verification"
+                                aria-label="Remove Pending Owner Verification"
+                                className="absolute top-2 right-2 w-6 h-6 rounded-full bg-orange-100 hover:bg-rose-100 text-orange-900 hover:text-rose-700 border border-orange-300 font-extrabold text-[11px] flex items-center justify-center cursor-pointer transition-all"
+                              >
+                                ✕
+                              </button>
+                            )}
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <span className="font-extrabold text-orange-900 uppercase tracking-wider text-[10px]">
                                 🟧 Submitted Orange Money Transaction ({u.pendingPayment.amount})
@@ -1042,6 +1209,16 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
 
                       {/* Admin Action Buttons */}
                       <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditCustomerEntry(u)}
+                          className="px-3 py-2.5 rounded-xl bg-lavender-100 hover:bg-lavender-200 text-lavender-900 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                          title="Edit or fix customer Name, Email, Age, Number Used, or Password"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                          <span>Edit Entry</span>
+                        </button>
+
                         {onExtendUserFreeAccess && (
                           <button
                             type="button"
@@ -1150,14 +1327,15 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="font-display font-extrabold text-lg text-slate-900">
-                    Grant Admin Access to Team Members (See All Sign-Ups &amp; User Count)
+                    Grant Admin Access to Team Members (See All Customer Entries &amp; User Count)
                   </h2>
                   <span className="px-2.5 py-0.5 rounded-lg bg-sage-100 text-sage-800 text-[11px] font-extrabold">
-                    {1 + additionalAdmins.length} Authorized Admin{additionalAdmins.length === 0 ? '' : 's'}
+                    {1 + additionalAdmins.length} Authorized Admin
+                    {additionalAdmins.length === 0 ? '' : 's'}
                   </span>
                 </div>
                 <p className="text-xs text-slate-600">
-                  Any admin added below gets full access to view all {stats.total} sign-ups, see how many people are in the app in real time, and approve or manage accounts.
+                  Any admin added below gets full access to view all {stats.total} customer entries, see how many people are in the app in real time, and approve or manage accounts.
                 </p>
               </div>
             </div>

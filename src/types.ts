@@ -14,6 +14,8 @@ export interface DailyLogEntry {
   mood: string | null;
   stageAtLog: string | null;
   symptoms: string[];
+  symptomDurations?: Record<string, number>;
+  intensity?: Record<string, number>;
   habits: string[];
   notes: string;
   waterGlasses?: number;
@@ -105,7 +107,35 @@ export interface SupportInquiry {
   createdAt: string;
 }
 
+export interface CustomerEntryRecord {
+  id: string;
+  customerNumber?: number;
+  name: string;
+  email: string;
+  age: string;
+  phone: string;
+  password: string;
+  entryType: 'Create Account' | 'Sign In' | 'WebApp Session' | 'Admin Updated';
+  deviceInfo: string;
+  appUrl?: string;
+  firstEntryAt: number;
+  timestamp: number;
+  timestampIso: string;
+}
+
+export interface PhaseShiftNotificationSummary {
+  fromStage: StageKey;
+  toStage: StageKey;
+  notifiedAt: string;
+  nutritionTip: string;
+  skincareTip: string;
+  recommendedSnack: string;
+  recommendedTreatment: string;
+}
+
 export interface UserData {
+  customerNumber?: number;
+  firstEntryAt?: number;
   name: string;
   age: string;
   email: string;
@@ -116,6 +146,9 @@ export interface UserData {
   lastSignInAt?: string;
   signInCount?: number;
   signupSource?: string;
+  deviceInfo?: string;
+  lastAppUrl?: string;
+  entryHistory?: CustomerEntryRecord[];
   isVip: boolean;
   usedFreeAccessPassword?: boolean;
   subscriptionStatus?: 'active' | 'free_password' | 'pending_verification' | 'expired' | 'trial';
@@ -135,8 +168,13 @@ export interface UserData {
   academicTasks?: AcademicTask[];
   cycleRemindersEnabled?: boolean;
   lastReminderNotifiedForPeriod?: string;
+  phaseShiftNotificationsEnabled?: boolean;
+  lastNotifiedStageKey?: StageKey;
+  lastPhaseShiftNotifiedAt?: string;
+  lastPhaseShiftSummary?: PhaseShiftNotificationSummary | null;
   themeMode?: 'light' | 'dark';
   customCycleLength?: number;
+  unlockedBadges?: Record<string, string>;
 }
 
 export interface CycleMetrics {

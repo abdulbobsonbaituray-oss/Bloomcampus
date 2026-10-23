@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   STORAGE_SESSION_KEY,
   STORAGE_USERS_KEY,
@@ -15,6 +15,7 @@ import {
   HABIT_ITEMS,
   PHASE_ADVISOR_DATA,
   STAGE_NUTRITION_DATA,
+  PHASE_SHIFT_NOTIFICATION_DATA,
   CAMPUS_MYTHS,
 } from './constants';
 import {
@@ -23,6 +24,7 @@ import {
   DailyLogEntry,
   AdminConfig,
   SupportInquiry,
+  PhaseShiftNotificationSummary,
 } from './types';
 import {
   addDaysISO,
@@ -57,13 +59,23 @@ import { NutritionCravingSupportCard } from './components/NutritionCravingSuppor
 import { CycleJournalPromptsSection } from './components/CycleJournalPromptsSection';
 import { FullScreenCalendarModal } from './components/FullScreenCalendarModal';
 import { OwnerAdminDashboard } from './components/OwnerAdminDashboard';
+import { BottomNavBar, CoreNavSection } from './components/BottomNavBar';
+import { BadgesMilestonesSection, evaluateUserBadges } from './components/BadgesMilestonesSection';
+import { BioscienceReproductiveEducationCenter } from './components/BioscienceReproductiveEducationCenter';
 import { exportClinicSummaryToPDF } from './utils/clinicPdfExport';
 import {
+  assignSequentialCustomerNumbers,
   deleteUserFromFirestore,
   fetchAllUsersFromFirestore,
+  fetchSingleUserFromFirestore,
+  getClientDeviceLabel,
+  logCustomerEntryToFirestore,
+  resolveCustomerPhoneUsed,
   signInWithGooglePopup,
+  signOutFirebase,
   subscribeToAdminConfigFirestore,
   subscribeToAllUsersFirestore,
+  subscribeToFirebaseAuth,
   subscribeToSupportInquiriesFirestore,
   syncAdminConfigToFirestore,
   syncAllUsersToFirestore,
@@ -78,7 +90,19 @@ interface ToastMessage {
 }
 
 function sanitizeClientUser(u: UserData, emailKey: string): UserData {
-  const cleaned: UserData = { ...u, email: emailKey };
+  const firstMs =
+    Number(u.firstEntryAt) > 0
+      ? Number(u.firstEntryAt)
+      : Number(u.createdAt) > 0
+      ? Number(u.createdAt)
+      : Date.now();
+  const cleaned: UserData = {
+    ...u,
+    email: emailKey,
+    firstEntryAt: firstMs,
+    createdAt: firstMs,
+    phone: resolveCustomerPhoneUsed(u),
+  };
   if (
     typeof cleaned.paymentMethod === 'string' &&
     (cleaned.paymentMethod.includes('Bobson') ||
@@ -123,11 +147,107 @@ function mergeUsersMaps(
     }
     const existingTs = getSafeUserTimestamp(existing);
     const incomingTs = getSafeUserTimestamp(u);
-    if (incomingTs >= existingTs) {
-      merged[emailKey] = sanitizeClientUser({ ...existing, ...u }, emailKey);
-    }
+    const isIncomingNewer = incomingTs >= existingTs;
+    const base = isIncomingNewer ? { ...existing, ...u } : { ...u, ...existing };
+
+    // 1. Preserve User Profile fields (name, age, phone, password, earliest firstEntryAt)
+    const existingFirst = Number(existing.firstEntryAt || existing.createdAt || Date.now());
+    const incomingFirst = Number(u.firstEntryAt || u.createdAt || Date.now());
+    const earliestFirst = Math.min(
+      existingFirst > 0 ? existingFirst : Date.now(),
+      incomingFirst > 0 ? incomingFirst : Date.now()
+    );
+    const bestPhone =
+      (isIncomingNewer ? resolveCustomerPhoneUsed(u) : '') ||
+      resolveCustomerPhoneUsed(existing) ||
+      resolveCustomerPhoneUsed(u);
+    const bestAge =
+      (isIncomingNewer && (u.age || '').trim() ? u.age.trim() : '') ||
+      (existing.age || '').trim() ||
+      (u.age || '').trim();
+    const bestPassword =
+      (isIncomingNewer && (u.password || '').trim() ? u.password.trim() : '') ||
+      (existing.password || '').trim() ||
+      (u.password || '').trim();
+    const bestName =
+      (isIncomingNewer &&
+      (u.name || '').trim() &&
+      u.name.trim() !== emailKey.split('@')[0]
+        ? u.name.trim()
+        : '') ||
+      ((existing.name || '').trim() && existing.name.trim() !== emailKey.split('@')[0]
+        ? existing.name.trim()
+        : '') ||
+      (u.name || existing.name || emailKey.split('@')[0] || 'Student').trim();
+
+    // 2. Preserve Period Tracking Information (periods, dailyLogs, emergencyPills, journalEntries, unlockedBadges)
+    const existingPeriods = Array.isArray(existing.periods) ? existing.periods : [];
+    const incomingPeriods = Array.isArray(u.periods) ? u.periods : [];
+    const bestPeriods =
+      isIncomingNewer && incomingPeriods.length > 0
+        ? incomingPeriods
+        : existingPeriods.length > 0
+        ? existingPeriods
+        : incomingPeriods;
+
+    const mergedDailyLogs = isIncomingNewer
+      ? { ...(existing.dailyLogs || {}), ...(u.dailyLogs || {}) }
+      : { ...(u.dailyLogs || {}), ...(existing.dailyLogs || {}) };
+
+    const existingPills = Array.isArray(existing.emergencyPills) ? existing.emergencyPills : [];
+    const incomingPills = Array.isArray(u.emergencyPills) ? u.emergencyPills : [];
+    const bestPills =
+      isIncomingNewer && incomingPills.length > 0
+        ? incomingPills
+        : existingPills.length > 0
+        ? existingPills
+        : incomingPills;
+
+    const existingJournals = Array.isArray(existing.journalEntries) ? existing.journalEntries : [];
+    const incomingJournals = Array.isArray(u.journalEntries) ? u.journalEntries : [];
+    const bestJournals =
+      isIncomingNewer && incomingJournals.length > 0
+        ? incomingJournals
+        : existingJournals.length > 0
+        ? existingJournals
+        : incomingJournals;
+
+    const mergedBadges = {
+      ...(existing.unlockedBadges || {}),
+      ...(u.unlockedBadges || {}),
+    };
+
+    // 3. Preserve Subscription Status & Payment History
+    const existingPayHistory = Array.isArray(existing.paymentHistory) ? existing.paymentHistory : [];
+    const incomingPayHistory = Array.isArray(u.paymentHistory) ? u.paymentHistory : [];
+    const bestPayHistory =
+      isIncomingNewer && incomingPayHistory.length > 0
+        ? incomingPayHistory
+        : existingPayHistory.length > 0
+        ? existingPayHistory
+        : incomingPayHistory;
+
+    merged[emailKey] = sanitizeClientUser(
+      {
+        ...base,
+        name: bestName,
+        age: bestAge,
+        phone: bestPhone,
+        password: bestPassword,
+        firstEntryAt: earliestFirst,
+        createdAt: earliestFirst,
+        signInCount: Math.max(Number(existing.signInCount || 1), Number(u.signInCount || 1)),
+        periods: bestPeriods,
+        dailyLogs: mergedDailyLogs,
+        emergencyPills: bestPills,
+        journalEntries: bestJournals,
+        unlockedBadges: mergedBadges,
+        paymentHistory: bestPayHistory,
+      },
+      emailKey
+    );
   });
-  return merged;
+  return assignSequentialCustomerNumbers(merged);
 }
 
 function getAllUsers(): Record<string, UserData> {
@@ -149,18 +269,24 @@ function saveAllUsers(
   try {
     const normalized = mergeUsersMaps(getAllUsers(), usersObj);
     if (activeEmail && usersObj[activeEmail]) {
-      normalized[activeEmail.toLowerCase().trim()] = usersObj[activeEmail];
+      const cleanKey = activeEmail.toLowerCase().trim();
+      normalized[cleanKey] = {
+        ...normalized[cleanKey],
+        ...usersObj[activeEmail],
+        email: cleanKey,
+      };
     }
-    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(normalized));
+    const numbered = assignSequentialCustomerNumbers(normalized);
+    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(numbered));
 
     if (activeEmail) {
       const cleanKey = activeEmail.toLowerCase().trim();
-      const targetUser = normalized[cleanKey];
+      const targetUser = numbered[cleanKey];
       if (targetUser) {
         syncUserToFirestore(targetUser, cleanKey).catch(() => {});
       }
     } else {
-      syncAllUsersToFirestore(normalized).catch(() => {});
+      syncAllUsersToFirestore(numbered).catch(() => {});
     }
 
     fetch('/api/users/sync', {
@@ -168,8 +294,8 @@ function saveAllUsers(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: activeEmail || undefined,
-        userData: activeEmail ? normalized[activeEmail.toLowerCase().trim()] : undefined,
-        allUsers: normalized,
+        userData: activeEmail ? numbered[activeEmail.toLowerCase().trim()] : undefined,
+        allUsers: numbered,
         forceOverwriteUser,
       }),
     }).catch(() => {
@@ -191,7 +317,7 @@ export default function App() {
     }, 4200);
   };
 
-  // Auth State
+  // Auth State & Input Refs for Validation Focus
   const [authMode, setAuthMode] = useState<'signup' | 'signin'>('signup');
   const [authName, setAuthName] = useState('');
   const [authAge, setAuthAge] = useState('');
@@ -201,6 +327,15 @@ export default function App() {
   const [authFreeAccessPassInput, setAuthFreeAccessPassInput] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [signupPlanChoice, setSignupPlanChoice] = useState<'free_password' | 'orange_money'>('free_password');
+  const [authFieldError, setAuthFieldError] = useState<{
+    fieldId: 'authName' | 'authAge' | 'authEmail' | 'authPhone' | 'authPassword';
+    message: string;
+  } | null>(null);
+  const authNameInputRef = useRef<HTMLInputElement | null>(null);
+  const authAgeInputRef = useRef<HTMLInputElement | null>(null);
+  const authEmailInputRef = useRef<HTMLInputElement | null>(null);
+  const authPhoneInputRef = useRef<HTMLInputElement | null>(null);
+  const authPasswordInputRef = useRef<HTMLInputElement | null>(null);
 
   // Active User State & All Users Map
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
@@ -228,9 +363,10 @@ export default function App() {
   const [supportMessageInput, setSupportMessageInput] = useState<string>('');
   const [supportPhoneInput, setSupportPhoneInput] = useState<string>('');
 
-  // Active Navigation View ('tracker' | 'study' | 'sidratu')
-  const [activeNavTab, setActiveNavTab] = useState<'tracker' | 'study' | 'sidratu'>('tracker');
+  // Active Navigation View ('tracker' | 'checkin' | 'guide' | 'analytics' | 'study' | 'sidratu')
+  const [activeNavTab, setActiveNavTab] = useState<CoreNavSection>('tracker');
   const [activeTrackerAction, setActiveTrackerAction] = useState<
+    | 'badges'
     | 'nutrition'
     | 'hydration'
     | 'trends'
@@ -238,7 +374,52 @@ export default function App() {
     | 'videos'
     | 'all'
     | null
-  >(null);
+  >('trends');
+
+  const handleSelectNavSection = (section: CoreNavSection) => {
+    setActiveNavTab(section);
+    if (section === 'analytics' && !activeTrackerAction) {
+      setActiveTrackerAction('trends');
+    }
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const jumpToUpdateLmpSection = () => {
+    setShowPillAdviceModal(false);
+    setActiveNavTab('tracker');
+    showToast(
+      '🩸 Returned to Update LMP! Enter your new Last Menstrual Period Start Date below and tap Save.',
+      'info'
+    );
+    window.setTimeout(() => {
+      const lmpSection = document.getElementById('update-lmp-section');
+      if (lmpSection) {
+        lmpSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      const startInput = document.getElementById('periodStartDateInput') as HTMLInputElement | null;
+      if (startInput) {
+        startInput.focus();
+      }
+    }, 120);
+  };
+
+  const jumpToEmergencyPillLogger = () => {
+    setShowPillAdviceModal(false);
+    setActiveNavTab('guide');
+    showToast('💊 Ready to note down your Emergency Pill date and time!', 'info');
+    window.setTimeout(() => {
+      const pillSection = document.getElementById('standalone-emergency-pill');
+      if (pillSection) {
+        pillSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      const pillInput = document.getElementById('customPillDateTime') as HTMLInputElement | null;
+      if (pillInput) {
+        pillInput.focus();
+      }
+    }, 120);
+  };
 
   // Locked Real-Time Current Date (Strictly Read-Only System Clock)
   const [lockedTodayStr, setLockedTodayStr] = useState<string>(() => getLockedTodayISO());
@@ -279,8 +460,10 @@ export default function App() {
   // Campus Myth Index
   const [currentMythIndex, setCurrentMythIndex] = useState<number>(0);
 
-  // Daily Notes Local Input State
+  // Daily Notes & Symptom Search Filter Local Input State
   const [dailyNotesInput, setDailyNotesInput] = useState<string>('');
+  const [symptomSearchQuery, setSymptomSearchQuery] = useState<string>('');
+  const [symptomCategoryFilter, setSymptomCategoryFilter] = useState<string>('ALL');
 
   // Privacy Blur, Dark Mode & Alert Banners
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -300,6 +483,8 @@ export default function App() {
   const [showPaywallModal, setShowPaywallModal] = useState<boolean>(false);
   const [isPaywallPreview, setIsPaywallPreview] = useState<boolean>(true);
   const [showFullScreenCalendar, setShowFullScreenCalendar] = useState<boolean>(false);
+  const [showBadgesModal, setShowBadgesModal] = useState<boolean>(false);
+  const [showProfileModal, setShowProfileModal] = useState<boolean>(false);
 
   // Paywall / Lock Screen Form State
   const [paymentTab, setPaymentTab] = useState<'orange' | 'free_password'>('orange');
@@ -369,10 +554,18 @@ export default function App() {
       const m = calculateCycleMetrics(loadedUser, todayIso);
       setActiveAdvisorStage(m.stageKey);
       const trial = getTrialStatus(loadedUser);
-      if (trial.status === 'expired' || trial.status === 'pending_verification') {
+      if ( trial.status === 'expired' || trial.status === 'pending_verification') {
         setIsPaywallPreview(false);
         setShowPaywallModal(true);
       }
+      // Immediately send the active session user's entry to Cloud Firestore so every phone/computer opening the link is reported
+      loadedUser = {
+        ...loadedUser,
+        deviceInfo: getClientDeviceLabel(),
+        lastUpdatedAt: new Date().toISOString(),
+      };
+      localUsers[savedEmail] = loadedUser;
+      logCustomerEntryToFirestore(loadedUser, 'WebApp Session').catch(() => {});
     }
 
     // Push any local users to Cloud Firestore on boot & subscribe in real time
@@ -427,7 +620,6 @@ export default function App() {
             const mergedUsers = mergeUsersMaps(getAllUsers(), data.users as Record<string, UserData>);
             localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(mergedUsers));
             setAllUsersMap(mergedUsers);
-            syncAllUsersToFirestore(mergedUsers).catch(() => {});
             const activeSessionEmail = localStorage.getItem(STORAGE_SESSION_KEY);
             if (activeSessionEmail && mergedUsers[activeSessionEmail]) {
               const syncedUser = mergedUsers[activeSessionEmail];
@@ -447,13 +639,66 @@ export default function App() {
         });
     };
 
+    const unsubFirebaseAuth = subscribeToFirebaseAuth(async (fbUser) => {
+      if (!fbUser || !fbUser.email) return;
+      const gEmail = fbUser.email.trim().toLowerCase();
+      const activeSession = localStorage.getItem(STORAGE_SESSION_KEY);
+      if (activeSession) return;
+
+      let existingRecord: UserData | null = getAllUsers()[gEmail] || null;
+      if (!existingRecord) {
+        existingRecord = await fetchSingleUserFromFirestore(gEmail);
+      }
+      const nowIso = new Date().toISOString();
+      const nowMs = Date.now();
+      const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
+      const firstMs =
+        existingRecord && Number(existingRecord.firstEntryAt || existingRecord.createdAt) > 0
+          ? Number(existingRecord.firstEntryAt || existingRecord.createdAt)
+          : nowMs;
+
+      const resolvedUser: UserData =
+        existingRecord ||
+        createDefaultUserObject(
+          fbUser.displayName || gEmail.split('@')[0],
+          gEmail,
+          'GoogleAuthVerified',
+          '21',
+          fbUser.phoneNumber || ''
+        );
+
+      resolvedUser.name = fbUser.displayName || resolvedUser.name || gEmail.split('@')[0];
+      resolvedUser.email = gEmail;
+      resolvedUser.firstEntryAt = firstMs;
+      resolvedUser.createdAt = firstMs;
+      resolvedUser.deviceInfo = getClientDeviceLabel();
+      resolvedUser.subscriptionStatus = resolvedUser.subscriptionStatus || 'active';
+      resolvedUser.subscriptionUntil = resolvedUser.subscriptionUntil || nowMs + twoWeeksMs;
+      resolvedUser.lastUpdatedAt = nowIso;
+      resolvedUser.lastSignInAt = nowIso;
+
+      const all = getAllUsers();
+      all[gEmail] = resolvedUser;
+      const numbered = assignSequentialCustomerNumbers(all);
+      saveAllUsers(numbered, gEmail, true);
+      setAllUsersMap({ ...numbered });
+      setCurrentUserEmail(gEmail);
+      setUserData(numbered[gEmail]);
+      localStorage.setItem(STORAGE_SESSION_KEY, gEmail);
+    });
+
     refreshUsersFromServer();
-    const syncTimer = window.setInterval(refreshUsersFromServer, 6000);
+    const syncTimer = window.setInterval(refreshUsersFromServer, 25000);
+    window.addEventListener('focus', refreshUsersFromServer);
+    window.addEventListener('online', refreshUsersFromServer);
     return () => {
       window.clearInterval(syncTimer);
+      window.removeEventListener('focus', refreshUsersFromServer);
+      window.removeEventListener('online', refreshUsersFromServer);
       unsubUsers();
       unsubAdminCfg();
       unsubInquiries();
+      unsubFirebaseAuth();
     };
   }, []);
 
@@ -514,8 +759,46 @@ export default function App() {
     setActiveAdvisorStage(m.stageKey);
   }, [selectedDateStr, userData]);
 
+  // Automatically detect newly unlocked virtual badges and persist their unlock timestamps
+  useEffect(() => {
+    if (!userData) return;
+    const evalResult = evaluateUserBadges(userData);
+    const existingUnlocked = userData.unlockedBadges || {};
+    const newlyUnlocked: string[] = [];
+    const nextUnlockedMap: Record<string, string> = { ...existingUnlocked };
+    const nowIso = new Date().toISOString();
+
+    evalResult.badges.forEach((b) => {
+      if (b.isUnlocked && !existingUnlocked[b.id]) {
+        nextUnlockedMap[b.id] = nowIso;
+        newlyUnlocked.push(`${b.emoji} ${b.title}`);
+      }
+    });
+
+    if (newlyUnlocked.length > 0) {
+      const hadPreviousBadges = Object.keys(existingUnlocked).length > 0;
+      updateUserData((prev) => ({
+        ...prev,
+        unlockedBadges: {
+          ...(prev.unlockedBadges || {}),
+          ...nextUnlockedMap,
+        },
+      }));
+      if (hadPreviousBadges) {
+        showToast(
+          `🏅 Milestone Badge Unlocked: ${newlyUnlocked.join(', ')}!`,
+          'success'
+        );
+      }
+    }
+  }, [userData?.periods, userData?.dailyLogs, userData?.journalEntries]);
+
   // Helper to dispatch a native Browser Notification (with Service Worker fallback)
-  const triggerBrowserNotification = (title: string, body: string): boolean => {
+  const triggerBrowserNotification = (
+    title: string,
+    body: string,
+    tag = 'bloomcampus-2day-reminder'
+  ): boolean => {
     if (typeof window === 'undefined' || !('Notification' in window)) {
       return false;
     }
@@ -530,21 +813,21 @@ export default function App() {
               body,
               icon: '/icon.svg',
               badge: '/icon.svg',
-              tag: 'bloomcampus-2day-reminder',
+              tag,
             });
           })
           .catch(() => {
             new Notification(title, {
               body,
               icon: '/icon.svg',
-              tag: 'bloomcampus-2day-reminder',
+              tag,
             });
           });
       } else {
         new Notification(title, {
           body,
           icon: '/icon.svg',
-          tag: 'bloomcampus-2day-reminder',
+          tag,
         });
       }
       return true;
@@ -552,6 +835,185 @@ export default function App() {
       return false;
     }
   };
+
+  // Dispatch a Browser Notification + In-App Summary Banner when the user moves into a new cycle phase
+  const dispatchPhaseShiftNotification = async (
+    fromStage: StageKey,
+    toStage: StageKey,
+    options?: { requestPermissionIfDefault?: boolean }
+  ) => {
+    if (!userData) return;
+    const shiftGuide = PHASE_SHIFT_NOTIFICATION_DATA[toStage];
+    const fromInfo = PHASE_ADVISOR_DATA[fromStage];
+    const toInfo = PHASE_ADVISOR_DATA[toStage];
+
+    if (
+      options?.requestPermissionIfDefault &&
+      typeof window !== 'undefined' &&
+      'Notification' in window &&
+      Notification.permission === 'default'
+    ) {
+      try {
+        await Notification.requestPermission();
+      } catch {
+        // ignore
+      }
+    }
+
+    const notifTitle = `${toInfo.emoji} Phase Shift: ${fromInfo.shortName} → ${toInfo.shortName} Stage!`;
+    const notifBody = `🥗 Nutrition: ${shiftGuide.nutritionTip}\n✨ Skincare: ${shiftGuide.skincareTip}`;
+
+    const sentBrowser = triggerBrowserNotification(
+      notifTitle,
+      notifBody,
+      `bloomcampus-phase-shift-${toStage.toLowerCase()}`
+    );
+
+    const nowIso = new Date().toISOString();
+    const summary: PhaseShiftNotificationSummary = {
+      fromStage,
+      toStage,
+      notifiedAt: nowIso,
+      nutritionTip: shiftGuide.nutritionTip,
+      skincareTip: shiftGuide.skincareTip,
+      recommendedSnack: shiftGuide.recommendedSnack,
+      recommendedTreatment: shiftGuide.recommendedTreatment,
+    };
+
+    updateUserData((prev) => ({
+      ...prev,
+      phaseShiftNotificationsEnabled: prev.phaseShiftNotificationsEnabled ?? true,
+      lastNotifiedStageKey: toStage,
+      lastPhaseShiftNotifiedAt: nowIso,
+      lastPhaseShiftSummary: summary,
+    }));
+
+    if (sentBrowser) {
+      showToast(
+        `🔔 Phase Shift Browser Notification Sent (${fromInfo.shortName} → ${toInfo.shortName})! Check your nutrition & skincare tips.`,
+        'success'
+      );
+    } else {
+      showToast(
+        `${toInfo.emoji} Phase Shift (${fromInfo.shortName} → ${toInfo.shortName}): ${shiftGuide.recommendedSnack} & ${shiftGuide.recommendedTreatment}`,
+        'info'
+      );
+    }
+  };
+
+  // Toggle Phase Shift Browser Notifications ON/OFF
+  const handleTogglePhaseShiftNotifications = async () => {
+    if (!userData) return;
+    const currentlyEnabled = userData.phaseShiftNotificationsEnabled !== false;
+    const nextEnabled = !currentlyEnabled;
+
+    if (!nextEnabled) {
+      updateUserData((prev) => ({
+        ...prev,
+        phaseShiftNotificationsEnabled: false,
+      }));
+      showToast('🔕 Phase Shift Notifications turned off.', 'info');
+      return;
+    }
+
+    let permissionState: NotificationPermission | 'unsupported' =
+      typeof window !== 'undefined' && 'Notification' in window
+        ? Notification.permission
+        : 'unsupported';
+
+    if (permissionState === 'default') {
+      try {
+        permissionState = await Notification.requestPermission();
+      } catch {
+        permissionState = 'denied';
+      }
+    }
+
+    const currentMetrics = calculateCycleMetrics(userData, lockedTodayStr);
+    const toStage = currentMetrics.stageKey;
+    const shiftGuide = PHASE_SHIFT_NOTIFICATION_DATA[toStage];
+    const fromStage = shiftGuide.defaultFromStage;
+    const fromInfo = PHASE_ADVISOR_DATA[fromStage];
+    const toInfo = PHASE_ADVISOR_DATA[toStage];
+    const nowIso = new Date().toISOString();
+
+    const summary: PhaseShiftNotificationSummary = {
+      fromStage,
+      toStage,
+      notifiedAt: nowIso,
+      nutritionTip: shiftGuide.nutritionTip,
+      skincareTip: shiftGuide.skincareTip,
+      recommendedSnack: shiftGuide.recommendedSnack,
+      recommendedTreatment: shiftGuide.recommendedTreatment,
+    };
+
+    updateUserData((prev) => ({
+      ...prev,
+      phaseShiftNotificationsEnabled: true,
+      lastNotifiedStageKey: toStage,
+      lastPhaseShiftNotifiedAt: nowIso,
+      lastPhaseShiftSummary: summary,
+    }));
+
+    if (permissionState === 'granted') {
+      triggerBrowserNotification(
+        `${toInfo.emoji} Phase Shift Alerts Active (${fromInfo.shortName} → ${toInfo.shortName})!`,
+        `🥗 Nutrition: ${shiftGuide.nutritionTip}\n✨ Skincare: ${shiftGuide.skincareTip}`,
+        `bloomcampus-phase-shift-${toStage.toLowerCase()}`
+      );
+      showToast(
+        '🔔 Phase Shift Notifications ON! Browser notifications will alert you whenever you enter a new cycle phase.',
+        'success'
+      );
+    } else {
+      showToast(
+        '🔔 Phase Shift Notifications ON! In-app nutrition & skincare alerts active (enable browser notifications in site settings for desktop/phone popups).',
+        'info'
+      );
+    }
+  };
+
+  // Trigger / Test a Phase Shift Notification on demand (e.g., Follicular -> Ovulation or any stage)
+  const handleSimulatePhaseShiftNotification = async (targetStageOverride?: StageKey) => {
+    if (!userData) return;
+    const currentMetrics = calculateCycleMetrics(userData, lockedTodayStr);
+    const toStage: StageKey = targetStageOverride || currentMetrics.stageKey || 'OVULATION';
+    const fromStage: StageKey = PHASE_SHIFT_NOTIFICATION_DATA[toStage].defaultFromStage;
+    await dispatchPhaseShiftNotification(fromStage, toStage, {
+      requestPermissionIfDefault: true,
+    });
+  };
+
+  // Automatic Cycle Phase Shift Browser Notification Check when user moves into a new cycle phase
+  useEffect(() => {
+    if (!userData || userData.phaseShiftNotificationsEnabled === false) return;
+    if (!Array.isArray(userData.periods) || userData.periods.length === 0) return;
+
+    const currentMetrics = calculateCycleMetrics(userData, lockedTodayStr);
+    const currentStage = currentMetrics.stageKey;
+    const previousStage = userData.lastNotifiedStageKey;
+
+    if (!previousStage) {
+      // Initialize baseline stage so future transitions fire automatically
+      updateUserData((prev) => ({
+        ...prev,
+        lastNotifiedStageKey: currentStage,
+      }));
+      return;
+    }
+
+    if (previousStage !== currentStage) {
+      void dispatchPhaseShiftNotification(previousStage, currentStage, {
+        requestPermissionIfDefault: false,
+      });
+    }
+  }, [
+    userData?.periods,
+    userData?.customCycleLength,
+    userData?.lastNotifiedStageKey,
+    userData?.phaseShiftNotificationsEnabled,
+    lockedTodayStr,
+  ]);
 
   // Toggle 2-Day Cycle Reminder Notifications (requests Browser Notification permission)
   const handleToggleCycleReminders = async () => {
@@ -888,28 +1350,67 @@ export default function App() {
     email: string;
     phone: string;
     password: string;
+    originalEmail?: string;
   }) => {
     const emailClean = params.email.trim().toLowerCase();
+    const origClean = params.originalEmail ? params.originalEmail.trim().toLowerCase() : '';
     const users = mergeUsersMaps(getAllUsers(), allUsersMap);
     const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
-    const newUser = createDefaultUserObject(
-      params.name || emailClean.split('@')[0],
-      emailClean,
-      params.password,
-      params.age || '21',
-      params.phone
-    );
-    newUser.subscriptionStatus = 'active';
-    newUser.subscriptionUntil = Date.now() + twoWeeksMs;
-    newUser.paymentMethod = '2-Week Free Access';
-    newUser.signupSource = 'Admin Registered';
-    newUser.lastUpdatedAt = new Date().toISOString();
 
-    users[emailClean] = newUser;
-    saveAllUsers(users, emailClean, true);
-    setAllUsersMap({ ...users });
+    const existingRecord =
+      (origClean && users[origClean]) || users[emailClean] || null;
+
+    if (origClean && origClean !== emailClean && users[origClean]) {
+      delete users[origClean];
+      deleteUserFromFirestore(origClean).catch(() => {});
+      fetch('/api/users/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: origClean }),
+      }).catch(() => {});
+    }
+
+    const baseUser =
+      existingRecord ||
+      createDefaultUserObject(
+        params.name || emailClean.split('@')[0],
+        emailClean,
+        params.password,
+        params.age || '21',
+        params.phone
+      );
+
+    const firstMs =
+      existingRecord && Number(existingRecord.firstEntryAt || existingRecord.createdAt) > 0
+        ? Number(existingRecord.firstEntryAt || existingRecord.createdAt)
+        : Date.now();
+
+    const updatedUser: UserData = {
+      ...baseUser,
+      name: params.name.trim() || baseUser.name || emailClean.split('@')[0],
+      age: params.age.trim() || baseUser.age || '21',
+      email: emailClean,
+      phone: params.phone.trim() || resolveCustomerPhoneUsed(baseUser),
+      password: params.password.trim() || baseUser.password,
+      firstEntryAt: firstMs,
+      createdAt: firstMs,
+      subscriptionStatus: baseUser.subscriptionStatus || 'active',
+      subscriptionUntil: baseUser.subscriptionUntil || Date.now() + twoWeeksMs,
+      paymentMethod: baseUser.paymentMethod || '2-Week Free Access',
+      signupSource: existingRecord ? baseUser.signupSource || 'Admin Updated' : 'Admin Registered',
+      deviceInfo: baseUser.deviceInfo || getClientDeviceLabel(),
+      lastUpdatedAt: new Date().toISOString(),
+    };
+
+    users[emailClean] = updatedUser;
+    const numbered = assignSequentialCustomerNumbers(users);
+    saveAllUsers(numbered, emailClean, true);
+    logCustomerEntryToFirestore(numbered[emailClean], 'Admin Updated').catch(() => {});
+    setAllUsersMap({ ...numbered });
     showToast(
-      `✅ Registered ${newUser.name} (${newUser.email}) with 2 weeks free access! Total people in app: ${Object.keys(users).length}.`,
+      existingRecord
+        ? `✅ Updated customer entry #${numbered[emailClean]?.customerNumber || 1} (${updatedUser.name} • ${updatedUser.email}) across all devices!`
+        : `✅ Registered customer entry #${numbered[emailClean]?.customerNumber || Object.keys(numbered).length} (${updatedUser.name} • ${updatedUser.email})!`,
       'success'
     );
   };
@@ -1102,53 +1603,85 @@ export default function App() {
     }
   };
 
-  const handleAuthSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const nameTrim = authName.trim();
-    const ageTrim = authAge.trim();
-    const phoneTrim = authPhone.trim();
-    const emailTrim = authEmail.trim().toLowerCase();
-    const passVal = authPassword.trim();
-
-    if (!emailTrim || !passVal) {
-      showToast('Please enter your email and password.', 'warning');
-      return;
-    }
-
-    // Fetch latest users & adminConfig from both Cloud Firestore and server before authenticating so Sign-In works across all devices/browsers/deployments
-    let latestServerUsers: Record<string, UserData> = {};
-    let latestAdminCfg: AdminConfig = adminConfig;
-    try {
-      const cloudUsers = await fetchAllUsersFromFirestore();
-      if (cloudUsers && Object.keys(cloudUsers).length > 0) {
-        latestServerUsers = mergeUsersMaps(latestServerUsers, cloudUsers);
+  const focusAuthInputField = (
+    fieldId: 'authName' | 'authAge' | 'authEmail' | 'authPhone' | 'authPassword',
+    message: string
+  ) => {
+    setAuthFieldError({ fieldId, message });
+    showToast(message, 'warning');
+    const refMap: Record<
+      'authName' | 'authAge' | 'authEmail' | 'authPhone' | 'authPassword',
+      HTMLInputElement | null
+    > = {
+      authName: authNameInputRef.current,
+      authAge: authAgeInputRef.current,
+      authEmail: authEmailInputRef.current,
+      authPhone: authPhoneInputRef.current,
+      authPassword: authPasswordInputRef.current,
+    };
+    const targetInput =
+      refMap[fieldId] ||
+      (typeof document !== 'undefined'
+        ? (document.getElementById(fieldId) as HTMLInputElement | null)
+        : null);
+    if (targetInput) {
+      targetInput.focus();
+      try {
+        targetInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch {
+        // ignore scrollIntoView error
       }
-    } catch {
-      // ignore
     }
-    try {
-      const syncRes = await fetch(`/api/users/sync?email=${encodeURIComponent(emailTrim)}`);
-      if (syncRes.ok) {
-        const syncData = await syncRes.json();
-        if (syncData?.adminConfig && typeof syncData.adminConfig === 'object') {
-          latestAdminCfg = syncData.adminConfig;
-          setAdminConfig(syncData.adminConfig);
-          saveAdminConfig(syncData.adminConfig);
-        }
-        if (syncData?.users && typeof syncData.users === 'object') {
-          latestServerUsers = mergeUsersMaps(
-            latestServerUsers,
-            syncData.users as Record<string, UserData>
-          );
-        }
-      }
-    } catch {
-      // Offline fallback: use local storage
+  };
+
+  const handleAuthSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
+    if (e && typeof e.preventDefault === 'function') {
+      e.preventDefault();
     }
 
-    // Automatic Owner / Added Admin Routing if admin logs in via regular login/signup screen
-    if (isOwnerAdminCredentials(emailTrim, passVal, latestAdminCfg)) {
-      const mergedAll = mergeUsersMaps(mergeUsersMaps(getAllUsers(), allUsersMap), latestServerUsers);
+    // Read from React state with DOM input fallback (handles browser autofill / mobile keyboards)
+    const domName =
+      authNameInputRef.current?.value ||
+      (typeof document !== 'undefined'
+        ? (document.getElementById('authName') as HTMLInputElement | null)?.value || ''
+        : '');
+    const domAge =
+      authAgeInputRef.current?.value ||
+      (typeof document !== 'undefined'
+        ? (document.getElementById('authAge') as HTMLInputElement | null)?.value || ''
+        : '');
+    const domEmail =
+      authEmailInputRef.current?.value ||
+      (typeof document !== 'undefined'
+        ? (document.getElementById('authEmail') as HTMLInputElement | null)?.value || ''
+        : '');
+    const domPhone =
+      authPhoneInputRef.current?.value ||
+      (typeof document !== 'undefined'
+        ? (document.getElementById('authPhone') as HTMLInputElement | null)?.value || ''
+        : '');
+    const domPassword =
+      authPasswordInputRef.current?.value ||
+      (typeof document !== 'undefined'
+        ? (document.getElementById('authPassword') as HTMLInputElement | null)?.value || ''
+        : '');
+
+    const nameTrim = (authName || domName).trim();
+    const ageTrim = (authAge || domAge).trim();
+    const emailTrim = (authEmail || domEmail).trim().toLowerCase();
+    const phoneTrim = (authPhone || domPhone).trim();
+    const passVal = (authPassword || domPassword).trim();
+
+    if (nameTrim && nameTrim !== authName) setAuthName(nameTrim);
+    if (ageTrim && ageTrim !== authAge) setAuthAge(ageTrim);
+    if (emailTrim && emailTrim !== authEmail) setAuthEmail(emailTrim);
+    if (phoneTrim && phoneTrim !== authPhone) setAuthPhone(phoneTrim);
+    if (passVal && passVal !== authPassword) setAuthPassword(passVal);
+
+    // Check Owner / Admin credentials first so Admin login always works immediately
+    if (emailTrim && passVal && isOwnerAdminCredentials(emailTrim, passVal, adminConfig)) {
+      setAuthFieldError(null);
+      const mergedAll = mergeUsersMaps(getAllUsers(), allUsersMap);
       localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(mergedAll));
       setAllUsersMap(mergedAll);
       setIsAdminView(true);
@@ -1160,109 +1693,227 @@ export default function App() {
       return;
     }
 
-    if (authMode === 'signup' && !ageTrim) {
-      showToast('Please enter your age to create your account.', 'warning');
-      return;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const phoneDigits = phoneTrim.replace(/\D/g, '');
+
+    // Comprehensive per-field validation with user-friendly toast messages and input focusing
+    if (authMode === 'signup') {
+      // 1. Validate Name
+      if (!nameTrim) {
+        focusAuthInputField(
+          'authName',
+          'Please enter your full name in the "Your Name" field to create your account.'
+        );
+        return;
+      }
+      if (nameTrim.length < 2) {
+        focusAuthInputField(
+          'authName',
+          'Please enter at least 2 characters for your name.'
+        );
+        return;
+      }
+
+      // 2. Validate Age
+      if (!ageTrim) {
+        focusAuthInputField(
+          'authAge',
+          'Please enter your age in the "Age" field to create your account.'
+        );
+        return;
+      }
+      const parsedAge = Number(ageTrim);
+      if (!Number.isInteger(parsedAge) || Number.isNaN(parsedAge) || parsedAge < 10 || parsedAge > 99) {
+        focusAuthInputField(
+          'authAge',
+          'Please enter a valid age between 10 and 99.'
+        );
+        return;
+      }
+
+      // 3. Validate Email Address
+      if (!emailTrim) {
+        focusAuthInputField(
+          'authEmail',
+          'Please enter your email address in the "Email Address" field to create your account.'
+        );
+        return;
+      }
+      if (!emailRegex.test(emailTrim)) {
+        focusAuthInputField(
+          'authEmail',
+          'Please enter a valid email address (for example, you@example.com).'
+        );
+        return;
+      }
+
+      // 4. Validate Phone Number
+      if (!phoneTrim) {
+        focusAuthInputField(
+          'authPhone',
+          'Please enter your phone number in the "Phone Number Used" field to create your account.'
+        );
+        return;
+      }
+      if (phoneDigits.length < 6) {
+        focusAuthInputField(
+          'authPhone',
+          'Please enter a valid phone number with at least 6 digits (e.g., 076 123 456).'
+        );
+        return;
+      }
+
+      // 5. Validate Account Password
+      if (!passVal) {
+        focusAuthInputField(
+          'authPassword',
+          'Please enter a password in the "Account Password" field to secure your account.'
+        );
+        return;
+      }
+      if (passVal.length < 4) {
+        focusAuthInputField(
+          'authPassword',
+          'Please choose an account password that is at least 4 characters long.'
+        );
+        return;
+      }
+    } else {
+      // Sign-In Mode Validation
+      if (!emailTrim) {
+        focusAuthInputField(
+          'authEmail',
+          'Please enter your email address to sign in to your tracker.'
+        );
+        return;
+      }
+      if (!emailRegex.test(emailTrim)) {
+        focusAuthInputField(
+          'authEmail',
+          'Please enter a valid email address (for example, you@example.com).'
+        );
+        return;
+      }
+      if (!passVal) {
+        focusAuthInputField(
+          'authPassword',
+          'Please enter your account password to sign in to your tracker.'
+        );
+        return;
+      }
+      // Validate optional Sign-In profile fields if the user typed into them
+      if (ageTrim) {
+        const parsedAge = Number(ageTrim);
+        if (!Number.isInteger(parsedAge) || Number.isNaN(parsedAge) || parsedAge < 10 || parsedAge > 99) {
+          focusAuthInputField(
+            'authAge',
+            'Please enter a valid age between 10 and 99.'
+          );
+          return;
+        }
+      }
+      if (phoneTrim && phoneDigits.length < 6) {
+        focusAuthInputField(
+          'authPhone',
+          'Please enter a valid phone number with at least 6 digits.'
+        );
+        return;
+      }
     }
 
-    const users = mergeUsersMaps(mergeUsersMaps(getAllUsers(), allUsersMap), latestServerUsers);
+    setAuthFieldError(null);
+
+    const users = mergeUsersMaps(getAllUsers(), allUsersMap);
     const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
     const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const deviceLabel = getClientDeviceLabel();
 
-    if (authMode === 'signup') {
-      const newUser = createDefaultUserObject(
-        nameTrim || emailTrim.split('@')[0],
-        emailTrim,
-        passVal,
-        ageTrim,
-        phoneTrim
-      );
-      newUser.isVip = false;
-      newUser.usedFreeAccessPassword = false;
-      newUser.subscriptionStatus = 'active';
-      newUser.subscriptionUntil = Date.now() + twoWeeksMs;
-      newUser.paymentMethod = '2-Week Free Access';
-      newUser.lastUpdatedAt = nowIso;
-      newUser.lastSignInAt = nowIso;
-      newUser.signInCount = 1;
-      newUser.signupSource = 'Create Account';
+    // Check if this email already exists in our local/synced directory
+    const matchedKey = Object.keys(users).find(
+      (k) =>
+        k.toLowerCase().trim() === emailTrim ||
+        (users[k]?.email && users[k].email.toLowerCase().trim() === emailTrim)
+    );
+    const existing = matchedKey ? users[matchedKey] : undefined;
 
-      users[emailTrim] = newUser;
-      saveAllUsers(users, emailTrim, true);
-      setAllUsersMap({ ...users });
-      loginUserSession(emailTrim, users);
-      showToast(
-        `🌸 Welcome, ${newUser.name}! Your account is active with 2 weeks (14 days) of free access.`,
-        'success'
-      );
-      return;
-    } else {
-      // SIGN IN MODE — Find user case-insensitively across local + Cloud Firestore + server store, or auto-register with 2 weeks free access
-      const matchedKey = Object.keys(users).find(
-        (k) =>
-          k.toLowerCase().trim() === emailTrim ||
-          (users[k]?.email && users[k].email.toLowerCase().trim() === emailTrim)
-      );
-      const existing = matchedKey ? users[matchedKey] : undefined;
-
-      if (!existing) {
-        const newUser = createDefaultUserObject(
+    if (authMode === 'signup' || !existing) {
+      const firstEntryMs =
+        existing && Number(existing.firstEntryAt || existing.createdAt) > 0
+          ? Number(existing.firstEntryAt || existing.createdAt)
+          : nowMs;
+      const newUser =
+        existing ||
+        createDefaultUserObject(
           nameTrim || emailTrim.split('@')[0],
           emailTrim,
           passVal,
           ageTrim || '21',
           phoneTrim
         );
-        newUser.isVip = false;
-        newUser.usedFreeAccessPassword = false;
-        newUser.subscriptionStatus = 'active';
-        newUser.subscriptionUntil = Date.now() + twoWeeksMs;
-        newUser.paymentMethod = '2-Week Free Access';
-        newUser.lastUpdatedAt = nowIso;
-        newUser.lastSignInAt = nowIso;
-        newUser.signInCount = 1;
-        newUser.signupSource = 'Sign In';
 
-        users[emailTrim] = newUser;
-        saveAllUsers(users, emailTrim, true);
-        setAllUsersMap({ ...users });
-        loginUserSession(emailTrim, users);
-        showToast(
-          `🌸 Welcome, ${newUser.name}! Signed in with 2 weeks (14 days) of free access.`,
-          'success'
-        );
-        return;
-      }
+      newUser.name = nameTrim || existing?.name || emailTrim.split('@')[0];
+      newUser.age = ageTrim || existing?.age || '21';
+      newUser.email = emailTrim;
+      newUser.phone = phoneTrim || resolveCustomerPhoneUsed(existing);
+      newUser.password = passVal;
+      newUser.firstEntryAt = firstEntryMs;
+      newUser.createdAt = firstEntryMs;
+      newUser.deviceInfo = deviceLabel;
+      newUser.isVip = existing?.isVip ?? false;
+      newUser.usedFreeAccessPassword = existing?.usedFreeAccessPassword ?? false;
+      newUser.subscriptionStatus = existing?.subscriptionStatus || 'active';
+      newUser.subscriptionUntil = existing?.subscriptionUntil || nowMs + twoWeeksMs;
+      newUser.paymentMethod = existing?.paymentMethod || '2-Week Free Access';
+      newUser.lastUpdatedAt = nowIso;
+      newUser.lastSignInAt = nowIso;
+      newUser.signInCount = existing ? (existing.signInCount || 1) + 1 : 1;
+      newUser.signupSource = authMode === 'signup' ? 'Create Account' : 'Sign In';
 
-      // Check account password (case-tolerant / trimmed)
-      const storedPass = (existing.password || '').trim();
-      const passMatches =
-        !storedPass ||
-        storedPass === passVal ||
-        storedPass.toLowerCase() === passVal.toLowerCase();
+      users[emailTrim] = newUser;
+      const numbered = assignSequentialCustomerNumbers(users);
+      saveAllUsers(numbered, emailTrim, true);
+      setAllUsersMap({ ...numbered });
+      loginUserSession(emailTrim, numbered);
+      showToast(
+        `🌸 Welcome, ${newUser.name}! Entry #${numbered[emailTrim]?.customerNumber || 1} saved with 2 weeks (14 days) of free access.`,
+        'success'
+      );
 
-      if (!passMatches) {
-        showToast(
-          `Incorrect password for ${emailTrim}. Please enter your account password.`,
-          'warning'
-        );
-        return;
-      }
-
-      showToast(`🌸 Welcome back, ${existing.name || emailTrim}!`, 'success');
-
+      // Sync to Cloud Firestore and backend asynchronously without blocking UI transition
+      void logCustomerEntryToFirestore(
+        numbered[emailTrim],
+        authMode === 'signup' ? 'Create Account' : 'Sign In'
+      ).catch(() => {});
+      return;
+    } else {
+      // Returning user signing in: update any newly provided fields & record entry immediately
       if (nameTrim) existing.name = nameTrim;
       if (ageTrim) existing.age = ageTrim;
       if (phoneTrim) existing.phone = phoneTrim;
+      if (passVal) existing.password = passVal;
       existing.email = emailTrim;
+      existing.firstEntryAt =
+        Number(existing.firstEntryAt || existing.createdAt) > 0
+          ? Number(existing.firstEntryAt || existing.createdAt)
+          : nowMs;
+      existing.createdAt = existing.firstEntryAt;
+      existing.deviceInfo = deviceLabel;
       existing.lastUpdatedAt = nowIso;
       existing.lastSignInAt = nowIso;
       existing.signInCount = (existing.signInCount || 1) + 1;
 
       users[emailTrim] = existing;
-      saveAllUsers(users, emailTrim, true);
-      setAllUsersMap({ ...users });
-      loginUserSession(emailTrim, users);
+      const numbered = assignSequentialCustomerNumbers(users);
+      saveAllUsers(numbered, emailTrim, true);
+      setAllUsersMap({ ...numbered });
+      loginUserSession(emailTrim, numbered);
+      showToast(
+        `🌸 Welcome back, ${existing.name || emailTrim}! (Customer Entry #${numbered[emailTrim]?.customerNumber || 1})`,
+        'success'
+      );
+
+      void logCustomerEntryToFirestore(numbered[emailTrim], 'Sign In').catch(() => {});
     }
   };
 
@@ -1423,21 +2074,26 @@ export default function App() {
     };
   };
 
-  const quickDemoLogin = () => {
+  const quickDemoLogin = async () => {
     const demoEmail = 'student@campus.edu';
-    const users = getAllUsers();
+    const users = mergeUsersMaps(getAllUsers(), allUsersMap);
     const base =
       users[demoEmail] ||
-      createDefaultUserObject('Kumba Hannah Kaingbanja', demoEmail, 'campus123', '21');
+      createDefaultUserObject('Kumba Hannah Kaingbanja', demoEmail, 'campus123', '21', '076 234 567');
     base.name = 'Kumba Hannah Kaingbanja';
     if (!base.age) base.age = '21';
+    if (!base.phone) base.phone = '076 234 567';
+    base.deviceInfo = getClientDeviceLabel();
     users[demoEmail] = buildSampleStudentDataOnObject(base);
-    saveAllUsers(users);
-    loginUserSession(demoEmail, users);
+    const numbered = assignSequentialCustomerNumbers(users);
+    saveAllUsers(numbered, demoEmail, true);
+    setAllUsersMap({ ...numbered });
+    loginUserSession(demoEmail, numbered);
     showToast(
-      'Signed in as Kumba Hannah Kaingbanja (Age 21) with sample cycle data!',
+      `Signed in as Kumba Hannah Kaingbanja (Customer #${numbered[demoEmail]?.customerNumber || 1})!`,
       'success'
     );
+    void logCustomerEntryToFirestore(numbered[demoEmail], 'Sign In').catch(() => {});
   };
 
   const loadSampleStudentData = () => {
@@ -1449,8 +2105,88 @@ export default function App() {
     );
   };
 
+  const handleUserGoogleSignIn = async () => {
+    try {
+      const googleUser = await signInWithGooglePopup();
+      const gEmail = (googleUser.email || '').trim().toLowerCase();
+      if (!gEmail) {
+        showToast('Could not retrieve email from Google Sign-In.', 'warning');
+        return;
+      }
+
+      const cloudDoc = await fetchSingleUserFromFirestore(gEmail);
+      const users = mergeUsersMaps(getAllUsers(), allUsersMap);
+      if (cloudDoc) {
+        users[gEmail] = mergeUsersMaps({ [gEmail]: users[gEmail] || cloudDoc }, { [gEmail]: cloudDoc })[gEmail];
+      }
+
+      const existing = users[gEmail];
+      const nowMs = Date.now();
+      const nowIso = new Date().toISOString();
+      const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
+      const firstEntryMs =
+        existing && Number(existing.firstEntryAt || existing.createdAt) > 0
+          ? Number(existing.firstEntryAt || existing.createdAt)
+          : nowMs;
+
+      const googleDisplayName =
+        authName.trim() || googleUser.displayName || existing?.name || gEmail.split('@')[0];
+      const googleAge = authAge.trim() || existing?.age || '21';
+      const googlePhone =
+        authPhone.trim() ||
+        googleUser.phoneNumber ||
+        resolveCustomerPhoneUsed(existing) ||
+        '';
+      const googlePass =
+        authPassword.trim() || existing?.password || 'GoogleAuthVerified';
+
+      const baseUser =
+        existing ||
+        createDefaultUserObject(googleDisplayName, gEmail, googlePass, googleAge, googlePhone);
+
+      baseUser.name = googleDisplayName;
+      baseUser.age = googleAge;
+      baseUser.email = gEmail;
+      baseUser.phone = googlePhone;
+      baseUser.password = googlePass;
+      baseUser.firstEntryAt = firstEntryMs;
+      baseUser.createdAt = firstEntryMs;
+      baseUser.deviceInfo = getClientDeviceLabel();
+      baseUser.subscriptionStatus = existing?.subscriptionStatus || 'active';
+      baseUser.subscriptionUntil = existing?.subscriptionUntil || nowMs + twoWeeksMs;
+      baseUser.paymentMethod = existing?.paymentMethod || '2-Week Free Access';
+      baseUser.lastUpdatedAt = nowIso;
+      baseUser.lastSignInAt = nowIso;
+      baseUser.signInCount = existing ? (existing.signInCount || 1) + 1 : 1;
+      baseUser.signupSource = existing ? 'Sign In' : 'Create Account';
+
+      users[gEmail] = baseUser;
+      const numbered = assignSequentialCustomerNumbers(users);
+      saveAllUsers(numbered, gEmail, true);
+      setAllUsersMap({ ...numbered });
+      loginUserSession(gEmail, numbered);
+
+      showToast(
+        `🌸 Signed in with Google as ${baseUser.name} (${gEmail})! Synced with Cloud Firestore (Entry #${
+          numbered[gEmail]?.customerNumber || 1
+        }).`,
+        'success'
+      );
+      void logCustomerEntryToFirestore(
+        numbered[gEmail],
+        existing ? 'Sign In' : 'Create Account'
+      ).catch(() => {});
+    } catch {
+      showToast(
+        'Google Sign-In popup was closed or blocked by browser settings. You can also sign in using the form above.',
+        'info'
+      );
+    }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem(STORAGE_SESSION_KEY);
+    signOutFirebase().catch(() => {});
     setCurrentUserEmail(null);
     setUserData(null);
     setAuthPassword('');
@@ -1652,6 +2388,8 @@ export default function App() {
         mood: null,
         stageAtLog: null,
         symptoms: [],
+        symptomDurations: {},
+        intensity: {},
         habits: [],
         notes: '',
         waterGlasses: 0,
@@ -1669,6 +2407,8 @@ export default function App() {
         mood: null,
         stageAtLog: null,
         symptoms: [],
+        symptomDurations: {},
+        intensity: {},
         habits: [],
         notes: '',
       };
@@ -1687,13 +2427,31 @@ export default function App() {
     showToast(`Logged "${moodId}" linked to your ${stageInfo.shortName}!`, 'success');
   };
 
-  const toggleSymptom = (symptomId: string) => {
+  const toggleSymptom = (symptomId: string, defaultHours = 2, defaultIntensity = 3) => {
     if (!userData) return;
     const currentLog = getDailyLog(selectedDateStr);
     const exists = currentLog.symptoms.includes(symptomId);
     const updatedSymptoms = exists
       ? currentLog.symptoms.filter((s) => s !== symptomId)
       : [...currentLog.symptoms, symptomId];
+
+    const nextDurations: Record<string, number> = {
+      ...(currentLog.symptomDurations || {}),
+    };
+    const nextIntensity: Record<string, number> = {
+      ...(currentLog.intensity || {}),
+    };
+    if (exists) {
+      delete nextDurations[symptomId];
+      delete nextIntensity[symptomId];
+    } else {
+      if (nextDurations[symptomId] === undefined) {
+        nextDurations[symptomId] = defaultHours;
+      }
+      if (nextIntensity[symptomId] === undefined) {
+        nextIntensity[symptomId] = symptomId === 'Severe Pain' ? 5 : defaultIntensity;
+      }
+    }
 
     updateUserData((prev) => ({
       ...prev,
@@ -1702,6 +2460,8 @@ export default function App() {
         [selectedDateStr]: {
           ...currentLog,
           symptoms: updatedSymptoms,
+          symptomDurations: nextDurations,
+          intensity: nextIntensity,
         },
       },
     }));
@@ -1710,6 +2470,99 @@ export default function App() {
       showToast(
         '🏥 Severe pain logged. Please check the Campus Clinic banner at the top of your screen.',
         'warning'
+      );
+    }
+  };
+
+  const setSymptomDurationHours = (
+    symptomId: string,
+    rawHours: number,
+    showToastFeedback = false
+  ) => {
+    if (!userData) return;
+    const clamped = Math.max(0.5, Math.min(24, Math.round((Number(rawHours) || 1) * 2) / 2));
+    const currentLog = getDailyLog(selectedDateStr);
+    const updatedSymptoms = currentLog.symptoms.includes(symptomId)
+      ? currentLog.symptoms
+      : [...currentLog.symptoms, symptomId];
+    const nextDurations: Record<string, number> = {
+      ...(currentLog.symptomDurations || {}),
+      [symptomId]: clamped,
+    };
+    const nextIntensity: Record<string, number> = {
+      ...(currentLog.intensity || {}),
+      [symptomId]: currentLog.intensity?.[symptomId] ?? (symptomId === 'Severe Pain' ? 5 : 3),
+    };
+
+    updateUserData((prev) => ({
+      ...prev,
+      dailyLogs: {
+        ...prev.dailyLogs,
+        [selectedDateStr]: {
+          ...currentLog,
+          symptoms: updatedSymptoms,
+          symptomDurations: nextDurations,
+          intensity: nextIntensity,
+        },
+      },
+    }));
+
+    if (showToastFeedback) {
+      showToast(
+        `⏱️ Logged "${symptomId}" duration: ${clamped} hr${clamped === 1 ? '' : 's'} on ${formatShortMonthDay(
+          selectedDateStr
+        )}!`,
+        'info'
+      );
+    }
+  };
+
+  const setSymptomIntensity = (
+    symptomId: string,
+    rawIntensity: number,
+    showToastFeedback = false
+  ) => {
+    if (!userData) return;
+    const clamped = Math.max(1, Math.min(5, Math.round(Number(rawIntensity) || 3)));
+    const currentLog = getDailyLog(selectedDateStr);
+    const updatedSymptoms = currentLog.symptoms.includes(symptomId)
+      ? currentLog.symptoms
+      : [...currentLog.symptoms, symptomId];
+    const nextDurations: Record<string, number> = {
+      ...(currentLog.symptomDurations || {}),
+      [symptomId]: currentLog.symptomDurations?.[symptomId] ?? 2,
+    };
+    const nextIntensity: Record<string, number> = {
+      ...(currentLog.intensity || {}),
+      [symptomId]: clamped,
+    };
+
+    updateUserData((prev) => ({
+      ...prev,
+      dailyLogs: {
+        ...prev.dailyLogs,
+        [selectedDateStr]: {
+          ...currentLog,
+          symptoms: updatedSymptoms,
+          symptomDurations: nextDurations,
+          intensity: nextIntensity,
+        },
+      },
+    }));
+
+    if (showToastFeedback) {
+      const severityLabels: Record<number, string> = {
+        1: 'Very Mild',
+        2: 'Mild',
+        3: 'Moderate',
+        4: 'Strong',
+        5: 'Severe',
+      };
+      showToast(
+        `📊 Rated "${symptomId}" severity: ${clamped}/5 (${severityLabels[clamped] || 'Moderate'}) on ${formatShortMonthDay(
+          selectedDateStr
+        )}!`,
+        clamped >= 5 ? 'warning' : 'info'
       );
     }
   };
@@ -1906,6 +2759,47 @@ export default function App() {
     );
   };
 
+  const handleRemovePendingVerification = (targetEmail?: string) => {
+    const emailKey = (targetEmail || currentUserEmail || '').toLowerCase().trim();
+    if (!emailKey) {
+      setShowPaywallModal(false);
+      return;
+    }
+    const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
+    const users = mergeUsersMaps(getAllUsers(), allUsersMap);
+    const target = users[emailKey] || (emailKey === currentUserEmail ? userData : null);
+    if (!target) {
+      setShowPaywallModal(false);
+      return;
+    }
+
+    const firstMs = Number(target.firstEntryAt || target.createdAt) || Date.now();
+    const restoredUntil =
+      target.subscriptionUntil && target.subscriptionUntil > Date.now()
+        ? target.subscriptionUntil
+        : firstMs + twoWeeksMs > Date.now()
+        ? firstMs + twoWeeksMs
+        : Date.now() + twoWeeksMs;
+
+    const updatedUser: UserData = {
+      ...target,
+      subscriptionStatus: 'active',
+      subscriptionUntil: restoredUntil,
+      paymentMethod: '2-Week Free Access',
+      pendingPayment: null,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+
+    users[emailKey] = updatedUser;
+    saveAllUsers(users, emailKey, true);
+    setAllUsersMap({ ...users });
+    if (currentUserEmail && currentUserEmail.toLowerCase().trim() === emailKey) {
+      setUserData(updatedUser);
+      setShowPaywallModal(false);
+    }
+    showToast('Removed Pending Owner Verification and restored active access.', 'info');
+  };
+
   const applyVipCodeFromModal = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (isSecretVipPassword(vipSecretCodeInput, adminConfig.freeAccessPassword)) {
@@ -2013,6 +2907,7 @@ export default function App() {
           onApproveUserPayment={handleApproveUserPayment}
           onExtendUserFreeAccess={handleExtendUserFreeAccess}
           onRejectOrExpireUser={handleRejectOrExpireUser}
+          onClearPendingVerification={handleRemovePendingVerification}
           onRegisterNewUserByAdmin={handleRegisterNewUserByAdmin}
           onDeleteUser={handleDeleteUserByAdmin}
           onRefreshUsers={syncLatestUsersFromEverywhere}
@@ -2082,7 +2977,10 @@ export default function App() {
             <div className="grid grid-cols-2 gap-2 p-1 bg-lavender-50 rounded-2xl mb-5 border border-lavender-100">
               <button
                 type="button"
-                onClick={() => setAuthMode('signup')}
+                onClick={() => {
+                  setAuthMode('signup');
+                  setAuthFieldError(null);
+                }}
                 className={`py-2.5 rounded-xl font-bold text-sm transition-all ${
                   authMode === 'signup'
                     ? 'bg-white text-lavender-700 shadow-xs'
@@ -2093,7 +2991,10 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setAuthMode('signin')}
+                onClick={() => {
+                  setAuthMode('signin');
+                  setAuthFieldError(null);
+                }}
                 className={`py-2.5 rounded-xl font-bold text-sm transition-all ${
                   authMode === 'signin'
                     ? 'bg-white text-lavender-700 shadow-xs'
@@ -2104,51 +3005,85 @@ export default function App() {
               </button>
             </div>
 
-            {/* Auth Form */}
-            <form onSubmit={handleAuthSubmit} className="space-y-4">
-              {authMode === 'signup' && (
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div className="sm:col-span-2">
-                    <label
-                      htmlFor="authName"
-                      className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
-                    >
-                      Your Name *
-                    </label>
-                    <input
-                      type="text"
-                      id="authName"
-                      required={authMode === 'signup'}
-                      value={authName}
-                      onChange={(e) => setAuthName(e.target.value)}
-                      placeholder="e.g., Kumba Hannah Kaingbanja"
-                      className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100 outline-none text-slate-800 font-medium text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="authAge"
-                      className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
-                    >
-                      Age *
-                    </label>
-                    <input
-                      type="number"
-                      id="authAge"
-                      min="13"
-                      max="65"
-                      required={authMode === 'signup'}
-                      value={authAge}
-                      onChange={(e) => setAuthAge(e.target.value)}
-                      placeholder="21"
-                      className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100 outline-none text-slate-800 font-medium text-sm"
-                    />
-                  </div>
+            {authFieldError && (
+              <div
+                role="alert"
+                className="mb-4 px-3.5 py-2.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center justify-between gap-2"
+              >
+                <span>⚠️ {authFieldError.message}</span>
+                <button
+                  type="button"
+                  onClick={() => setAuthFieldError(null)}
+                  className="text-rose-600 hover:text-rose-900 font-bold"
+                  aria-label="Dismiss validation notice"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Auth Form — Captures Name, Email, Age, Number Used (Phone), and Password on Every Entry */}
+            <form onSubmit={handleAuthSubmit} noValidate className="space-y-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label
+                    htmlFor="authName"
+                    className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
+                  >
+                    Your Name {authMode === 'signup' ? '*' : ''}
+                  </label>
+                  <input
+                    ref={authNameInputRef}
+                    type="text"
+                    id="authName"
+                    name="name"
+                    autoComplete="name"
+                    required={authMode === 'signup'}
+                    value={authName}
+                    onChange={(e) => {
+                      setAuthName(e.target.value);
+                      if (authFieldError?.fieldId === 'authName') setAuthFieldError(null);
+                    }}
+                    placeholder="e.g., Kumba Hannah Kaingbanja"
+                    className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-800 font-medium text-sm ${
+                      authFieldError?.fieldId === 'authName'
+                        ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
+                        : 'border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100'
+                    }`}
+                  />
                 </div>
-              )}
+                <div>
+                  <label
+                    htmlFor="authAge"
+                    className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
+                  >
+                    Age {authMode === 'signup' ? '*' : ''}
+                  </label>
+                  <input
+                    ref={authAgeInputRef}
+                    type="number"
+                    id="authAge"
+                    name="age"
+                    min="10"
+                    max="99"
+                    required={authMode === 'signup'}
+                    value={authAge}
+                    onChange={(e) => {
+                      setAuthAge(e.target.value);
+                      if (authFieldError?.fieldId === 'authAge') setAuthFieldError(null);
+                    }}
+                    placeholder="21"
+                    className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-800 font-medium text-sm ${
+                      authFieldError?.fieldId === 'authAge'
+                        ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
+                        : 'border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100'
+                    }`}
+                  />
+                </div>
+              </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className={authMode === 'signin' ? 'sm:col-span-2' : ''}>
+                <div>
                   <label
                     htmlFor="authEmail"
                     className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
@@ -2156,33 +3091,67 @@ export default function App() {
                     Email Address *
                   </label>
                   <input
+                    ref={authEmailInputRef}
                     type="email"
                     id="authEmail"
+                    name="email"
+                    autoComplete="email"
                     required
                     value={authEmail}
-                    onChange={(e) => setAuthEmail(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setAuthEmail(val);
+                      if (authFieldError?.fieldId === 'authEmail') setAuthFieldError(null);
+                      const clean = val.trim().toLowerCase();
+                      if (clean === OWNER_ADMIN_EMAIL.toLowerCase()) {
+                        if (!authName) setAuthName(CREATOR_NAME);
+                        if (!authAge) setAuthAge('28');
+                        if (!authPhone) setAuthPhone('073604401');
+                        return;
+                      }
+                      const known = allUsersMap[clean];
+                      if (known) {
+                        if (known.name) setAuthName(known.name);
+                        if (known.age) setAuthAge(known.age);
+                        const knownPhone = resolveCustomerPhoneUsed(known);
+                        if (knownPhone) setAuthPhone(knownPhone);
+                      }
+                    }}
                     placeholder="you@example.com"
-                    className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100 outline-none text-slate-800 font-medium text-sm"
+                    className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-800 font-medium text-sm ${
+                      authFieldError?.fieldId === 'authEmail'
+                        ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
+                        : 'border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100'
+                    }`}
                   />
                 </div>
-                {authMode === 'signup' && (
-                  <div>
-                    <label
-                      htmlFor="authPhone"
-                      className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
-                    >
-                      Phone Number
-                    </label>
-                    <input
-                      type="tel"
-                      id="authPhone"
-                      value={authPhone}
-                      onChange={(e) => setAuthPhone(e.target.value)}
-                      placeholder="e.g., 076 123 456"
-                      className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100 outline-none text-slate-800 font-medium text-sm"
-                    />
-                  </div>
-                )}
+                <div>
+                  <label
+                    htmlFor="authPhone"
+                    className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
+                  >
+                    Phone Number Used {authMode === 'signup' ? '*' : ''}
+                  </label>
+                  <input
+                    ref={authPhoneInputRef}
+                    type="tel"
+                    id="authPhone"
+                    name="tel"
+                    autoComplete="tel"
+                    required={authMode === 'signup'}
+                    value={authPhone}
+                    onChange={(e) => {
+                      setAuthPhone(e.target.value);
+                      if (authFieldError?.fieldId === 'authPhone') setAuthFieldError(null);
+                    }}
+                    placeholder="e.g., 076 123 456"
+                    className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-800 font-medium text-sm ${
+                      authFieldError?.fieldId === 'authPhone'
+                        ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
+                        : 'border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100'
+                    }`}
+                  />
+                </div>
               </div>
 
               <div>
@@ -2202,13 +3171,23 @@ export default function App() {
                   </button>
                 </div>
                 <input
+                  ref={authPasswordInputRef}
                   type={showPassword ? 'text' : 'password'}
                   id="authPassword"
+                  name="password"
+                  autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'}
                   required
                   value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
+                  onChange={(e) => {
+                    setAuthPassword(e.target.value);
+                    if (authFieldError?.fieldId === 'authPassword') setAuthFieldError(null);
+                  }}
                   placeholder="Enter your account password"
-                  className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100 outline-none text-slate-800 font-medium text-sm"
+                  className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-800 font-medium text-sm ${
+                    authFieldError?.fieldId === 'authPassword'
+                      ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
+                      : 'border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100'
+                  }`}
                 />
               </div>
 
@@ -2222,12 +3201,38 @@ export default function App() {
               </button>
             </form>
 
-            {/* Instant Demo Login + Easy Owner / Admin Login Button */}
+            {/* Firebase Google Sign-In + Instant Demo Login + Owner / Admin Login Button */}
             <div className="mt-5 pt-4 border-t border-slate-100 space-y-2.5 text-center">
               <button
                 type="button"
+                onClick={handleUserGoogleSignIn}
+                className="w-full py-3 px-4 rounded-2xl bg-white hover:bg-slate-50 text-slate-800 font-extrabold text-xs sm:text-sm border-2 border-slate-200 shadow-2xs transition-all flex items-center justify-center gap-2.5 cursor-pointer"
+              >
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                  <path
+                    fill="#4285F4"
+                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96z"
+                  />
+                </svg>
+                <span>Continue with Google (Firebase Auth &amp; Firestore)</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={quickDemoLogin}
-                className="w-full py-2.5 px-4 rounded-xl bg-sage-50 hover:bg-sage-100 text-sage-800 font-semibold text-xs border border-sage-200 transition-all"
+                className="w-full py-2.5 px-4 rounded-xl bg-sage-50 hover:bg-sage-100 text-sage-800 font-semibold text-xs border border-sage-200 transition-all cursor-pointer"
               >
                 🚀 Instant Demo Sign-In (Pre-loaded Cycle Data)
               </button>
@@ -2349,6 +3354,7 @@ export default function App() {
   const trialInfo = getTrialStatus(userData);
   const currentDailyLog = getDailyLog(selectedDateStr);
   const sortedPeriods = getSortedPeriods(userData.periods);
+  const badgeEvaluation = evaluateUserBadges(userData);
 
   // Live preview of bleed duration when Start & End dates are selected in the Period Tracker inputs
   const inputBleedDaysPreview =
@@ -2444,6 +3450,10 @@ export default function App() {
 
   // Clinic Summary Aggregations
   const symCounts: Record<string, number> = {};
+  const symTotalHours: Record<string, number> = {};
+  const symDurationEntries: Record<string, number> = {};
+  const symTotalIntensity: Record<string, number> = {};
+  const symIntensityEntries: Record<string, number> = {};
   const moodCounts: Record<string, number> = {};
   Object.values(userData.dailyLogs || {}).forEach((log) => {
     if (log.mood) {
@@ -2452,12 +3462,35 @@ export default function App() {
     }
     (log.symptoms || []).forEach((s) => {
       symCounts[s] = (symCounts[s] || 0) + 1;
+      const hrs = log.symptomDurations?.[s];
+      if (typeof hrs === 'number' && hrs > 0) {
+        symTotalHours[s] = (symTotalHours[s] || 0) + hrs;
+        symDurationEntries[s] = (symDurationEntries[s] || 0) + 1;
+      }
+      const sev = log.intensity?.[s];
+      if (typeof sev === 'number' && sev >= 1 && sev <= 5) {
+        symTotalIntensity[s] = (symTotalIntensity[s] || 0) + sev;
+        symIntensityEntries[s] = (symIntensityEntries[s] || 0) + 1;
+      }
     });
   });
   const topSymptomsText =
     Object.entries(symCounts)
       .sort((a, b) => b[1] - a[1])
-      .map(([k, v]) => `${k} (${v}d)`)
+      .map(([k, v]) => {
+        const durCount = symDurationEntries[k] || 0;
+        const sevCount = symIntensityEntries[k] || 0;
+        const details: string[] = [`${v}d`];
+        if (durCount > 0) {
+          const avgHrs = Math.round(((symTotalHours[k] || 0) / durCount) * 10) / 10;
+          details.push(`~${avgHrs}h/day`);
+        }
+        if (sevCount > 0) {
+          const avgSev = Math.round(((symTotalIntensity[k] || 0) / sevCount) * 10) / 10;
+          details.push(`sev ${avgSev}/5`);
+        }
+        return `${k} (${details.join(' · ')})`;
+      })
       .join(', ') || 'None logged yet';
   const topMoodsText =
     Object.entries(moodCounts)
@@ -2544,32 +3577,87 @@ export default function App() {
                 >
                   🟧 View Access Status / Renew
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSidebarDrawer(false);
+                    setShowProfileModal(true);
+                  }}
+                  className="w-full py-2 px-3 rounded-xl bg-white hover:bg-lavender-50 text-lavender-900 border border-lavender-300 font-extrabold text-xs transition-all cursor-pointer"
+                >
+                  👤 Edit Profile, Subscription &amp; Period Sync
+                </button>
               </div>
 
               {/* Sidebar Navigation */}
               <div className="space-y-1.5">
                 <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 px-2">
-                  App Sections
+                  Core App Sections (Bottom Bar)
                 </div>
                 <button
                   type="button"
                   onClick={() => {
-                    setActiveNavTab('tracker');
+                    handleSelectNavSection('tracker');
                     setShowSidebarDrawer(false);
                   }}
                   className={`w-full text-left px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 ${
                     activeNavTab === 'tracker'
-                      ? 'bg-lavender-100 text-lavender-900'
+                      ? 'bg-rose-100 text-rose-900'
                       : 'text-slate-700 hover:bg-slate-100'
                   }`}
                 >
-                  <span>🌸</span>
-                  <span>Cycle, Mood &amp; Visual Patterns</span>
+                  <span>🩸</span>
+                  <span>Cycle &amp; LMP Calendar</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    setActiveNavTab('study');
+                    handleSelectNavSection('checkin');
+                    setShowSidebarDrawer(false);
+                  }}
+                  className={`w-full text-left px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 ${
+                    activeNavTab === 'checkin'
+                      ? 'bg-lavender-100 text-lavender-900'
+                      : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <span>😊</span>
+                  <span>Daily Mood, Symptoms &amp; Journal</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSelectNavSection('guide');
+                    setShowSidebarDrawer(false);
+                  }}
+                  className={`w-full text-left px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 ${
+                    activeNavTab === 'guide'
+                      ? 'bg-peach-100 text-peach-900'
+                      : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <span>🧬</span>
+                  <span>Educational Resources, Contraception &amp; Pill Guide</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSelectNavSection('analytics');
+                    setShowSidebarDrawer(false);
+                  }}
+                  className={`w-full text-left px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 ${
+                    activeNavTab === 'analytics'
+                      ? 'bg-sage-100 text-sage-900'
+                      : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <span>📊</span>
+                  <span>Trends, Hydration &amp; Cravings</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSelectNavSection('study');
                     setShowSidebarDrawer(false);
                   }}
                   className={`w-full text-left px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 ${
@@ -2584,7 +3672,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => {
-                    setActiveNavTab('sidratu');
+                    handleSelectNavSection('sidratu');
                     setShowSidebarDrawer(false);
                   }}
                   className={`w-full text-left px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 ${
@@ -2744,24 +3832,37 @@ export default function App() {
                   Hi, {userData.name}
                   {userData.age ? ` (${userData.age})` : ''}!
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsPaywallPreview(true);
-                    setShowPaywallModal(true);
-                  }}
-                  className={`text-xs font-bold px-2.5 py-0.5 rounded-lg border transition-all whitespace-nowrap ${
-                    trialInfo.status === 'subscribed' || trialInfo.status === 'free_password'
-                      ? 'bg-sage-50 text-sage-800 border-sage-200 hover:bg-sage-100'
-                      : trialInfo.status === 'pending_verification'
-                      ? 'bg-orange-100 text-orange-800 border-orange-300'
-                      : trialInfo.status === 'expired'
-                      ? 'bg-rose-100 text-rose-800 border-rose-300'
-                      : 'bg-lavender-50 text-lavender-700 border-lavender-200 hover:bg-lavender-100'
-                  }`}
-                >
-                  {trialInfo.label}
-                </button>
+                <div className="inline-flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPaywallPreview(true);
+                      setShowPaywallModal(true);
+                    }}
+                    className={`text-xs font-bold px-2.5 py-0.5 rounded-lg border transition-all whitespace-nowrap ${
+                      trialInfo.status === 'subscribed' || trialInfo.status === 'free_password'
+                        ? 'bg-sage-50 text-sage-800 border-sage-200 hover:bg-sage-100'
+                        : trialInfo.status === 'pending_verification'
+                        ? 'bg-orange-100 text-orange-800 border-orange-300'
+                        : trialInfo.status === 'expired'
+                        ? 'bg-rose-100 text-rose-800 border-rose-300'
+                        : 'bg-lavender-50 text-lavender-700 border-lavender-200 hover:bg-lavender-100'
+                    }`}
+                  >
+                    {trialInfo.label}
+                  </button>
+                  {trialInfo.status === 'pending_verification' && (
+                    <button
+                      type="button"
+                      onClick={() => handleRemovePendingVerification()}
+                      title="Remove Pending Owner Verification"
+                      aria-label="Remove Pending Owner Verification"
+                      className="w-5 h-5 rounded-full bg-orange-200 hover:bg-orange-300 text-orange-950 font-extrabold text-[11px] flex items-center justify-center border border-orange-400 cursor-pointer transition-all"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="text-xs text-slate-500 font-medium">
                 {stageInfo.emoji} {stageInfo.shortName} · Cycle Day {metrics.cycleDay}
@@ -2769,42 +3870,17 @@ export default function App() {
             </div>
           </div>
 
-          {/* Zone 2: Section Navigation Links */}
-          <nav className="flex items-center gap-1 p-1 bg-lavender-50/90 rounded-2xl border border-lavender-100">
-            <button
-              type="button"
-              onClick={() => setActiveNavTab('tracker')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
-                activeNavTab === 'tracker'
-                  ? 'bg-white text-lavender-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              🌸 Cycle &amp; Mood
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveNavTab('study')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
-                activeNavTab === 'study'
-                  ? 'bg-white text-lavender-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              📚 Study &amp; Exam Sync
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveNavTab('sidratu')}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0 ${
-                activeNavTab === 'sidratu'
-                  ? 'bg-[#3B0944] text-[#D4AF37] shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              ✨ Sidratu Skincare &amp; AI
-            </button>
-          </nav>
+          {/* Zone 2: Active Section Pill Indicator (Full switching lives in the Persistent Bottom Navigation Bar) */}
+          <div className="hidden lg:flex items-center gap-2 px-3.5 py-1.5 bg-lavender-50/90 rounded-2xl border border-lavender-100 text-xs font-extrabold text-lavender-900">
+            <span>
+              {activeNavTab === 'tracker' && '🩸 Section: Cycle & LMP Calendar'}
+              {activeNavTab === 'checkin' && '😊 Section: Daily Mood, Symptoms & Journal'}
+              {activeNavTab === 'guide' && '🧬 Section: Educational Resources & Contraceptive Guide'}
+              {activeNavTab === 'analytics' && '📊 Section: Trends, Hydration & Cravings'}
+              {activeNavTab === 'study' && '📚 Section: Study & Exam Sync Planner'}
+              {activeNavTab === 'sidratu' && '✨ Section: Sidratu Skincare & AI Hub'}
+            </span>
+          </div>
 
           {/* Zone 3: Quick Actions */}
           <div className="flex items-center gap-2 shrink-0">
@@ -2872,6 +3948,29 @@ export default function App() {
 
             <button
               type="button"
+              onClick={() => setShowBadgesModal(true)}
+              className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-extrabold flex items-center gap-1.5 border border-amber-300 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+              title="View Virtual Milestones, 1-Week Streak & Cycle Master Badges"
+            >
+              <span>🏅</span>
+              <span className="hidden sm:inline">Badges</span>
+              <span className="px-1.5 py-0.2 rounded-md bg-amber-200/80 text-amber-950 text-[10px] font-extrabold tabular-nums">
+                {badgeEvaluation.unlockedCount}/{badgeEvaluation.totalCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowProfileModal(true)}
+              className="px-3 py-2 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-900 text-xs font-extrabold flex items-center gap-1.5 border border-lavender-200 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+              title="Edit Profile, Subscription Status & Period Tracking Cloud Sync"
+            >
+              <span>👤</span>
+              <span className="hidden sm:inline">Profile &amp; Sync</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setShowClinicSummaryModal(true)}
               className="px-3 py-2 rounded-xl bg-sage-100 hover:bg-sage-200 text-sage-800 text-xs font-bold flex items-center gap-1.5 border border-sage-200 transition-all whitespace-nowrap shrink-0"
             >
@@ -2923,9 +4022,198 @@ export default function App() {
           </div>
         )}
 
-        {/* TOP ALERT BANNERS */}
-        {(showBagAlert || showClinicAlert) && (
+        {/* INLINE QUICK COMPLETION BAR IF ACTIVE SESSION IS MISSING PHONE NUMBER OR AGE */}
+        {(!resolveCustomerPhoneUsed(userData) || !userData.age) && (
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const formData = new FormData(e.currentTarget);
+              const enteredPhone = String(formData.get('quickPhone') || '').trim();
+              const enteredAge = String(formData.get('quickAge') || '').trim();
+              const enteredName = String(formData.get('quickName') || '').trim();
+              if (!enteredPhone) {
+                showToast('Please enter your phone number to complete your profile.', 'warning');
+                return;
+              }
+              const nextUser: UserData = {
+                ...userData,
+                name: enteredName || userData.name,
+                age: enteredAge || userData.age || '21',
+                phone: enteredPhone,
+                deviceInfo: getClientDeviceLabel(),
+                lastUpdatedAt: new Date().toISOString(),
+              };
+              updateUserData(() => nextUser);
+              await logCustomerEntryToFirestore(nextUser, 'WebApp Session');
+              showToast('✅ Saved your phone number & profile details!', 'success');
+            }}
+            className="rounded-2xl bg-lavender-900 text-white p-4 shadow-md border border-gold-500/40 flex flex-col md:flex-row md:items-end justify-between gap-3"
+          >
+            <div className="space-y-0.5">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-gold-400 block">
+                📱 Complete Your Student Profile Entry (Customer #{userData.customerNumber || 1})
+              </span>
+              <p className="text-xs text-lavender-100">
+                Please confirm your name, age, and phone number used so your account entry is complete across all devices.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 items-end">
+              <div>
+                <label className="text-[10px] font-bold uppercase text-lavender-200 block mb-0.5">
+                  Name
+                </label>
+                <input
+                  type="text"
+                  name="quickName"
+                  defaultValue={userData.name}
+                  required
+                  className="w-full px-2.5 py-1.5 rounded-xl bg-white text-slate-900 text-xs font-semibold"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-lavender-200 block mb-0.5">
+                  Age
+                </label>
+                <input
+                  type="number"
+                  name="quickAge"
+                  defaultValue={userData.age || '21'}
+                  min="10"
+                  max="80"
+                  required
+                  className="w-full px-2.5 py-1.5 rounded-xl bg-white text-slate-900 text-xs font-semibold"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-lavender-200 block mb-0.5">
+                  Phone Number Used *
+                </label>
+                <input
+                  type="tel"
+                  name="quickPhone"
+                  defaultValue={resolveCustomerPhoneUsed(userData)}
+                  placeholder="076 123 456"
+                  required
+                  className="w-full px-2.5 py-1.5 rounded-xl bg-white text-slate-900 text-xs font-semibold"
+                />
+              </div>
+              <button
+                type="submit"
+                className="px-3.5 py-1.5 rounded-xl bg-gold-500 hover:bg-amber-400 text-plum-900 font-extrabold text-xs h-[32px] cursor-pointer"
+              >
+                Save Entry ✓
+              </button>
+            </div>
+          </form>
+        )}
+
+        {/* TOP ALERT BANNERS (PHASE SHIFT NOTIFICATION, 2-DAY BAG REMINDER & CLINIC ALERT) */}
+        {(userData.lastPhaseShiftSummary || showBagAlert || showClinicAlert) && (
           <div className="space-y-3">
+            {userData.lastPhaseShiftSummary && (() => {
+              const summary = userData.lastPhaseShiftSummary;
+              const fromMeta = PHASE_ADVISOR_DATA[summary.fromStage] || PHASE_ADVISOR_DATA.FOLLICULAR;
+              const toMeta = PHASE_ADVISOR_DATA[summary.toStage] || PHASE_ADVISOR_DATA.OVULATION;
+              const shiftMeta = PHASE_SHIFT_NOTIFICATION_DATA[summary.toStage] || PHASE_SHIFT_NOTIFICATION_DATA.OVULATION;
+              return (
+                <div className="rounded-3xl bg-gradient-to-r from-plum-900 via-lavender-900 to-rose-900 text-white p-5 sm:p-6 shadow-lg border-2 border-gold-500/60 space-y-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gold-500 text-plum-900 text-[11px] font-extrabold uppercase tracking-wider">
+                          <span>🔔 Phase Shift Notification</span>
+                        </span>
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/15 border border-white/20 text-xs font-extrabold text-amber-200">
+                          <span>
+                            {fromMeta.emoji} {fromMeta.shortName} → {toMeta.emoji} {toMeta.shortName} Stage
+                          </span>
+                        </span>
+                      </div>
+                      <h3 className="font-display font-extrabold text-base sm:text-xl text-white">
+                        {toMeta.emoji} You Moved into Your {toMeta.shortName} Stage! ({shiftMeta.headline})
+                      </h3>
+                      <p className="text-xs sm:text-sm text-lavender-100">
+                        {shiftMeta.hormoneShiftText} Here are your personalized cycle-synced nutrition and Sidratu skincare recommendations for this phase:
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateUserData((prev) => ({
+                          ...prev,
+                          lastPhaseShiftSummary: null,
+                        }))
+                      }
+                      title="Dismiss Phase Shift Notification"
+                      aria-label="Dismiss Phase Shift Notification"
+                      className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 text-white font-extrabold text-xs flex items-center justify-center shrink-0 cursor-pointer transition-all"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                    {/* Related Nutrition Tip Card */}
+                    <div className="rounded-2xl bg-white/10 backdrop-blur-xs border border-white/20 p-4 flex flex-col justify-between gap-3">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-300">
+                            🥗 Phase Nutrition &amp; Craving Tip
+                          </span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-500/25 text-emerald-100 border border-emerald-400/30">
+                            {toMeta.shortName} Fuel
+                          </span>
+                        </div>
+                        <p className="text-xs sm:text-sm text-white/95 leading-relaxed">
+                          {summary.nutritionTip}
+                        </p>
+                        <div className="text-xs font-bold text-amber-200 pt-1">
+                          Top Snack: {summary.recommendedSnack}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveNavTab('analytics');
+                          setActiveTrackerAction('nutrition');
+                        }}
+                        className="self-start px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-display font-extrabold text-xs transition-all cursor-pointer"
+                      >
+                        🥗 Open {toMeta.shortName} Nutrition &amp; Snacks →
+                      </button>
+                    </div>
+
+                    {/* Related Skincare Tip Card */}
+                    <div className="rounded-2xl bg-white/10 backdrop-blur-xs border border-white/20 p-4 flex flex-col justify-between gap-3">
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-extrabold uppercase tracking-wider text-gold-400">
+                            ✨ Sidratu Phase Skincare Tip
+                          </span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-gold-500/25 text-amber-100 border border-gold-400/30">
+                            101 Jomo Kenyatta Rd
+                          </span>
+                        </div>
+                        <p className="text-xs sm:text-sm text-white/95 leading-relaxed">
+                          {summary.skincareTip}
+                        </p>
+                        <div className="text-xs font-bold text-amber-200 pt-1">
+                          Recommended Care: {summary.recommendedTreatment}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveNavTab('sidratu')}
+                        className="self-start px-3.5 py-2 rounded-xl bg-gold-500 hover:bg-amber-400 text-plum-900 font-display font-extrabold text-xs transition-all cursor-pointer"
+                      >
+                        ✨ Open Sidratu Skincare Hub →
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {showBagAlert && (
               <div className="rounded-2xl bg-gradient-to-r from-peach-100 to-rose-100 border-2 border-peach-500 p-4 shadow-xs flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
@@ -3334,7 +4622,10 @@ export default function App() {
               )}
 
               {/* 3. PERSISTENT PERIOD TRACKING CONTROLS & LOCKED REAL-TIME CURRENT DATE INPUTS */}
-              <div className="rounded-2xl bg-gradient-to-br from-rose-50/90 via-cream to-lavender-50/90 border-2 border-rose-200 p-4 sm:p-5 shadow-xs">
+              <div
+                id="update-lmp-section"
+                className="rounded-2xl bg-gradient-to-br from-rose-50/90 via-cream to-lavender-50/90 border-2 border-rose-200 p-4 sm:p-5 shadow-xs"
+              >
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -3580,8 +4871,34 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* 2-Day Reminder Quick Toggle */}
-                  <div className="flex items-center gap-2">
+                  {/* 2-Day Reminder & Phase Shift Notification Quick Toggles */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTogglePhaseShiftNotifications}
+                      role="switch"
+                      aria-checked={userData.phaseShiftNotificationsEnabled !== false}
+                      className={`px-3.5 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 border cursor-pointer ${
+                        userData.phaseShiftNotificationsEnabled !== false
+                          ? 'bg-plum-900 hover:bg-lavender-900 text-gold-500 border-gold-500/50 shadow-xs'
+                          : 'bg-white hover:bg-lavender-50 text-slate-800 border-lavender-300'
+                      }`}
+                      title="Receive a browser notification with nutrition & skincare tips whenever you move into a new cycle phase"
+                    >
+                      <span>
+                        {userData.phaseShiftNotificationsEnabled !== false
+                          ? '🌸 Phase Shift Alerts: ON'
+                          : '🔕 Enable Phase Shift Alerts'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSimulatePhaseShiftNotification('OVULATION')}
+                      className="px-3 py-2.5 rounded-xl bg-lavender-100 hover:bg-lavender-200 text-lavender-900 font-extrabold text-xs border border-lavender-300 transition-all cursor-pointer"
+                      title="Send a browser notification simulating a shift from Follicular to Ovulation with nutrition & skincare tips"
+                    >
+                      ✨ Test Phase Shift (Follicular → Ovulation)
+                    </button>
                     <button
                       type="button"
                       onClick={handleToggleCycleReminders}
@@ -3604,8 +4921,39 @@ export default function App() {
                       onClick={handleSendTestCycleNotification}
                       className="px-3 py-2.5 rounded-xl bg-white hover:bg-lavender-50 text-lavender-800 font-bold text-xs border border-lavender-200 transition-all cursor-pointer"
                     >
-                      Test Alert
+                      Test 2-Day Alert
                     </button>
+                  </div>
+                </div>
+
+                {/* INTERACTIVE PHASE SHIFT NOTIFICATION BAR (PREVIEW ANY TRANSITION ON DEMAND) */}
+                <div className="mt-3.5 pt-3 border-t border-rose-200/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="text-xs text-slate-700 font-semibold flex items-center gap-1.5 flex-wrap">
+                    <span className="font-extrabold text-lavender-900">
+                      🔔 Phase Shift Browser Notifications:
+                    </span>
+                    <span>
+                      Auto-sends nutrition &amp; Sidratu skincare tips when your cycle moves into a new phase. Preview any phase shift:
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                    {(
+                      [
+                        { to: 'MENSTRUATION', label: '🌙→🩸 Menstruation' },
+                        { to: 'FOLLICULAR', label: '🩸→🌱 Follicular' },
+                        { to: 'OVULATION', label: '🌱→🌸 Ovulation' },
+                        { to: 'LUTEAL', label: '🌸→🌙 Luteal' },
+                      ] as Array<{ to: StageKey; label: string }>
+                    ).map((item) => (
+                      <button
+                        key={item.to}
+                        type="button"
+                        onClick={() => handleSimulatePhaseShiftNotification(item.to)}
+                        className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-lavender-100 text-lavender-900 border border-lavender-200 font-bold text-[11px] transition-all cursor-pointer shadow-2xs"
+                      >
+                        {item.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -3741,8 +5089,51 @@ export default function App() {
                   </span>
                 </div>
               </div>
-            </section>
 
+              {/* Quick Shortcut Bar to Jump to Other Core Tools */}
+              <div className="pt-2 border-t border-rose-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="text-slate-500 font-semibold">
+                  💡 Use the bottom navigation bar anytime to switch tools with a single tap:
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleSelectNavSection('checkin')}
+                    className="px-3 py-1.5 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-800 font-bold border border-lavender-200 transition-all cursor-pointer"
+                  >
+                    😊 Log Today&apos;s Mood &amp; Symptoms →
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectNavSection('analytics')}
+                    className="px-3 py-1.5 rounded-xl bg-sage-50 hover:bg-sage-100 text-sage-800 font-bold border border-sage-200 transition-all cursor-pointer"
+                  >
+                    📊 View 6-Mo Trends &amp; Water →
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowBadgesModal(true)}
+                    className="px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold border border-amber-300 transition-all cursor-pointer"
+                  >
+                    🏅 Badges ({badgeEvaluation.unlockedCount}/{badgeEvaluation.totalCount}) · 🔥{' '}
+                    {badgeEvaluation.currentStreakDays}d Streak →
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectNavSection('guide')}
+                    className="px-3 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-[#0B57D0] font-bold border border-blue-200 transition-all cursor-pointer"
+                  >
+                    🧬 Educational Resources &amp; Contraceptive Guide →
+                  </button>
+                </div>
+              </div>
+            </section>
+          </>
+        )}
+
+        {/* TAB 2 (BOTTOM NAV): DAILY MOOD, SYMPTOMS, DAILY WINS, NOTES & JOURNAL PROMPTS */}
+        {activeNavTab === 'checkin' && (
+          <>
             {/* =====================================================================
                 STANDALONE SECTION 1: DAILY MOOD, SYMPTOMS, DAILY WINS & NOTES
                ===================================================================== */}
@@ -3824,36 +5215,602 @@ export default function App() {
                     <span>Copy Status for Partner / Bestie</span>
                   </button>
                 </div>
+
+                {/* Contraceptive Mood State & Emergency Pill Monthly Period Shift Notice */}
+                <div className="mt-3 rounded-2xl bg-gradient-to-r from-peach-50 via-rose-50 to-lavender-50 border-2 border-peach-300 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
+                  <div className="flex items-start gap-3">
+                    <span className="text-2xl shrink-0">💊</span>
+                    <div className="space-y-1">
+                      <div className="font-display font-extrabold text-xs sm:text-sm text-rose-950">
+                        Contraceptive Mood State &amp; Emergency Pill Period Shift Notice
+                      </div>
+                      <p className="text-xs text-slate-800 leading-relaxed">
+                        If you are taking an <strong>emergency contraceptive pill in a month</strong>, it can lead to changes in how your period is found (delaying ovulation and shifting your next period earlier or later, while also affecting your hormone and mood state). <strong>Always note the exact date and time down</strong>, and <strong>re-change your LMP (Last Menstrual Period) start date when you notice your period again</strong>.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={jumpToUpdateLmpSection}
+                      className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold text-xs shadow-xs transition-all cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>🩸</span>
+                      <span>Back to Update LMP Start Date →</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={jumpToEmergencyPillLogger}
+                      className="px-3 py-2 rounded-xl bg-white hover:bg-peach-100 text-slate-800 border border-peach-300 font-bold text-xs transition-all cursor-pointer flex items-center gap-1"
+                    >
+                      <span>⏱️</span>
+                      <span>Note Pill Date &amp; Time</span>
+                    </button>
+                  </div>
+                </div>
               </div>
 
-              {/* Physical Symptoms Grid */}
-              <div>
-                <h3 className="text-xs font-bold uppercase tracking-wider text-rose-700 mb-2.5">
-                  2. Physical Symptoms
-                </h3>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                  {SYMPTOM_ITEMS.map((item) => {
-                    const checked = (currentDailyLog.symptoms || []).includes(item.id);
-                    const style = checked
-                      ? item.redFlag
-                        ? 'bg-rose-600 text-white border-rose-700 shadow-xs font-bold'
-                        : 'bg-rose-100 text-rose-900 border-rose-400 font-bold'
-                      : 'bg-cream hover:bg-rose-50/60 text-slate-700 border-slate-200';
+              {/* Physical Symptoms Checklist with Search Bar & Category Filters */}
+              <div className="space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-rose-700">
+                      2. Physical Symptoms Checklist ({(currentDailyLog.symptoms || []).length} Selected)
+                    </h3>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Use the search bar or category filters below to quickly find and log physical symptoms for {formatShortMonthDay(selectedDateStr)}.
+                    </p>
+                  </div>
+                  {(currentDailyLog.symptoms || []).length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const currentLog = getDailyLog(selectedDateStr);
+                        updateUserData((prev) => ({
+                          ...prev,
+                          dailyLogs: {
+                            ...prev.dailyLogs,
+                            [selectedDateStr]: {
+                              ...currentLog,
+                              symptoms: [],
+                              symptomDurations: {},
+                              intensity: {},
+                            },
+                          },
+                        }));
+                        showToast(`Cleared physical symptoms for ${formatShortMonthDay(selectedDateStr)}.`, 'info');
+                      }}
+                      className="self-start sm:self-auto px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[11px] transition-all cursor-pointer"
+                    >
+                      🧹 Clear Selected ({(currentDailyLog.symptoms || []).length})
+                    </button>
+                  )}
+                </div>
+
+                {/* Symptom Search Bar */}
+                <div className="relative">
+                  <span
+                    aria-hidden="true"
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none"
+                  >
+                    🔍
+                  </span>
+                  <input
+                    type="search"
+                    id="symptomChecklistSearchInput"
+                    value={symptomSearchQuery}
+                    onChange={(e) => setSymptomSearchQuery(e.target.value)}
+                    placeholder="Search physical symptoms (e.g., cramps, headache, bloating, spotting, nausea, back ache)..."
+                    aria-label="Search physical symptoms"
+                    className="w-full pl-10 pr-24 py-2.5 rounded-2xl border-2 border-rose-200 focus:border-rose-500 focus:ring-2 focus:ring-rose-100 bg-cream text-xs sm:text-sm font-semibold text-slate-800 outline-none transition-all"
+                  />
+                  {symptomSearchQuery.trim().length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSymptomSearchQuery('')}
+                      aria-label="Clear symptom search"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-xl bg-rose-100 hover:bg-rose-200 text-rose-800 font-bold text-[11px] transition-all cursor-pointer"
+                    >
+                      ✕ Clear
+                    </button>
+                  )}
+                </div>
+
+                {/* Quick Category Filter Pills */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { id: 'ALL', label: `All (${SYMPTOM_ITEMS.length})` },
+                    {
+                      id: 'SELECTED',
+                      label: `✓ Logged Today (${(currentDailyLog.symptoms || []).length})`,
+                    },
+                    { id: 'Pain & Cramps', label: '🌸 Pain & Cramps' },
+                    { id: 'Hormonal & Body', label: '💗 Hormonal & Body' },
+                    { id: 'Digestion & Fluid', label: '🎈 Digestion & Fluid' },
+                    { id: 'Bleeding & Flow', label: '🩸 Bleeding & Flow' },
+                    { id: 'Skin & Hair', label: '✨ Skin & Hair' },
+                    { id: 'Head & Neuro', label: '🤕 Head & Neuro' },
+                  ].map((cat) => {
+                    const isActive = symptomCategoryFilter === cat.id;
                     return (
                       <button
-                        key={item.id}
+                        key={cat.id}
                         type="button"
-                        onClick={() => toggleSymptom(item.id)}
-                        className={`p-3 rounded-2xl border text-left text-xs font-semibold flex items-center justify-between transition-all ${style}`}
+                        onClick={() => setSymptomCategoryFilter(cat.id)}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                          isActive
+                            ? 'bg-rose-600 text-white border-rose-700 shadow-2xs'
+                            : 'bg-white hover:bg-rose-50 text-slate-700 border-slate-200'
+                        }`}
                       >
-                        <span>
-                          {item.emoji} {item.id}
-                        </span>
-                        <span>{checked ? '✓' : '+'}</span>
+                        {cat.label}
                       </button>
                     );
                   })}
                 </div>
+
+                {/* Active Logged Symptoms, Severity (1-5) & Persistence Duration (Hours) Summary Panel */}
+                {(currentDailyLog.symptoms || []).length > 0 && (
+                  <div className="rounded-2xl bg-rose-50/90 border-2 border-rose-200 p-3.5 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-xs font-extrabold text-rose-900">
+                        ⏱️ Logged Symptoms, Severity (1–5) &amp; Duration on {formatShortMonthDay(selectedDateStr)}:
+                      </span>
+                      <span className="text-[11px] font-semibold text-rose-700">
+                        Rate severity (1 Mild – 5 Severe) and hours persisted (0.5h – 24h)
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      {(currentDailyLog.symptoms || []).map((symId) => {
+                        const preset = SYMPTOM_ITEMS.find((s) => s.id === symId);
+                        const hoursPersisted = currentDailyLog.symptomDurations?.[symId] ?? 2;
+                        const severityLevel =
+                          currentDailyLog.intensity?.[symId] ?? (symId === 'Severe Pain' ? 5 : 3);
+                        const severityTextMap: Record<number, string> = {
+                          1: 'Very Mild',
+                          2: 'Mild',
+                          3: 'Moderate',
+                          4: 'Strong',
+                          5: 'Severe',
+                        };
+                        return (
+                          <div
+                            key={symId}
+                            className={`rounded-xl p-3 border flex flex-col gap-2 ${
+                              preset?.redFlag
+                                ? 'bg-rose-600 text-white border-rose-700'
+                                : 'bg-white text-slate-800 border-rose-300'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2 min-w-0">
+                              <span className="text-xs font-extrabold truncate flex items-center gap-1.5">
+                                <span>{preset ? preset.emoji : '📌'}</span>
+                                <span className="truncate">{symId}</span>
+                                <span
+                                  className={`px-1.5 py-0.5 rounded-md text-[10px] font-extrabold ${
+                                    preset?.redFlag
+                                      ? 'bg-rose-800 text-rose-100'
+                                      : severityLevel >= 4
+                                      ? 'bg-rose-100 text-rose-800'
+                                      : 'bg-amber-50 text-amber-800'
+                                  }`}
+                                >
+                                  Sev {severityLevel}/5 · {severityTextMap[severityLevel]}
+                                </span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => toggleSymptom(symId)}
+                                title="Remove symptom"
+                                aria-label={`Remove ${symId}`}
+                                className={`px-2 py-0.5 rounded-lg text-[10px] font-bold cursor-pointer shrink-0 ${
+                                  preset?.redFlag
+                                    ? 'bg-rose-800 hover:bg-rose-950 text-white'
+                                    : 'bg-slate-100 hover:bg-rose-100 text-slate-600 hover:text-rose-800'
+                                }`}
+                              >
+                                ✕
+                              </button>
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              {/* 1-5 Severity Rating Buttons */}
+                              <div className="flex items-center gap-1">
+                                <span
+                                  className={`text-[10px] font-bold uppercase mr-0.5 ${
+                                    preset?.redFlag ? 'text-rose-100' : 'text-slate-500'
+                                  }`}
+                                >
+                                  📊 Severity:
+                                </span>
+                                {[1, 2, 3, 4, 5].map((lvl) => {
+                                  const isSelectedLvl = severityLevel === lvl;
+                                  return (
+                                    <button
+                                      key={lvl}
+                                      type="button"
+                                      onClick={() => setSymptomIntensity(symId, lvl, true)}
+                                      aria-label={`Rate ${symId} severity ${lvl} out of 5`}
+                                      title={`Severity ${lvl}/5 (${severityTextMap[lvl]})`}
+                                      className={`w-6 h-6 rounded-lg font-extrabold text-[11px] flex items-center justify-center border transition-all cursor-pointer tabular-nums ${
+                                        isSelectedLvl
+                                          ? preset?.redFlag
+                                            ? 'bg-white text-rose-900 border-white shadow-2xs'
+                                            : lvl >= 4
+                                            ? 'bg-rose-600 text-white border-rose-700 shadow-2xs'
+                                            : 'bg-amber-500 text-white border-amber-600 shadow-2xs'
+                                          : preset?.redFlag
+                                          ? 'bg-rose-700/80 hover:bg-rose-800 text-rose-100 border-rose-400/60'
+                                          : 'bg-rose-50/70 hover:bg-rose-100 text-slate-700 border-rose-200'
+                                      }`}
+                                    >
+                                      {lvl}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+
+                              {/* Duration (Hours) Controls */}
+                              <div className="flex items-center gap-1 shrink-0">
+                                <span
+                                  className={`text-[10px] font-bold uppercase ${
+                                    preset?.redFlag ? 'text-rose-100' : 'text-slate-500'
+                                  }`}
+                                >
+                                  ⏱️ Hours:
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setSymptomDurationHours(
+                                      symId,
+                                      hoursPersisted <= 1 ? 0.5 : hoursPersisted - 1,
+                                      true
+                                    )
+                                  }
+                                  aria-label={`Decrease hours for ${symId}`}
+                                  className={`w-6 h-6 rounded-lg font-extrabold text-xs flex items-center justify-center border cursor-pointer ${
+                                    preset?.redFlag
+                                      ? 'bg-rose-700 hover:bg-rose-800 text-white border-rose-400'
+                                      : 'bg-rose-50 hover:bg-rose-100 text-rose-900 border-rose-200'
+                                  }`}
+                                >
+                                  −
+                                </button>
+                                <input
+                                  type="number"
+                                  min={0.5}
+                                  max={24}
+                                  step={0.5}
+                                  value={hoursPersisted}
+                                  onChange={(e) =>
+                                    setSymptomDurationHours(symId, Number(e.target.value), false)
+                                  }
+                                  aria-label={`Hours ${symId} persisted`}
+                                  className={`w-13 px-1 py-0.5 rounded-lg border text-center text-xs font-extrabold tabular-nums outline-none ${
+                                    preset?.redFlag
+                                      ? 'bg-white text-rose-950 border-white'
+                                      : 'bg-cream text-slate-900 border-rose-300 focus:border-rose-500'
+                                  }`}
+                                />
+                                <span
+                                  className={`text-[10px] font-bold ${
+                                    preset?.redFlag ? 'text-white' : 'text-rose-800'
+                                  }`}
+                                >
+                                  hr{hoursPersisted === 1 ? '' : 's'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setSymptomDurationHours(
+                                      symId,
+                                      hoursPersisted < 1 ? 1 : hoursPersisted + 1,
+                                      true
+                                    )
+                                  }
+                                  aria-label={`Increase hours for ${symId}`}
+                                  className={`w-6 h-6 rounded-lg font-extrabold text-xs flex items-center justify-center border cursor-pointer ${
+                                    preset?.redFlag
+                                      ? 'bg-rose-700 hover:bg-rose-800 text-white border-rose-400'
+                                      : 'bg-rose-50 hover:bg-rose-100 text-rose-900 border-rose-200'
+                                  }`}
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Filtered Physical Symptoms Grid */}
+                {(() => {
+                  const q = symptomSearchQuery.trim().toLowerCase();
+                  const checkedList = currentDailyLog.symptoms || [];
+                  const filteredSymptoms = SYMPTOM_ITEMS.filter((item) => {
+                    const matchesCategory =
+                      symptomCategoryFilter === 'ALL'
+                        ? true
+                        : symptomCategoryFilter === 'SELECTED'
+                        ? checkedList.includes(item.id)
+                        : item.category === symptomCategoryFilter;
+                    if (!matchesCategory) return false;
+                    if (!q) return true;
+                    const haystack = `${item.id} ${item.category} ${item.keywords}`.toLowerCase();
+                    return haystack.includes(q);
+                  });
+
+                  if (filteredSymptoms.length === 0) {
+                    const cleanCustom = symptomSearchQuery.trim();
+                    return (
+                      <div className="rounded-2xl bg-cream border border-dashed border-rose-300 p-4 text-center space-y-2.5">
+                        <p className="text-xs font-semibold text-slate-700">
+                          No matching symptoms found{q ? ` for "${symptomSearchQuery.trim()}"` : ' in this filter'}.
+                        </p>
+                        <div className="flex flex-wrap items-center justify-center gap-2">
+                          {cleanCustom.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                toggleSymptom(cleanCustom, 2, 3);
+                                setSymptomSearchQuery('');
+                                setSymptomCategoryFilter('ALL');
+                                showToast(`📌 Logged custom symptom "${cleanCustom}" (Sev 3/5 · 2 hrs) for ${formatShortMonthDay(selectedDateStr)}!`, 'success');
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
+                            >
+                              ➕ Log &ldquo;{cleanCustom}&rdquo; as Custom Symptom
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSymptomSearchQuery('');
+                              setSymptomCategoryFilter('ALL');
+                            }}
+                            className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold text-xs transition-all cursor-pointer"
+                          >
+                            Show All {SYMPTOM_ITEMS.length} Symptoms
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  const severityLabelsShort: Record<number, string> = {
+                    1: 'Very Mild',
+                    2: 'Mild',
+                    3: 'Moderate',
+                    4: 'Strong',
+                    5: 'Severe',
+                  };
+
+                  return (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                      {filteredSymptoms.map((item) => {
+                        const checked = checkedList.includes(item.id);
+                        const hoursPersisted = currentDailyLog.symptomDurations?.[item.id] ?? 2;
+                        const severityLevel =
+                          currentDailyLog.intensity?.[item.id] ??
+                          (item.id === 'Severe Pain' ? 5 : 3);
+                        const style = checked
+                          ? item.redFlag
+                            ? 'bg-rose-600 text-white border-rose-700 shadow-xs font-bold'
+                            : 'bg-rose-100 text-rose-900 border-rose-400 font-bold'
+                          : 'bg-cream hover:bg-rose-50/60 text-slate-700 border-slate-200';
+                        return (
+                          <div
+                            key={item.id}
+                            className={`rounded-2xl border transition-all flex flex-col justify-between ${style}`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => toggleSymptom(item.id)}
+                              className="w-full p-3 text-left text-xs font-semibold flex items-center justify-between gap-2 cursor-pointer"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5 truncate">
+                                  <span className="text-base shrink-0">{item.emoji}</span>
+                                  <span className="truncate">{item.id}</span>
+                                </div>
+                                <span
+                                  className={`text-[10px] block mt-0.5 ${
+                                    checked
+                                      ? item.redFlag
+                                        ? 'text-rose-100'
+                                        : 'text-rose-700'
+                                      : 'text-slate-400'
+                                  }`}
+                                >
+                                  {item.category}
+                                  {item.redFlag ? ' · Clinical Alert' : ''}
+                                  {checked
+                                    ? ` · 📊 Sev ${severityLevel}/5 · ⏱️ ${hoursPersisted}h`
+                                    : ''}
+                                </span>
+                              </div>
+                              <span className="shrink-0 text-sm font-extrabold">
+                                {checked ? '✓' : '+'}
+                              </span>
+                            </button>
+
+                            {/* Inline Severity (1-5) & Persistence Duration (Hours) Selector when Symptom is Selected */}
+                            {checked && (
+                              <div
+                                onClick={(e) => e.stopPropagation()}
+                                className={`px-3 pb-3 pt-2 border-t text-[11px] space-y-2 ${
+                                  item.redFlag
+                                    ? 'border-rose-500/60 bg-rose-700/40'
+                                    : 'border-rose-200/80 bg-white/75'
+                                } rounded-b-2xl`}
+                              >
+                                {/* Severity 1-5 Scale */}
+                                <div className="space-y-1">
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span
+                                      className={`font-extrabold ${
+                                        item.redFlag ? 'text-rose-100' : 'text-rose-900'
+                                      }`}
+                                    >
+                                      📊 Severity (1–5):
+                                    </span>
+                                    <span
+                                      className={`text-[10px] font-extrabold ${
+                                        item.redFlag ? 'text-white' : 'text-rose-700'
+                                      }`}
+                                    >
+                                      {severityLevel}/5 · {severityLabelsShort[severityLevel]}
+                                    </span>
+                                  </div>
+                                  <div className="grid grid-cols-5 gap-1">
+                                    {[1, 2, 3, 4, 5].map((lvl) => {
+                                      const isSelectedLvl = severityLevel === lvl;
+                                      return (
+                                        <button
+                                          key={lvl}
+                                          type="button"
+                                          onClick={() => setSymptomIntensity(item.id, lvl, true)}
+                                          aria-label={`Set ${item.id} severity to ${lvl} out of 5`}
+                                          title={`${lvl}/5 — ${severityLabelsShort[lvl]}`}
+                                          className={`py-1 rounded-lg font-extrabold text-[11px] border transition-all cursor-pointer tabular-nums ${
+                                            isSelectedLvl
+                                              ? item.redFlag
+                                                ? 'bg-white text-rose-900 border-white shadow-2xs'
+                                                : lvl >= 4
+                                                ? 'bg-rose-600 text-white border-rose-700 shadow-2xs'
+                                                : 'bg-amber-500 text-white border-amber-600 shadow-2xs'
+                                              : item.redFlag
+                                              ? 'bg-rose-800/70 hover:bg-rose-800 text-rose-100 border-rose-400/50'
+                                              : 'bg-white hover:bg-rose-100 text-rose-900 border-rose-200'
+                                          }`}
+                                        >
+                                          {lvl}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                  <div
+                                    className={`flex items-center justify-between text-[9px] font-semibold px-0.5 ${
+                                      item.redFlag ? 'text-rose-100/90' : 'text-slate-500'
+                                    }`}
+                                  >
+                                    <span>1 · Mild</span>
+                                    <span>3 · Moderate</span>
+                                    <span>5 · Severe</span>
+                                  </div>
+                                </div>
+
+                                {/* Persistence Duration (Hours) */}
+                                <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-rose-200/50">
+                                  <span
+                                    className={`font-extrabold ${
+                                      item.redFlag ? 'text-rose-100' : 'text-rose-900'
+                                    }`}
+                                  >
+                                    ⏱️ Persisted (Hours):
+                                  </span>
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setSymptomDurationHours(
+                                          item.id,
+                                          hoursPersisted <= 1 ? 0.5 : hoursPersisted - 1,
+                                          true
+                                        )
+                                      }
+                                      className={`w-6 h-6 rounded-lg font-extrabold text-xs flex items-center justify-center border cursor-pointer ${
+                                        item.redFlag
+                                          ? 'bg-rose-800 text-white border-rose-400'
+                                          : 'bg-rose-100 hover:bg-rose-200 text-rose-900 border-rose-300'
+                                      }`}
+                                    >
+                                      −
+                                    </button>
+                                    <input
+                                      type="number"
+                                      min={0.5}
+                                      max={24}
+                                      step={0.5}
+                                      value={hoursPersisted}
+                                      onChange={(e) =>
+                                        setSymptomDurationHours(
+                                          item.id,
+                                          Number(e.target.value),
+                                          false
+                                        )
+                                      }
+                                      aria-label={`Hours ${item.id} persisted`}
+                                      className={`w-12 px-1 py-0.5 rounded-lg border text-center text-xs font-extrabold tabular-nums outline-none ${
+                                        item.redFlag
+                                          ? 'bg-white text-rose-950 border-white'
+                                          : 'bg-white text-slate-900 border-rose-300'
+                                      }`}
+                                    />
+                                    <span
+                                      className={`text-[10px] font-bold ${
+                                        item.redFlag ? 'text-white' : 'text-rose-800'
+                                      }`}
+                                    >
+                                      hrs
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setSymptomDurationHours(
+                                          item.id,
+                                          hoursPersisted < 1 ? 1 : hoursPersisted + 1,
+                                          true
+                                        )
+                                      }
+                                      className={`w-6 h-6 rounded-lg font-extrabold text-xs flex items-center justify-center border cursor-pointer ${
+                                        item.redFlag
+                                          ? 'bg-rose-800 text-white border-rose-400'
+                                          : 'bg-rose-100 hover:bg-rose-200 text-rose-900 border-rose-300'
+                                      }`}
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-1">
+                                  {[1, 2, 4, 8, 12, 24].map((presetHr) => {
+                                    const isHrSelected = hoursPersisted === presetHr;
+                                    return (
+                                      <button
+                                        key={presetHr}
+                                        type="button"
+                                        onClick={() =>
+                                          setSymptomDurationHours(item.id, presetHr, true)
+                                        }
+                                        className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border transition-all cursor-pointer tabular-nums ${
+                                          isHrSelected
+                                            ? item.redFlag
+                                              ? 'bg-white text-rose-900 border-white'
+                                              : 'bg-rose-600 text-white border-rose-700'
+                                            : item.redFlag
+                                            ? 'bg-rose-800/70 hover:bg-rose-800 text-rose-100 border-rose-400/50'
+                                            : 'bg-white hover:bg-rose-100 text-rose-800 border-rose-200'
+                                        }`}
+                                      >
+                                        {presetHr}h
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Student Daily Wins Grid */}
@@ -3927,6 +5884,37 @@ export default function App() {
               </div>
             </section>
 
+            {/* =====================================================================
+                STANDALONE SECTION 4: DAILY CYCLE-STAGE JOURNAL PROMPTS
+               ===================================================================== */}
+            <div id="standalone-journal-prompts">
+              <CycleJournalPromptsSection
+                userData={userData}
+                selectedDateStr={selectedDateStr}
+                metrics={metrics}
+                onUpdateUser={updateUserData}
+                onSelectDate={(dateStr) => setSelectedDateStr(dateStr)}
+                showToast={showToast}
+              />
+            </div>
+
+            {/* =====================================================================
+                STANDALONE SECTION 5: VIRTUAL MILESTONES & CONSISTENCY BADGES
+               ===================================================================== */}
+            <BadgesMilestonesSection
+              userData={userData}
+              onNavigateSection={(sec, sub) => {
+                handleSelectNavSection(sec);
+                if (sub) setActiveTrackerAction(sub);
+              }}
+              onSimulateStreakDemo={loadSampleStudentData}
+            />
+          </>
+        )}
+
+        {/* TAB 3 (BOTTOM NAV): EMERGENCY PILL TRACKER & SMART PHASE GUIDE */}
+        {activeNavTab === 'guide' && (
+          <>
             {/* =====================================================================
                 STANDALONE SECTION 2: EMERGENCY CONTRACEPTION TRACKER & PILL ADVICE
                ===================================================================== */}
@@ -4033,6 +6021,29 @@ export default function App() {
                     })}
                   </div>
                 )}
+              </div>
+
+              {/* CLEAR CONTRACEPTIVE MOOD & MONTHLY EMERGENCY PILL LMP RESET CALLOUT + LINK BUTTON */}
+              <div className="mt-4 rounded-2xl bg-gradient-to-r from-rose-50 via-peach-50 to-lavender-50 border-2 border-rose-300 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <span className="text-2xl shrink-0">⚠️</span>
+                  <div className="space-y-1">
+                    <div className="font-display font-extrabold text-xs sm:text-sm text-rose-950">
+                      Contraceptive Mood State: Taking an Emergency Pill in a Month Changes How Your Period Is Found
+                    </div>
+                    <p className="text-xs sm:text-sm text-slate-800 leading-relaxed">
+                      If you take an <strong>emergency pill in a month</strong>, it can lead to changes in how your period is found (delaying ovulation and shifting your period earlier or later, alongside temporary hormone &amp; mood changes). Please <strong>note the exact date and time down</strong> above, and <strong>re-change your LMP (Last Menstrual Period) start date when you notice your period again</strong>.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={jumpToUpdateLmpSection}
+                  className="shrink-0 px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold text-xs sm:text-sm shadow-sm transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <span>🩸</span>
+                  <span>Back to Update LMP Start Date →</span>
+                </button>
               </div>
             </section>
 
@@ -4188,19 +6199,22 @@ export default function App() {
             </section>
 
             {/* =====================================================================
-                STANDALONE SECTION 4: DAILY CYCLE-STAGE JOURNAL PROMPTS
+                STANDALONE SECTION 4: BIOSCIENCE REPRODUCTIVE HEALTH EDUCATION CENTER
+                & CONTRACEPTIVE INFORMATION GUIDE (SCIENCE SKILL INTEGRATED)
                ===================================================================== */}
-            <div id="standalone-journal-prompts">
-              <CycleJournalPromptsSection
-                userData={userData}
-                selectedDateStr={selectedDateStr}
-                metrics={metrics}
-                onUpdateUser={updateUserData}
-                onSelectDate={(dateStr) => setSelectedDateStr(dateStr)}
-                showToast={showToast}
-              />
-            </div>
+            <BioscienceReproductiveEducationCenter
+              currentStageKey={metrics.stageKey}
+              cycleDay={metrics.cycleDay}
+              avgCycleLength={metrics.avgCycleLength}
+              onNavigateToUpdateLmp={jumpToUpdateLmpSection}
+              onNavigateToEmergencyPillLogger={jumpToEmergencyPillLogger}
+            />
+          </>
+        )}
 
+        {/* TAB 4 (BOTTOM NAV): WELLNESS FUEL, HYDRATION & 6-MONTH ANALYTICS */}
+        {activeNavTab === 'analytics' && (
+          <>
             {/* =====================================================================
                 QUICK ACTION BUTTONS FOR BIG ANALYTICS TABLES & EXTRA TOOLS
                ===================================================================== */}
@@ -4240,8 +6254,17 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
                 {[
+                  {
+                    id: 'badges' as const,
+                    emoji: '🏅',
+                    title: 'Badges & Streaks',
+                    badge: `${badgeEvaluation.unlockedCount}/${badgeEvaluation.totalCount} · 🔥 ${badgeEvaluation.currentStreakDays}d`,
+                    activeClass: 'bg-amber-600 text-white border-amber-800 shadow-md',
+                    idleClass:
+                      'bg-amber-50/80 hover:bg-amber-100/80 text-slate-800 border-amber-300',
+                  },
                   {
                     id: 'nutrition' as const,
                     emoji: '🍫',
@@ -4329,6 +6352,29 @@ export default function App() {
                 })}
               </div>
             </section>
+
+            {/* ACTION PANEL: VIRTUAL BADGES & MILESTONES */}
+            {(activeTrackerAction === 'badges' || activeTrackerAction === 'all') && (
+              <div className="space-y-3">
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTrackerAction(null)}
+                    className="px-3.5 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold text-xs cursor-pointer shadow-2xs"
+                  >
+                    ✕ Close Badges &amp; Milestones
+                  </button>
+                </div>
+                <BadgesMilestonesSection
+                  userData={userData}
+                  onNavigateSection={(sec, sub) => {
+                    handleSelectNavSection(sec);
+                    if (sub) setActiveTrackerAction(sub);
+                  }}
+                  onSimulateStreakDemo={loadSampleStudentData}
+                />
+              </div>
+            )}
 
             {/* ACTION PANEL: NUTRITION & CRAVING SUPPORT */}
             {(activeTrackerAction === 'nutrition' || activeTrackerAction === 'all') && (
@@ -4512,7 +6558,7 @@ export default function App() {
       </main>
 
       {/* FOOTER & QUICK PREVIEW CONTROLS WITH CREATOR BRANDING */}
-      <footer className="bg-white border-t border-slate-200/80 py-5 px-4 mt-8">
+      <footer className="bg-white border-t border-slate-200/80 py-5 px-4 pb-24 mt-8">
         <div className="max-w-6xl mx-auto flex flex-col gap-3 text-xs text-slate-600">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -4580,6 +6626,16 @@ export default function App() {
         </div>
       </footer>
 
+      {/* PERSISTENT BOTTOM NAVIGATION BAR FOR SINGLE-TAP SECTION SWITCHING */}
+      <BottomNavBar
+        activeSection={activeNavTab}
+        onSelectSection={handleSelectNavSection}
+        cycleDay={todayMetrics.cycleDay}
+        hasLoggedMoodToday={Boolean(userData.dailyLogs?.[todayStr]?.mood)}
+        waterGlassesToday={userData.dailyLogs?.[todayStr]?.waterGlasses || 0}
+        isDarkMode={isDarkMode}
+      />
+
       {/* ===================================================================== */}
       {/* MODAL 1: HIDDEN EMERGENCY PILL ADVICE MODAL (💊)                      */}
       {/* ===================================================================== */}
@@ -4624,10 +6680,20 @@ export default function App() {
             </div>
 
             <ul className="space-y-3 text-xs sm:text-sm text-slate-700 mb-5">
-              <li className="flex items-start gap-2.5 bg-cream p-3 rounded-2xl border border-slate-200/80">
+              <li className="flex items-start gap-2.5 bg-rose-50/90 p-3.5 rounded-2xl border-2 border-rose-300">
                 <span className="text-base">📆</span>
-                <div>
-                  <strong>Cycle Shift:</strong> Your next period might arrive a few days early or up to a week late because emergency pills work primarily by delaying ovulation.
+                <div className="space-y-2">
+                  <div>
+                    <strong>Monthly Emergency Pill &amp; LMP Reset Rule:</strong> If you take an emergency pill in a month, it can lead to changes in how your period is found (arriving a few days early or up to a week late because emergency pills delay ovulation). Always <strong>note the date and time down</strong> and <strong>re-change your LMP (Last Menstrual Period) start date when you notice your period again</strong>.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={jumpToUpdateLmpSection}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-display font-extrabold text-xs shadow-xs transition-all cursor-pointer"
+                  >
+                    <span>🩸</span>
+                    <span>Back to Update LMP Start Date →</span>
+                  </button>
                 </div>
               </li>
               <li className="flex items-start gap-2.5 bg-cream p-3 rounded-2xl border border-slate-200/80">
@@ -4704,6 +6770,37 @@ export default function App() {
           );
         }}
       />
+
+      {/* ===================================================================== */}
+      {/* MODAL: VIRTUAL BADGES & MILESTONES SHOWCASE (🏅)                      */}
+      {/* ===================================================================== */}
+      {showBadgesModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/65 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-cream rounded-3xl max-w-5xl w-full p-4 sm:p-6 shadow-2xl border-2 border-amber-300 max-h-[90vh] overflow-y-auto space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-extrabold uppercase tracking-wider px-3 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                🏅 Virtual Milestones &amp; Consistency Rewards
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowBadgesModal(false)}
+                className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 font-bold text-xs border border-slate-200 cursor-pointer"
+              >
+                Close ✕
+              </button>
+            </div>
+            <BadgesMilestonesSection
+              userData={userData}
+              onNavigateSection={(sec, sub) => {
+                setShowBadgesModal(false);
+                handleSelectNavSection(sec);
+                if (sub) setActiveTrackerAction(sub);
+              }}
+              onSimulateStreakDemo={loadSampleStudentData}
+            />
+          </div>
+        </div>
+      )}
 
       {/* ===================================================================== */}
       {/* MODAL 2: CLINIC SUMMARY MODAL (🩺)                                    */}
@@ -4902,7 +6999,7 @@ export default function App() {
       {/* ===================================================================== */}
       {(showPaywallModal || isAccountLocked) && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-7 shadow-2xl border-2 border-lavender-200 max-h-[92vh] overflow-y-auto">
+          <div className="relative bg-white rounded-3xl max-w-md w-full p-6 sm:p-7 shadow-2xl border-2 border-lavender-200 max-h-[92vh] overflow-y-auto">
             <div className="flex items-start justify-between gap-2 mb-3">
               <span className="text-xs font-extrabold uppercase tracking-wider px-2.5 py-1 rounded-lg bg-peach-100 text-peach-800">
                 {trialInfo.status === 'pending_verification'
@@ -4911,21 +7008,36 @@ export default function App() {
                   ? '🔒 2-Week Free Access Expired — Renewal'
                   : '🎁 2-Week Free Access · Orange Money Renewal'}
               </span>
-              {!isAccountLocked && (
-                <button
-                  type="button"
-                  onClick={() => setShowPaywallModal(false)}
-                  className="text-xs font-bold text-slate-500 hover:text-slate-800 px-2.5 py-1 rounded-lg bg-slate-100"
-                >
-                  Close ✕
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  if (trialInfo.status === 'pending_verification') {
+                    handleRemovePendingVerification();
+                  } else {
+                    setShowPaywallModal(false);
+                  }
+                }}
+                title="Close / Remove Pending Verification"
+                aria-label="Close or remove Pending Owner Verification"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-rose-100 text-slate-700 hover:text-rose-700 font-extrabold text-sm flex items-center justify-center border border-slate-200 transition-all shrink-0 cursor-pointer"
+              >
+                ✕
+              </button>
             </div>
 
             {/* IF PENDING OWNER VERIFICATION */}
             {trialInfo.status === 'pending_verification' ? (
               <div className="space-y-4">
-                <div className="rounded-2xl bg-orange-50 border-2 border-orange-400 p-4 space-y-2">
+                <div className="relative rounded-2xl bg-orange-50 border-2 border-orange-400 p-4 pr-10 space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => handleRemovePendingVerification()}
+                    title="Remove Pending Owner Verification"
+                    aria-label="Remove Pending Owner Verification"
+                    className="absolute top-2.5 right-2.5 w-7 h-7 rounded-full bg-white hover:bg-rose-100 text-orange-900 hover:text-rose-700 border border-orange-300 font-extrabold text-xs flex items-center justify-center shadow-2xs transition-all cursor-pointer"
+                  >
+                    ✕
+                  </button>
                   <div className="font-display font-extrabold text-lg text-orange-950 flex items-center gap-2">
                     <span>⏳</span>
                     <span>Orange Money Payment Pending Approval</span>
@@ -5242,6 +7354,260 @@ export default function App() {
                 <span>Verify Owner Admin with Google ({OWNER_ADMIN_EMAIL})</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL 6: USER PROFILE, SUBSCRIPTION STATUS & PERIOD TRACKING SYNC     */}
+      {/* ===================================================================== */}
+      {showProfileModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 sm:p-7 shadow-2xl border-2 border-lavender-200 max-h-[92vh] overflow-y-auto space-y-5">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
+              <div>
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-lavender-700 block">
+                  ☁️ Firebase Auth &amp; Firestore Persistence
+                </span>
+                <h3 className="font-display font-extrabold text-xl text-slate-900">
+                  User Profile, Subscription &amp; Period Tracking
+                </h3>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Customer Entry #{userData.customerNumber || 1} · Automatic real-time cloud backup for your profile, subscription status, and cycle logs.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowProfileModal(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center font-bold text-slate-600 cursor-pointer shrink-0"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 1. USER PROFILE FORM */}
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const fd = new FormData(e.currentTarget);
+                const nextName = String(fd.get('profName') || '').trim() || userData.name;
+                const nextAge = String(fd.get('profAge') || '').trim() || userData.age || '21';
+                const nextPhone = String(fd.get('profPhone') || '').trim();
+                const nextPass = String(fd.get('profPassword') || '').trim() || userData.password;
+                const nextCycleLen = Math.max(
+                  21,
+                  Math.min(45, Number(fd.get('profCycleLen') || userData.customCycleLength || 28))
+                );
+                const nextGoal = String(fd.get('profSkincareGoal') || '').trim();
+
+                const updated: UserData = {
+                  ...userData,
+                  name: nextName,
+                  age: nextAge,
+                  phone: nextPhone,
+                  password: nextPass,
+                  customCycleLength: nextCycleLen,
+                  skincareGoal: nextGoal || userData.skincareGoal,
+                  deviceInfo: getClientDeviceLabel(),
+                  lastUpdatedAt: new Date().toISOString(),
+                };
+
+                updateUserData(() => updated);
+                await syncUserToFirestore(updated, updated.email);
+                await logCustomerEntryToFirestore(updated, 'WebApp Session');
+                showToast(
+                  '☁️ Saved User Profile, Subscription Status & Period Tracking data to Cloud Firestore!',
+                  'success'
+                );
+                setShowProfileModal(false);
+              }}
+              className="space-y-4"
+            >
+              <div className="rounded-2xl bg-cream border border-lavender-200 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-lavender-900">
+                    1. User Profile Details
+                  </span>
+                  <span className="text-[11px] font-bold text-slate-500">
+                    {userData.email}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="sm:col-span-2">
+                    <label className="block text-[11px] font-bold uppercase text-slate-600 mb-1">
+                      Full Name *
+                    </label>
+                    <input
+                      type="text"
+                      name="profName"
+                      defaultValue={userData.name}
+                      required
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-semibold text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-600 mb-1">
+                      Age *
+                    </label>
+                    <input
+                      type="number"
+                      name="profAge"
+                      min="10"
+                      max="80"
+                      defaultValue={userData.age || '21'}
+                      required
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-semibold text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-600 mb-1">
+                      Phone Number Used *
+                    </label>
+                    <input
+                      type="tel"
+                      name="profPhone"
+                      defaultValue={resolveCustomerPhoneUsed(userData)}
+                      placeholder="076 123 456"
+                      required
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-semibold text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-600 mb-1">
+                      Account Password *
+                    </label>
+                    <input
+                      type="text"
+                      name="profPassword"
+                      defaultValue={userData.password}
+                      required
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-mono font-semibold text-slate-900"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-600 mb-1">
+                      Custom Cycle Length (Days)
+                    </label>
+                    <input
+                      type="number"
+                      name="profCycleLen"
+                      min="21"
+                      max="45"
+                      defaultValue={userData.customCycleLength || todayMetrics.avgCycleLength || 28}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-semibold text-slate-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-600 mb-1">
+                      Sidratu Skincare Goal
+                    </label>
+                    <input
+                      type="text"
+                      name="profSkincareGoal"
+                      defaultValue={userData.skincareGoal || 'Even Skin Tone'}
+                      placeholder="e.g., Even Skin Tone"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm font-semibold text-slate-900"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. SUBSCRIPTION STATUS SUMMARY */}
+              <div className="rounded-2xl bg-sage-50/70 border border-sage-200 p-4 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-sage-900">
+                    2. Saved Subscription Status
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-lg bg-white border border-sage-300 text-sage-900 text-[11px] font-extrabold">
+                    {trialInfo.label}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs text-slate-700">
+                  <div>
+                    Status Code:{' '}
+                    <strong className="uppercase text-slate-900">
+                      {userData.subscriptionStatus || 'active'}
+                    </strong>
+                  </div>
+                  <div>
+                    Access Method:{' '}
+                    <strong className="text-slate-900">
+                      {userData.paymentMethod || '2-Week Free Access'}
+                    </strong>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowProfileModal(false);
+                    setIsPaywallPreview(true);
+                    setShowPaywallModal(true);
+                  }}
+                  className="text-xs font-extrabold text-lavender-700 hover:underline cursor-pointer"
+                >
+                  🟧 Open Subscription Renewal / Access Pass Settings →
+                </button>
+              </div>
+
+              {/* 3. PERIOD TRACKING INFORMATION SUMMARY */}
+              <div className="rounded-2xl bg-rose-50/70 border border-rose-200 p-4 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-extrabold uppercase tracking-wider text-rose-900">
+                    3. Saved Period Tracking Information
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-lg bg-white border border-rose-300 text-rose-900 text-[11px] font-extrabold tabular-nums">
+                    {sortedPeriods.length} Logged {sortedPeriods.length === 1 ? 'Cycle' : 'Cycles'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs text-slate-700">
+                  <div>
+                    Latest LMP Start:{' '}
+                    <strong className="text-slate-900">
+                      {todayMetrics.activePeriodStartStr
+                        ? formatHumanDate(todayMetrics.activePeriodStartStr)
+                        : 'Not set'}
+                    </strong>
+                  </div>
+                  <div>
+                    Latest LMP End:{' '}
+                    <strong className="text-slate-900">
+                      {todayMetrics.activePeriodEndStr
+                        ? formatHumanDate(todayMetrics.activePeriodEndStr)
+                        : 'Not set'}
+                    </strong>
+                  </div>
+                  <div>
+                    Daily Logs Saved:{' '}
+                    <strong className="text-slate-900">
+                      {Object.keys(userData.dailyLogs || {}).length} days
+                    </strong>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2.5 pt-1">
+                <button
+                  type="submit"
+                  className="flex-1 py-3 px-5 rounded-2xl bg-gradient-to-r from-lavender-600 to-rose-600 hover:from-lavender-700 hover:to-rose-700 text-white font-extrabold text-xs sm:text-sm shadow-md transition-all cursor-pointer"
+                >
+                  💾 Save Profile, Subscription &amp; Period Info to Firestore
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowProfileModal(false)}
+                  className="py-3 px-5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs sm:text-sm cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

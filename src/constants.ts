@@ -28,13 +28,141 @@ export const MOOD_CATEGORIES = [
   { id: 'Numb',      emoji: '😶‍🌫️', tone: 'challenge' },
 ];
 
-export const SYMPTOM_ITEMS = [
-  { id: 'Mild Cramps',       emoji: '🌸', redFlag: false },
-  { id: 'Severe Pain',       emoji: '🚨', redFlag: true },
-  { id: 'Headache',          emoji: '🤕', redFlag: false },
-  { id: 'Bloating',          emoji: '🎈', redFlag: false },
-  { id: 'Breast Tenderness', emoji: '💗', redFlag: false },
-  { id: 'Acne / Breakout',   emoji: '✨', redFlag: false },
+export interface SymptomItemDefinition {
+  id: string;
+  emoji: string;
+  redFlag: boolean;
+  category: string;
+  keywords: string;
+}
+
+export const SYMPTOM_ITEMS: SymptomItemDefinition[] = [
+  {
+    id: 'Mild Cramps',
+    emoji: '🌸',
+    redFlag: false,
+    category: 'Pain & Cramps',
+    keywords: 'uterine ache period pain mild dysmenorrhea pelvis',
+  },
+  {
+    id: 'Severe Pain',
+    emoji: '🚨',
+    redFlag: true,
+    category: 'Pain & Cramps',
+    keywords: 'extreme debilitating endometriosis clinic red flag sharp pain',
+  },
+  {
+    id: 'Headache',
+    emoji: '🤕',
+    redFlag: false,
+    category: 'Head & Neuro',
+    keywords: 'migraine tension head pain estrogen drop temple',
+  },
+  {
+    id: 'Bloating',
+    emoji: '🎈',
+    redFlag: false,
+    category: 'Digestion & Fluid',
+    keywords: 'water retention swollen stomach gas abdominal fullness',
+  },
+  {
+    id: 'Breast Tenderness',
+    emoji: '💗',
+    redFlag: false,
+    category: 'Hormonal & Body',
+    keywords: 'sore chest cyclic mastalgia luteal progesterone sensitive',
+  },
+  {
+    id: 'Acne / Breakout',
+    emoji: '✨',
+    redFlag: false,
+    category: 'Skin & Hair',
+    keywords: 'pimples oily skin sebum hormonal jawline blemishes',
+  },
+  {
+    id: 'Lower Back Ache',
+    emoji: '🦴',
+    redFlag: false,
+    category: 'Pain & Cramps',
+    keywords: 'backache spine lumbar prostaglandins radiating ache',
+  },
+  {
+    id: 'Nausea / Queasy',
+    emoji: '🤢',
+    redFlag: false,
+    category: 'Digestion & Fluid',
+    keywords: 'stomach upset queasiness emergency pill side effect appetite',
+  },
+  {
+    id: 'Heavy Flow / Clots',
+    emoji: '🩸',
+    redFlag: true,
+    category: 'Bleeding & Flow',
+    keywords: 'menorrhagia soaking pads heavy bleeding blood clots',
+  },
+  {
+    id: 'Light Spotting',
+    emoji: '💧',
+    redFlag: false,
+    category: 'Bleeding & Flow',
+    keywords: 'breakthrough bleeding ovulation spotting pink brown discharge',
+  },
+  {
+    id: 'Egg-White Discharge',
+    emoji: '🥚',
+    redFlag: false,
+    category: 'Hormonal & Body',
+    keywords: 'cervical mucus fertile ovulation clear stretchy slippery',
+  },
+  {
+    id: 'Pelvic Twinge (Ovulation)',
+    emoji: '⚡',
+    redFlag: false,
+    category: 'Pain & Cramps',
+    keywords: 'mittelschmerz one-sided ovary pinch mid-cycle',
+  },
+  {
+    id: 'Dizziness / Lightheaded',
+    emoji: '💫',
+    redFlag: false,
+    category: 'Head & Neuro',
+    keywords: 'faint low iron anemia blood pressure vertigo weak',
+  },
+  {
+    id: 'Digestive Changes',
+    emoji: '🌿',
+    redFlag: false,
+    category: 'Digestion & Fluid',
+    keywords: 'period poop diarrhea constipation bowel prostaglandins',
+  },
+  {
+    id: 'Hot Flashes / Warmth',
+    emoji: '🌡️',
+    redFlag: false,
+    category: 'Hormonal & Body',
+    keywords: 'night sweats basal body temperature progesterone warm',
+  },
+  {
+    id: 'Insomnia / Restless Sleep',
+    emoji: '🌙',
+    redFlag: false,
+    category: 'Head & Neuro',
+    keywords: 'trouble sleeping waking up tired luteal sleep quality',
+  },
+  {
+    id: 'Joint or Muscle Soreness',
+    emoji: '🦵',
+    redFlag: false,
+    category: 'Pain & Cramps',
+    keywords: 'body ache stiffness workout recovery legs thighs',
+  },
+  {
+    id: 'Dry or Sensitive Skin',
+    emoji: '🧴',
+    redFlag: false,
+    category: 'Skin & Hair',
+    keywords: 'flaky barrier irritation menstruation low estrogen',
+  },
 ];
 
 export const HABIT_ITEMS = [
@@ -435,4 +563,76 @@ export const STAGE_NUTRITION_DATA: Record<StageKey, StageNutritionSupport> = {
     ],
   },
 };
+
+export interface PhaseShiftGuidance {
+  toStage: StageKey;
+  defaultFromStage: StageKey;
+  emoji: string;
+  headline: string;
+  hormoneShiftText: string;
+  nutritionTip: string;
+  skincareTip: string;
+  recommendedSnack: string;
+  recommendedTreatment: string;
+}
+
+export const PHASE_SHIFT_NOTIFICATION_DATA: Record<StageKey, PhaseShiftGuidance> = {
+  MENSTRUATION: {
+    toStage: 'MENSTRUATION',
+    defaultFromStage: 'LUTEAL',
+    emoji: '🩸',
+    headline: 'Moved into Menstruation Stage (Days 1–5)',
+    hormoneShiftText:
+      'Estrogen and progesterone drop to baseline as your uterine lining sheds.',
+    nutritionTip:
+      'Replenish lost iron with dark chocolate (70%+), pumpkin seeds, lentils, or boiled eggs paired with Vitamin C (orange slices) to triple iron absorption and soothe uterine cramps.',
+    skincareTip:
+      'Your skin barrier is extra dry and sensitive right now. Pause harsh acids/retinol and focus on barrier-repair ceramides or a soothing Deep Cleansing & Glow Facial at Sidratu.',
+    recommendedSnack: '🍫 Roasted Pumpkin Seeds, 70%+ Dark Chocolate & Orange Slices',
+    recommendedTreatment: 'Deep Cleansing & Glow Facial Treatment',
+  },
+  FOLLICULAR: {
+    toStage: 'FOLLICULAR',
+    defaultFromStage: 'MENSTRUATION',
+    emoji: '🌱',
+    headline: 'Moved into Follicular Stage (Days 6–11)',
+    hormoneShiftText:
+      'Estrogen rises steadily as a new ovarian follicle matures, lifting energy and collagen.',
+    nutritionTip:
+      'Support healthy estrogen metabolism and rising stamina with Greek yogurt parfaits, ground flaxseeds, berries, avocado toast, and prebiotic greens.',
+    skincareTip:
+      'Rising estrogen accelerates skin cell turnover and collagen synthesis! This is your prime window for active brightening, PRP Therapy, or Gentle Chemical Peels at Sidratu.',
+    recommendedSnack: '🫐 Greek Yogurt Parfait with Ground Flaxseeds, Chia & Fresh Berries',
+    recommendedTreatment: 'PRP (Platelet-Rich Plasma) Therapy',
+  },
+  OVULATION: {
+    toStage: 'OVULATION',
+    defaultFromStage: 'FOLLICULAR',
+    emoji: '🌸',
+    headline: 'Moved into Ovulation Stage (Days 12–16)',
+    hormoneShiftText:
+      'Estrogen peaks and Luteinizing Hormone (LH) surges to release the egg — peak fertility & radiance!',
+    nutritionTip:
+      'Help your liver clear peak estrogen metabolites with crisp apples, almond butter, sunflower seeds, and cruciferous veggies (broccoli, bell peppers & hummus).',
+    skincareTip:
+      'Your skin is naturally plump and glowing, though sebum starts ticking up near peak LH. Double-cleanse after campus classes, wear lightweight SPF 50, and book Anti-Dark Spot & Glow care.',
+    recommendedSnack: '🍎 Crisp Apple Slices with Almond Butter & Sunflower Seeds',
+    recommendedTreatment: 'Anti-Dark Spot & Hyperpigmentation Treatment',
+  },
+  LUTEAL: {
+    toStage: 'LUTEAL',
+    defaultFromStage: 'OVULATION',
+    emoji: '🌙',
+    headline: 'Moved into Luteal Stage (Days 17–28)',
+    hormoneShiftText:
+      'Progesterone takes center stage, raising basal body temperature, metabolic needs, and sebum output.',
+    nutritionTip:
+      'Tame progesterone sugar cravings and prevent PMS bloating with slow-release cinnamon sweet potato wedges, omega-3 walnuts, and magnesium-rich dark chocolate.',
+    skincareTip:
+      'Progesterone stimulates oil glands and pore congestion 7–10 days before your period. Switch to niacinamide/salicylic care and book Hormonal Acne & Breakout Control at Sidratu.',
+    recommendedSnack: '🍠 Warm Cinnamon Sweet Potato Wedges with Almond Drizzle',
+    recommendedTreatment: 'Hormonal Acne & Breakout Control',
+  },
+};
+
 
