@@ -425,9 +425,9 @@ export function calculateCycleMetrics(
     rawDaysSinceLmp: Math.max(1, rawDaysSinceLmp + 1),
     cycleDay,
     stageKey,
-    ovulationDay: latestOvulationDay,
-    ovStart: latestOvStart,
-    ovEnd: latestOvEnd,
+    ovulationDay,
+    ovStart,
+    ovEnd,
     ovulationDateStr,
     nextPeriodDateStr,
     nextPeriodEndDateStr,
@@ -458,7 +458,8 @@ export function isDateInLoggedPeriod(userData: UserData | null, dateStr: string)
 export function isDateInPredictedPeriod(dateStr: string, metrics: CycleMetrics): boolean {
   if (!metrics.activePeriodStartStr) return false;
   const bleedDays = metrics.activePeriodDuration || metrics.avgPeriodDuration || 5;
-  for (let cycleOffset = 1; cycleOffset <= 12; cycleOffset++) {
+  const maxCycles = Math.max(18, (metrics.autoRolloverCycles || 0) + 12);
+  for (let cycleOffset = 1; cycleOffset <= maxCycles; cycleOffset++) {
     const start = addDaysISO(
       metrics.activePeriodStartStr,
       cycleOffset * metrics.avgCycleLength
@@ -502,14 +503,15 @@ export function getFertileStatusForDate(
     const fStart = addDaysISO(p.startDate, ovS - 1);
     const fEnd = addDaysISO(p.startDate, ovE - 1);
     const fPeak = addDaysISO(p.startDate, ovDay - 1);
-    if (dateStr >= fStart && dateStr <= fEnd) {
+    if (dateStr >= fStart && dateStr <= fEnd && (!nextP || dateStr < nextP.startDate)) {
       return { isFertileWindow: true, isPeakOvulation: dateStr === fPeak };
     }
   }
 
   // Check auto-rolled-over and future predicted cycles starting from the latest recorded LMP
   if (metrics.activePeriodStartStr) {
-    for (let cycleOffset = 1; cycleOffset <= 12; cycleOffset++) {
+    const maxCycles = Math.max(18, (metrics.autoRolloverCycles || 0) + 12);
+    for (let cycleOffset = 1; cycleOffset <= maxCycles; cycleOffset++) {
       const cycleStart = addDaysISO(
         metrics.activePeriodStartStr,
         cycleOffset * metrics.avgCycleLength
@@ -558,10 +560,26 @@ export function getTrialStatus(userData: UserData | null): {
 
   if (userData.subscriptionUntil) {
     if (userData.subscriptionUntil > nowMs) {
-      const daysRemaining = Math.ceil(
-        (userData.subscriptionUntil - nowMs) / (1000 * 60 * 60 * 24)
+      const daysRemaining = Math.max(
+        1,
+        Math.ceil((userData.subscriptionUntil - nowMs) / (1000 * 60 * 60 * 24))
       );
-      if (userData.paymentMethod?.includes('Orange Money')) {
+      if (
+        userData.subscriptionStatus === 'free_password' ||
+        userData.usedFreeAccessPassword ||
+        userData.paymentMethod?.toLowerCase().includes('free 30-day') ||
+        userData.paymentMethod?.toLowerCase().includes('1-month free')
+      ) {
+        return {
+          status: 'free_password',
+          daysLeft: daysRemaining,
+          label: `🎁 Free 1-Month Pass: ${daysRemaining}d Left`,
+        };
+      }
+      if (
+        userData.paymentMethod?.includes('Orange Money') &&
+        !userData.paymentMethod?.toLowerCase().includes('free')
+      ) {
         return {
           status: 'subscribed',
           daysLeft: daysRemaining,

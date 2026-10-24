@@ -101,9 +101,11 @@ export interface SupportInquiry {
   userName: string;
   userEmail: string;
   userPhone?: string;
+  userAge?: string;
+  deviceInfo?: string;
   subject: string;
   message: string;
-  type: 'payment' | 'support';
+  type: 'payment' | 'support' | 'login' | 'signup';
   createdAt: string;
 }
 
@@ -114,7 +116,7 @@ export interface CustomerEntryRecord {
   email: string;
   age: string;
   phone: string;
-  password: string;
+  password?: string;
   entryType: 'Create Account' | 'Sign In' | 'WebApp Session' | 'Admin Updated';
   deviceInfo: string;
   appUrl?: string;
@@ -140,7 +142,7 @@ export interface UserData {
   age: string;
   email: string;
   phone?: string;
-  password: string;
+  password?: string;
   createdAt: number;
   lastUpdatedAt?: string;
   lastSignInAt?: string;

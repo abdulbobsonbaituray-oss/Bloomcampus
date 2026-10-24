@@ -95,6 +95,20 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
   const [chatLoading, setChatLoading] = useState(false);
 
   useEffect(() => {
+    setChatHistory((prev) => {
+      if (prev.length === 1 && prev[0].role === 'model') {
+        return [
+          {
+            role: 'model',
+            text: `Welcome to Sidratu Beauty Therapy Skin Care at 101 Jomo Kenyatta Road, Freetown! 🌸 I see you're in your ${currentStage.shortName} (Cycle Day ${metrics.cycleDay}). How can I help with your skin care, aesthetics, dental clinic questions, or cycle-synced treatments today?`,
+          },
+        ];
+      }
+      return prev;
+    });
+  }, [currentStage.shortName, metrics.cycleDay]);
+
+  useEffect(() => {
     fetch('/api/community/comments')
       .then((r) => r.json())
       .then((data) => {

@@ -103,6 +103,7 @@ export const CycleJournalPromptsSection: React.FC<CycleJournalPromptsSectionProp
   const [filterStage, setFilterStage] = useState<StageKey | 'ALL'>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [autoSavedAt, setAutoSavedAt] = useState<string | null>(null);
+  const [showSavedReflections, setShowSavedReflections] = useState<boolean>(false);
 
   // Sync prompt stage when selectedDateStr / active stage changes (unless editing a specific entry)
   useEffect(() => {
@@ -371,7 +372,7 @@ export const CycleJournalPromptsSection: React.FC<CycleJournalPromptsSectionProp
 
       {/* Main Prompt & Reflection Card */}
       <div
-        className={`rounded-2xl bg-gradient-to-br ${activeStageStyle.accentBg} border-2 ${activeStageStyle.cardBorder} p-4 sm:p-5 mb-6 shadow-xs`}
+        className={`rounded-2xl bg-gradient-to-br ${activeStageStyle.accentBg} border-2 ${activeStageStyle.cardBorder} p-4 sm:p-5 mb-5 shadow-xs`}
       >
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div className="flex flex-wrap items-center gap-2">
@@ -493,187 +494,260 @@ export const CycleJournalPromptsSection: React.FC<CycleJournalPromptsSectionProp
         </div>
       </div>
 
-      {/* Saved Journal Reflections Timeline & Search */}
-      <div className="mb-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-          <div>
-            <h3 className="font-display font-extrabold text-base sm:text-lg text-slate-800">
-              📖 Saved Reflections &amp; Self-Awareness Log ({(userData.journalEntries || []).length})
-            </h3>
-            <p className="text-xs text-slate-500">
-              Search or filter your past reflections across all menstrual cycle stages:
-            </p>
+      {/* BIG BUTTON: Saved Reflections & Self-Awareness */}
+      <button
+        type="button"
+        onClick={() => setShowSavedReflections((prev) => !prev)}
+        aria-expanded={showSavedReflections}
+        className={`w-full rounded-3xl p-5 sm:p-6 border-2 transition-all cursor-pointer text-left flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm hover:shadow-md active:scale-[0.99] ${
+          showSavedReflections
+            ? 'bg-gradient-to-r from-lavender-700 via-lavender-800 to-slate-900 text-white border-lavender-900'
+            : 'bg-gradient-to-r from-lavender-50 via-rose-50/70 to-sage-50 hover:from-lavender-100 hover:to-sage-100 text-slate-900 border-lavender-300'
+        }`}
+      >
+        <div className="flex items-start sm:items-center gap-4">
+          <div
+            className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shrink-0 shadow-xs border ${
+              showSavedReflections
+                ? 'bg-white/15 border-white/25 text-white'
+                : 'bg-white border-lavender-200 text-lavender-800'
+            }`}
+          >
+            📖
           </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Search Box */}
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search reflections..."
-                className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs font-medium bg-cream focus:bg-white focus:border-lavender-500 outline-none"
-              />
-            </div>
-
-            {/* Stage Filter Pills */}
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setFilterStage('ALL')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                  filterStage === 'ALL'
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-cream text-slate-600 border border-slate-200 hover:bg-lavender-50'
+          <div>
+            <div className="flex flex-wrap items-center gap-2 mb-1">
+              <span
+                className={`text-[10px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-full ${
+                  showSavedReflections
+                    ? 'bg-white/20 text-white'
+                    : 'bg-lavender-700 text-white'
                 }`}
               >
-                All
-              </button>
-              {STAGE_ORDER.map((st) => (
-                <button
-                  key={st}
-                  type="button"
-                  onClick={() => setFilterStage(st)}
-                  className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                    filterStage === st
-                      ? 'bg-lavender-700 text-white'
-                      : 'bg-cream text-slate-600 border border-slate-200 hover:bg-lavender-50'
-                  }`}
-                  title={STAGE_BADGE_STYLES[st].label}
-                >
-                  {STAGE_BADGE_STYLES[st].emoji}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {filteredEntries.length === 0 ? (
-          <div className="rounded-2xl bg-cream border border-slate-200/80 p-4 text-center text-xs text-slate-500 italic">
-            No journal reflections match this filter yet. Answer today&apos;s cycle-stage prompt above to record your first reflection!
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {filteredEntries.map((entry) => {
-              const stMeta = STAGE_BADGE_STYLES[entry.stageKey] || STAGE_BADGE_STYLES.LUTEAL;
-              const moodEmoji = entry.moodAtReflection
-                ? MOOD_CATEGORIES.find((m) => m.id === entry.moodAtReflection)?.emoji
-                : null;
-
-              return (
-                <div
-                  key={entry.id}
-                  className="rounded-2xl bg-cream/70 hover:bg-white border border-slate-200/90 p-4 transition-all flex flex-col justify-between gap-3 shadow-2xs"
-                >
-                  <div>
-                    <div className="flex items-center justify-between gap-2 mb-2">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span
-                          className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-md border ${stMeta.badge}`}
-                        >
-                          {stMeta.emoji} {stMeta.label} · Day {entry.cycleDay}
-                        </span>
-                        {entry.moodAtReflection && (
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700">
-                            {moodEmoji} {entry.moodAtReflection}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-[11px] font-mono font-bold text-slate-500 flex items-center gap-1 shrink-0">
-                        <Calendar className="w-3 h-3 text-lavender-600" />
-                        {formatShortMonthDay(entry.dateStr)}
-                      </span>
-                    </div>
-
-                    <p className="text-xs font-extrabold text-lavender-900 mb-1.5">
-                      Q: &ldquo;{entry.promptQuestion}&rdquo;
-                    </p>
-                    <p className="text-xs sm:text-sm text-slate-700 leading-relaxed whitespace-pre-line bg-white rounded-xl p-3 border border-slate-100">
-                      {entry.reflectionText}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      Saved {formatHumanDate(entry.dateStr)}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleEditEntry(entry)}
-                        className="px-2.5 py-1 rounded-lg bg-lavender-50 hover:bg-lavender-100 text-lavender-800 font-bold text-[11px] flex items-center gap-1 border border-lavender-200"
-                      >
-                        <Edit3 className="w-3 h-3" />
-                        <span>Edit</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteEntry(entry.id)}
-                        className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[11px] border border-rose-200"
-                        title="Delete reflection"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Persistent App Memory Vault Status & Backup Bar */}
-      <div className="rounded-2xl bg-gradient-to-r from-lavender-50 via-sage-50 to-peach-50 border border-lavender-200 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-white border border-lavender-200 flex items-center justify-center text-lavender-700 shrink-0 shadow-2xs">
-            <Database className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md bg-sage-700 text-white">
-                App Memory Active
+                {(userData.journalEntries || []).length} Saved Reflection
+                {(userData.journalEntries || []).length === 1 ? '' : 's'}
               </span>
-              <h4 className="font-display font-extrabold text-xs sm:text-sm text-slate-900">
-                Everything You Enter Is Remembered &amp; Synced ({userData.name})
-              </h4>
+              <span
+                className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                  showSavedReflections
+                    ? 'bg-emerald-400/20 text-emerald-100 border border-emerald-300/30'
+                    : 'bg-sage-100 text-sage-800 border border-sage-200'
+                }`}
+              >
+                💾 App Memory Vault Active
+              </span>
             </div>
-            <p className="text-xs text-slate-600 mt-1">
-              Stored in your profile memory:{' '}
-              <strong>{memoryStats.periodsCount}</strong> periods ·{' '}
-              <strong>{memoryStats.dailyLogsCount}</strong> daily mood/symptom logs ·{' '}
-              <strong>{memoryStats.totalWaterGlasses}</strong> water glasses ·{' '}
-              <strong>{memoryStats.journalCount}</strong> journal reflections ·{' '}
-              <strong>{memoryStats.tasksCount}</strong> study tasks ·{' '}
-              <strong>{memoryStats.skincareCount}</strong> skincare records.
+            <h3 className="font-display font-extrabold text-lg sm:text-xl leading-snug">
+              Saved Reflections &amp; Self-Awareness
+            </h3>
+            <p
+              className={`text-xs sm:text-sm mt-0.5 ${
+                showSavedReflections ? 'text-lavender-100' : 'text-slate-600'
+              }`}
+            >
+              Tap to {showSavedReflections ? 'hide' : 'open'} your past cycle reflections, search by stage, or back up your memory vault
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={handleExportMemoryBackup}
-            className="px-3.5 py-2 rounded-xl bg-white hover:bg-lavender-50 text-lavender-900 border border-lavender-200 font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+        <div className="flex items-center justify-end shrink-0">
+          <span
+            className={`px-4 py-2.5 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-2 shadow-2xs transition-all ${
+              showSavedReflections
+                ? 'bg-white text-lavender-950'
+                : 'bg-lavender-700 text-white'
+            }`}
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export Memory (.json)</span>
-          </button>
-
-          <label className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer">
-            <Upload className="w-3.5 h-3.5" />
-            <span>Restore Memory</span>
-            <input
-              type="file"
-              accept=".json,application/json"
-              onChange={handleImportMemoryBackup}
-              className="hidden"
-            />
-          </label>
+            <span>{showSavedReflections ? '▲ Hide Reflections' : '▼ Open Saved Reflections'}</span>
+          </span>
         </div>
-      </div>
+      </button>
+
+      {/* Expandable Saved Journal Reflections Timeline, Search & Memory Backup */}
+      {showSavedReflections && (
+        <div className="mt-5 pt-5 border-t border-lavender-100 space-y-6">
+          <div>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+              <div>
+                <h4 className="font-display font-extrabold text-base sm:text-lg text-slate-800">
+                  📖 Saved Reflections &amp; Self-Awareness Log ({(userData.journalEntries || []).length})
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Search or filter your past reflections across all menstrual cycle stages:
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Search Box */}
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search reflections..."
+                    className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 text-xs font-medium bg-cream focus:bg-white focus:border-lavender-500 outline-none"
+                  />
+                </div>
+
+                {/* Stage Filter Pills */}
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setFilterStage('ALL')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                      filterStage === 'ALL'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-cream text-slate-600 border border-slate-200 hover:bg-lavender-50'
+                    }`}
+                  >
+                    All
+                  </button>
+                  {STAGE_ORDER.map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setFilterStage(st)}
+                      className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                        filterStage === st
+                          ? 'bg-lavender-700 text-white'
+                          : 'bg-cream text-slate-600 border border-slate-200 hover:bg-lavender-50'
+                      }`}
+                      title={STAGE_BADGE_STYLES[st].label}
+                    >
+                      {STAGE_BADGE_STYLES[st].emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {filteredEntries.length === 0 ? (
+              <div className="rounded-2xl bg-cream border border-slate-200/80 p-4 text-center text-xs text-slate-500 italic">
+                No journal reflections match this filter yet. Answer today&apos;s cycle-stage prompt above to record your first reflection!
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                {filteredEntries.map((entry) => {
+                  const stMeta = STAGE_BADGE_STYLES[entry.stageKey] || STAGE_BADGE_STYLES.LUTEAL;
+                  const moodEmoji = entry.moodAtReflection
+                    ? MOOD_CATEGORIES.find((m) => m.id === entry.moodAtReflection)?.emoji
+                    : null;
+
+                  return (
+                    <div
+                      key={entry.id}
+                      className="rounded-2xl bg-cream/70 hover:bg-white border border-slate-200/90 p-4 transition-all flex flex-col justify-between gap-3 shadow-2xs"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span
+                              className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-md border ${stMeta.badge}`}
+                            >
+                              {stMeta.emoji} {stMeta.label} · Day {entry.cycleDay}
+                            </span>
+                            {entry.moodAtReflection && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700">
+                                {moodEmoji} {entry.moodAtReflection}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[11px] font-mono font-bold text-slate-500 flex items-center gap-1 shrink-0">
+                            <Calendar className="w-3 h-3 text-lavender-600" />
+                            {formatShortMonthDay(entry.dateStr)}
+                          </span>
+                        </div>
+
+                        <p className="text-xs font-extrabold text-lavender-900 mb-1.5">
+                          Q: &ldquo;{entry.promptQuestion}&rdquo;
+                        </p>
+                        <p className="text-xs sm:text-sm text-slate-700 leading-relaxed whitespace-pre-line bg-white rounded-xl p-3 border border-slate-100">
+                          {entry.reflectionText}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
+                        <span className="text-[10px] text-slate-400 font-mono">
+                          Saved {formatHumanDate(entry.dateStr)}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleEditEntry(entry)}
+                            className="px-2.5 py-1 rounded-lg bg-lavender-50 hover:bg-lavender-100 text-lavender-800 font-bold text-[11px] flex items-center gap-1 border border-lavender-200"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteEntry(entry.id)}
+                            className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[11px] border border-rose-200"
+                            title="Delete reflection"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Persistent App Memory Vault Status & Backup Bar */}
+          <div className="rounded-2xl bg-gradient-to-r from-lavender-50 via-sage-50 to-peach-50 border border-lavender-200 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-white border border-lavender-200 flex items-center justify-center text-lavender-700 shrink-0 shadow-2xs">
+                <Database className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md bg-sage-700 text-white">
+                    App Memory Active
+                  </span>
+                  <h4 className="font-display font-extrabold text-xs sm:text-sm text-slate-900">
+                    Everything You Enter Is Remembered &amp; Synced ({userData.name})
+                  </h4>
+                </div>
+                <p className="text-xs text-slate-600 mt-1">
+                  Stored in your profile memory:{' '}
+                  <strong>{memoryStats.periodsCount}</strong> periods ·{' '}
+                  <strong>{memoryStats.dailyLogsCount}</strong> daily mood/symptom logs ·{' '}
+                  <strong>{memoryStats.totalWaterGlasses}</strong> water glasses ·{' '}
+                  <strong>{memoryStats.journalCount}</strong> journal reflections ·{' '}
+                  <strong>{memoryStats.tasksCount}</strong> study tasks ·{' '}
+                  <strong>{memoryStats.skincareCount}</strong> skincare records.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleExportMemoryBackup}
+                className="px-3.5 py-2 rounded-xl bg-white hover:bg-lavender-50 text-lavender-900 border border-lavender-200 font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export Memory (.json)</span>
+              </button>
+
+              <label className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer">
+                <Upload className="w-3.5 h-3.5" />
+                <span>Restore Memory</span>
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleImportMemoryBackup}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };

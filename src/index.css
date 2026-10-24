@@ -36,12 +36,17 @@
   --color-gold-500: #D4AF37;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   background-color: #FDFBF7;
   color: #1E293B;
   font-family: "Plus Jakarta Sans", sans-serif;
   -webkit-tap-highlight-color: transparent;
   transition: background-color 0.25s ease, color 0.25s ease;
+  line-height: 1.55;
 }
 
 h1, h2, h3, .font-display {

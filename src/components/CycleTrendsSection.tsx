@@ -181,71 +181,156 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [periodsSignature, avgCycleLength, avgPeriodDuration]);
 
-  // D3 Line & Variability Geometry Calculations
-  const d3Geometry = useMemo(() => {
-    const width = 680;
-    const height = 260;
-    const margin = { top: 24, right: 28, bottom: 36, left: 44 };
+  // D3 Cycle Wheel (Radial 360° Cycle Length & Phase Wheel) Geometry Calculations
+  const d3WheelGeometry = useMemo(() => {
+    const cx = 195;
+    const cy = 170;
+    const innerHubR = 46;
+    const maxDataR = 116;
+    const phaseRingInnerR = 124;
+    const phaseRingOuterR = 138;
 
-    const yMin = Math.min(18, stats.minCycle - 3);
-    const yMax = Math.max(40, stats.maxCycle + 3);
+    const rMinVal = Math.min(18, stats.minCycle - 3);
+    const rMaxVal = Math.max(40, stats.maxCycle + 3);
 
-    const xScale = d3
-      .scalePoint<string>()
-      .domain(chartData.map((d) => d.monthLabel))
-      .range([margin.left, width - margin.right])
-      .padding(0.2);
-
-    const yScale = d3
+    const rScale = d3
       .scaleLinear()
-      .domain([yMin, yMax])
-      .range([height - margin.bottom, margin.top]);
+      .domain([rMinVal, rMaxVal])
+      .range([innerHubR + 10, maxDataR])
+      .clamp(true);
 
-    const lineGenerator = d3
-      .line<SixMonthPoint>()
-      .x((d) => xScale(d.monthLabel) ?? margin.left)
-      .y((d) => yScale(d.cycleLength))
-      .curve(d3.curveMonotoneX);
+    // 4 Hormonal Cycle Phase Arcs around the outer wheel
+    const totalRefDays = Math.max(21, avgCycleLength || 28);
+    const bleedDays = Math.min(8, Math.max(3, avgPeriodDuration || 5));
+    const ovulStart = Math.max(bleedDays + 4, totalRefDays - 16);
+    const ovulEnd = Math.min(totalRefDays - 4, ovulStart + 4);
 
-    const areaGenerator = d3
-      .area<SixMonthPoint>()
-      .x((d) => xScale(d.monthLabel) ?? margin.left)
-      .y0(height - margin.bottom)
-      .y1((d) => yScale(d.cycleLength))
-      .curve(d3.curveMonotoneX);
+    const rawPhases = [
+      {
+        id: 'MENSTRUATION',
+        label: '🩸 Menstruation',
+        startDay: 0,
+        endDay: bleedDays,
+        color: '#F43F5E',
+      },
+      {
+        id: 'FOLLICULAR',
+        label: '🌱 Follicular',
+        startDay: bleedDays,
+        endDay: ovulStart,
+        color: '#8B5CF6',
+      },
+      {
+        id: 'OVULATION',
+        label: '🌸 Ovulation',
+        startDay: ovulStart,
+        endDay: ovulEnd,
+        color: '#10B981',
+      },
+      {
+        id: 'LUTEAL',
+        label: '🌙 Luteal',
+        startDay: ovulEnd,
+        endDay: totalRefDays,
+        color: '#F59E0B',
+      },
+    ];
 
-    // Variability envelope around user's average cycle length (±max(2, stdDev))
-    const bandHalf = Math.max(2, Math.round(stats.cycleVariation / 2));
-    const variabilityBandGenerator = d3
-      .area<SixMonthPoint>()
-      .x((d) => xScale(d.monthLabel) ?? margin.left)
-      .y0(() => yScale(Math.max(yMin, avgCycleLength - bandHalf)))
-      .y1(() => yScale(Math.min(yMax, avgCycleLength + bandHalf)))
-      .curve(d3.curveMonotoneX);
+    const arcGen = d3
+      .arc<{ startAngle: number; endAngle: number }>()
+      .innerRadius(phaseRingInnerR)
+      .outerRadius(phaseRingOuterR)
+      .padAngle(0.025)
+      .cornerRadius(5);
 
-    const linePath = lineGenerator(chartData) || '';
-    const areaPath = areaGenerator(chartData) || '';
-    const variabilityBandPath = variabilityBandGenerator(chartData) || '';
+    const phaseArcs = rawPhases.map((p) => {
+      const startAngle = (p.startDay / totalRefDays) * Math.PI * 2;
+      const endAngle = (p.endDay / totalRefDays) * Math.PI * 2;
+      return {
+        ...p,
+        path: arcGen({ startAngle, endAngle }) || '',
+      };
+    });
 
-    const yTicks = yScale.ticks(6);
-    const normalZoneTop = yScale(Math.min(yMax, 35));
-    const normalZoneBottom = yScale(Math.max(yMin, 25));
+    // Normal clinical window annulus (25d to 35d)
+    const normalInnerR = rScale(Math.max(rMinVal, 25));
+    const normalOuterR = rScale(Math.min(rMaxVal, 35));
+    const normalRingPath =
+      d3
+        .arc<{ startAngle: number; endAngle: number }>()
+        .innerRadius(normalInnerR)
+        .outerRadius(normalOuterR)({ startAngle: 0, endAngle: Math.PI * 2 }) || '';
+
+    // 6-Month Radial Nodes positioned evenly around the 360° wheel
+    const count = Math.max(1, chartData.length);
+    const wheelNodes = chartData.map((pt, idx) => {
+      // D3 radial angle where 0 is 12 o'clock
+      const d3Angle = (idx / count) * Math.PI * 2;
+      // Standard trig angle where -PI/2 is 12 o'clock
+      const trigAngle = d3Angle - Math.PI / 2;
+      const r = rScale(pt.cycleLength);
+      const meanR = rScale(avgCycleLength);
+      const x = cx + r * Math.cos(trigAngle);
+      const y = cy + r * Math.sin(trigAngle);
+      const meanX = cx + meanR * Math.cos(trigAngle);
+      const meanY = cy + meanR * Math.sin(trigAngle);
+      const spokeOuterX = cx + (phaseRingInnerR - 4) * Math.cos(trigAngle);
+      const spokeOuterY = cy + (phaseRingInnerR - 4) * Math.sin(trigAngle);
+      const labelR = phaseRingOuterR + 17;
+      const labelX = cx + labelR * Math.cos(trigAngle);
+      const labelY = cy + labelR * Math.sin(trigAngle);
+
+      return {
+        ...pt,
+        idx,
+        d3Angle,
+        trigAngle,
+        r,
+        x,
+        y,
+        meanX,
+        meanY,
+        spokeOuterX,
+        spokeOuterY,
+        labelX,
+        labelY,
+      };
+    });
+
+    // Closed D3 radial curve connecting all 6 months in a smooth wheel loop
+    const radialLineGen = d3
+      .lineRadial<{ d3Angle: number; r: number }>()
+      .angle((d) => d.d3Angle)
+      .radius((d) => d.r)
+      .curve(d3.curveCardinalClosed.tension(0.55));
+
+    const radialAreaGen = d3
+      .areaRadial<{ d3Angle: number; r: number }>()
+      .angle((d) => d.d3Angle)
+      .innerRadius(innerHubR)
+      .outerRadius((d) => d.r)
+      .curve(d3.curveCardinalClosed.tension(0.55));
+
+    const radialCurvePath = radialLineGen(wheelNodes) || '';
+    const radialAreaPath = radialAreaGen(wheelNodes) || '';
 
     return {
-      width,
-      height,
-      margin,
-      xScale,
-      yScale,
-      linePath,
-      areaPath,
-      variabilityBandPath,
-      yTicks,
-      normalZoneTop,
-      normalZoneBottom,
-      avgY: yScale(avgCycleLength),
+      cx,
+      cy,
+      innerHubR,
+      maxDataR,
+      phaseRingInnerR,
+      phaseRingOuterR,
+      avgR: rScale(avgCycleLength),
+      normalInnerR,
+      normalOuterR,
+      normalRingPath,
+      phaseArcs,
+      wheelNodes,
+      radialCurvePath,
+      radialAreaPath,
     };
-  }, [chartData, stats.minCycle, stats.maxCycle, stats.cycleVariation, avgCycleLength]);
+  }, [chartData, stats.minCycle, stats.maxCycle, avgCycleLength, avgPeriodDuration]);
 
   const buildLocalFallbackInsight = useCallback((): CycleHealthInsight => {
     const irregularMonths = chartData.filter(
@@ -347,14 +432,14 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-5">
         <div>
           <span className="text-xs font-bold uppercase tracking-wider text-lavender-700 block mb-1">
-            6-Month Pattern Analytics · D3 Variability Engine
+            6-Month Pattern Analytics · D3 Cycle Wheel Engine
           </span>
           <h2 className="text-xl sm:text-2xl font-extrabold text-slate-800 flex items-center gap-2">
             <TrendingUp className="w-5 h-5 text-lavender-700" />
-            <span>Cycle Trends & Variability (Last 6 Months)</span>
+            <span>Cycle Trends &amp; Variability (Last 6 Months)</span>
           </h2>
           <p className="text-xs sm:text-sm text-slate-600 mt-0.5">
-            Visualize your 6-month cycle length variability and bleeding duration to spot exam stress, sleep, or hormonal shifts early.
+            Explore your 6-month cycle length wheel and bleeding duration to spot exam stress, sleep, or hormonal shifts early.
           </p>
         </div>
 
@@ -369,7 +454,7 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            D3 Variability Line
+            🎡 D3 Cycle Wheel
           </button>
           <button
             type="button"
@@ -466,20 +551,20 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
       <div className="bg-cream rounded-2xl border border-slate-200/80 p-4">
         {chartView === 'd3_variability' ? (
           <div className="relative">
-            {/* D3 Legend & Active Point Readout */}
+            {/* D3 Cycle Wheel Legend & Active Point Readout */}
             <div className="flex flex-wrap items-center justify-between gap-2 mb-3 text-xs">
               <div className="flex flex-wrap items-center gap-3">
                 <span className="inline-flex items-center gap-1.5 font-bold text-lavender-900">
-                  <span className="w-3 h-0.5 bg-lavender-700 inline-block rounded-full" />
-                  D3 Cycle Length Curve
+                  <span className="w-3 h-3 rounded-full border-2 border-lavender-700 bg-lavender-200 inline-block" />
+                  D3 Cycle Length Wheel
                 </span>
                 <span className="inline-flex items-center gap-1.5 font-semibold text-sage-700">
                   <span className="w-3 h-2.5 bg-emerald-500/15 border border-emerald-500/40 inline-block rounded-xs" />
-                  Clinical Normal Window (25–35d)
+                  Clinical Normal Ring (25–35d)
                 </span>
-                <span className="inline-flex items-center gap-1.5 font-semibold text-lavender-700">
-                  <span className="w-3 h-2.5 bg-lavender-500/15 border border-lavender-400/40 inline-block rounded-xs" />
-                  Personal Variability Band
+                <span className="inline-flex items-center gap-1.5 font-semibold text-rose-700">
+                  <span className="w-3 h-2.5 bg-gradient-to-r from-rose-500 via-violet-500 to-amber-500 inline-block rounded-full" />
+                  4-Phase Outer Wheel
                 </span>
               </div>
               {hoveredPoint ? (
@@ -493,174 +578,283 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                 </div>
               ) : (
                 <span className="text-[11px] text-slate-500">
-                  Hover or tap any month node to inspect cycle deviation
+                  Tap or hover any month on the wheel to inspect cycle length &amp; bleed days
                 </span>
               )}
             </div>
 
-            {/* Responsive D3 SVG Chart */}
-            <div className="w-full overflow-x-auto">
-              <svg
-                viewBox={`0 0 ${d3Geometry.width} ${d3Geometry.height}`}
-                className="w-full h-64 sm:h-72 select-none overflow-visible"
-                role="img"
-                aria-label="D3 6-Month Cycle Length Variability Line Chart"
-              >
-                <defs>
-                  <linearGradient id="d3CycleAreaGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#5639CC" stopOpacity={0.26} />
-                    <stop offset="100%" stopColor="#5639CC" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
-
-                {/* Clinical Normal Reference Band (25–35 days) */}
-                <rect
-                  x={d3Geometry.margin.left}
-                  y={d3Geometry.normalZoneTop}
-                  width={d3Geometry.width - d3Geometry.margin.left - d3Geometry.margin.right}
-                  height={Math.max(0, d3Geometry.normalZoneBottom - d3Geometry.normalZoneTop)}
-                  fill="#10B981"
-                  fillOpacity={0.07}
-                  rx={6}
-                />
-
-                {/* Horizontal Grid Lines & Y-Axis Labels */}
-                {d3Geometry.yTicks.map((tickVal) => {
-                  const yPos = d3Geometry.yScale(tickVal);
-                  return (
-                    <g key={tickVal}>
-                      <line
-                        x1={d3Geometry.margin.left}
-                        x2={d3Geometry.width - d3Geometry.margin.right}
-                        y1={yPos}
-                        y2={yPos}
-                        stroke="#E2E8F0"
-                        strokeDasharray="3 3"
-                      />
-                      <text
-                        x={d3Geometry.margin.left - 8}
-                        y={yPos + 4}
-                        textAnchor="end"
-                        className="fill-slate-500 text-[11px] font-semibold"
-                      >
-                        {tickVal}d
-                      </text>
-                    </g>
-                  );
-                })}
-
-                {/* User's Personal Variability Band around Mean */}
-                <path
-                  d={d3Geometry.variabilityBandPath}
-                  fill="#7C5CFA"
-                  fillOpacity={0.12}
-                />
-
-                {/* Mean Cycle Length Reference Line */}
-                <line
-                  x1={d3Geometry.margin.left}
-                  x2={d3Geometry.width - d3Geometry.margin.right}
-                  y1={d3Geometry.avgY}
-                  y2={d3Geometry.avgY}
-                  stroke="#7C5CFA"
-                  strokeWidth={1.5}
-                  strokeDasharray="5 4"
-                />
-                <text
-                  x={d3Geometry.width - d3Geometry.margin.right - 4}
-                  y={d3Geometry.avgY - 6}
-                  textAnchor="end"
-                  className="fill-lavender-700 text-[10px] font-bold"
+            {/* Interactive D3 Radial Cycle Wheel + 6-Month Wheel Selector Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
+              <div className="lg:col-span-7 flex items-center justify-center">
+                <svg
+                  viewBox="0 0 390 340"
+                  className="w-full max-w-[380px] h-72 sm:h-80 select-none overflow-visible"
+                  role="img"
+                  aria-label="D3 6-Month Cycle Length Wheel"
                 >
-                  Mean {avgCycleLength}d
-                </text>
+                  <defs>
+                    <radialGradient id="d3CycleWheelGrad" cx="50%" cy="50%" r="50%">
+                      <stop offset="20%" stopColor="#7C5CFA" stopOpacity={0.08} />
+                      <stop offset="100%" stopColor="#5639CC" stopOpacity={0.32} />
+                    </radialGradient>
+                  </defs>
 
-                {/* Shaded Area Under D3 Monotone Curve */}
-                <path d={d3Geometry.areaPath} fill="url(#d3CycleAreaGrad)" />
+                  {/* Translated Group to Wheel Center */}
+                  <g transform={`translate(${d3WheelGeometry.cx}, ${d3WheelGeometry.cy})`}>
+                    {/* Outer 4-Phase Hormonal Ring */}
+                    {d3WheelGeometry.phaseArcs.map((arc) => (
+                      <path
+                        key={arc.id}
+                        d={arc.path}
+                        fill={arc.color}
+                        fillOpacity={0.85}
+                      />
+                    ))}
 
-                {/* Smooth D3 Cycle Length Line */}
-                <path
-                  d={d3Geometry.linePath}
-                  fill="none"
-                  stroke="#5639CC"
-                  strokeWidth={3.2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
+                    {/* Clinical Normal Reference Ring (25–35 days) */}
+                    <path
+                      d={d3WheelGeometry.normalRingPath}
+                      fill="#10B981"
+                      fillOpacity={0.1}
+                    />
+                    <circle
+                      r={d3WheelGeometry.normalInnerR}
+                      fill="none"
+                      stroke="#10B981"
+                      strokeOpacity={0.35}
+                      strokeDasharray="2 3"
+                    />
+                    <circle
+                      r={d3WheelGeometry.normalOuterR}
+                      fill="none"
+                      stroke="#10B981"
+                      strokeOpacity={0.35}
+                      strokeDasharray="2 3"
+                    />
 
-                {/* Data Nodes, Deviation Connectors & X-Axis Labels */}
-                {chartData.map((pt) => {
-                  const cx = d3Geometry.xScale(pt.monthLabel) ?? d3Geometry.margin.left;
-                  const cy = d3Geometry.yScale(pt.cycleLength);
-                  const isOutlier = pt.cycleLength < 25 || pt.cycleLength > 35;
-                  const isHovered = hoveredPoint?.monthKey === pt.monthKey;
+                    {/* Personal Mean Cycle Length Ring */}
+                    <circle
+                      r={d3WheelGeometry.avgR}
+                      fill="none"
+                      stroke="#7C5CFA"
+                      strokeWidth={1.6}
+                      strokeDasharray="5 4"
+                    />
 
-                  return (
-                    <g
-                      key={pt.monthKey}
-                      className="cursor-pointer"
-                      onMouseEnter={() => setHoveredPoint(pt)}
-                      onMouseLeave={() => setHoveredPoint(null)}
-                      onClick={() => setHoveredPoint(pt)}
+                    {/* Shaded D3 Radial Cycle Area */}
+                    <path
+                      d={d3WheelGeometry.radialAreaPath}
+                      fill="url(#d3CycleWheelGrad)"
+                    />
+
+                    {/* Closed D3 Radial Cycle Length Curve */}
+                    <path
+                      d={d3WheelGeometry.radialCurvePath}
+                      fill="none"
+                      stroke="#5639CC"
+                      strokeWidth={3}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+
+                    {/* Center Hub Readout Circle */}
+                    <circle
+                      r={d3WheelGeometry.innerHubR}
+                      fill="#FFFFFF"
+                      stroke="#DDD2FD"
+                      strokeWidth={2.5}
+                    />
+                    <text
+                      x={0}
+                      y={-12}
+                      textAnchor="middle"
+                      className="fill-slate-400 text-[9px] font-extrabold uppercase tracking-wider"
                     >
-                      {/* Vertical deviation stem from mean line */}
-                      <line
-                        x1={cx}
-                        x2={cx}
-                        y1={d3Geometry.avgY}
-                        y2={cy}
-                        stroke={isOutlier ? '#E11D48' : '#7C5CFA'}
-                        strokeWidth={1.5}
-                        strokeDasharray="2 2"
-                        strokeOpacity={0.65}
-                      />
+                      {hoveredPoint ? hoveredPoint.monthLabel : '6-Mo Avg'}
+                    </text>
+                    <text
+                      x={0}
+                      y={8}
+                      textAnchor="middle"
+                      className="fill-lavender-950 text-[16px] font-extrabold"
+                    >
+                      {hoveredPoint ? `${hoveredPoint.cycleLength}d` : `${avgCycleLength}d`}
+                    </text>
+                    <text
+                      x={0}
+                      y={23}
+                      textAnchor="middle"
+                      className="fill-rose-600 text-[9.5px] font-bold"
+                    >
+                      {hoveredPoint
+                        ? `🩸 ${hoveredPoint.periodDuration}d bleed`
+                        : `🩸 ${avgPeriodDuration}d avg`}
+                    </text>
+                  </g>
 
-                      {/* Outer halo on hover or outlier */}
-                      {(isHovered || isOutlier) && (
-                        <circle
-                          cx={cx}
-                          cy={cy}
-                          r={isHovered ? 10 : 8}
-                          fill={isOutlier ? '#F43F5E' : '#5639CC'}
-                          fillOpacity={0.2}
+                  {/* Radial Spokes, Month Nodes & Perimeter Labels */}
+                  {d3WheelGeometry.wheelNodes.map((node) => {
+                    const isOutlier = node.cycleLength < 25 || node.cycleLength > 35;
+                    const isHovered = hoveredPoint?.monthKey === node.monthKey;
+
+                    return (
+                      <g
+                        key={node.monthKey}
+                        className="cursor-pointer"
+                        onMouseEnter={() => setHoveredPoint(node)}
+                        onMouseLeave={() => setHoveredPoint(null)}
+                        onClick={() => setHoveredPoint(node)}
+                      >
+                        {/* Radial spoke guide */}
+                        <line
+                          x1={
+                            d3WheelGeometry.cx +
+                            d3WheelGeometry.innerHubR * Math.cos(node.trigAngle)
+                          }
+                          y1={
+                            d3WheelGeometry.cy +
+                            d3WheelGeometry.innerHubR * Math.sin(node.trigAngle)
+                          }
+                          x2={node.spokeOuterX}
+                          y2={node.spokeOuterY}
+                          stroke="#CBD5E1"
+                          strokeWidth={1}
+                          strokeDasharray="2 3"
                         />
-                      )}
 
-                      {/* Main Data Point Circle */}
-                      <circle
-                        cx={cx}
-                        cy={cy}
-                        r={isHovered ? 6.5 : 5}
-                        fill={isOutlier ? '#E11D48' : pt.isLogged ? '#5639CC' : '#94A3B8'}
-                        stroke="#FFFFFF"
-                        strokeWidth={2}
-                      />
+                        {/* Deviation stem from personal mean ring to month node */}
+                        <line
+                          x1={node.meanX}
+                          y1={node.meanY}
+                          x2={node.x}
+                          y2={node.y}
+                          stroke={isOutlier ? '#E11D48' : '#7C5CFA'}
+                          strokeWidth={2}
+                        />
 
-                      {/* Value Pill Above Node */}
-                      <text
-                        x={cx}
-                        y={cy - 10}
-                        textAnchor="middle"
-                        className={`text-[11px] font-extrabold ${
-                          isOutlier ? 'fill-rose-700' : 'fill-lavender-900'
+                        {/* Halo on hover or outlier */}
+                        {(isHovered || isOutlier) && (
+                          <circle
+                            cx={node.x}
+                            cy={node.y}
+                            r={isHovered ? 11 : 8.5}
+                            fill={isOutlier ? '#F43F5E' : '#5639CC'}
+                            fillOpacity={0.22}
+                          />
+                        )}
+
+                        {/* Month Data Point Circle */}
+                        <circle
+                          cx={node.x}
+                          cy={node.y}
+                          r={isHovered ? 7 : 5.5}
+                          fill={isOutlier ? '#E11D48' : node.isLogged ? '#5639CC' : '#94A3B8'}
+                          stroke="#FFFFFF"
+                          strokeWidth={2}
+                        />
+
+                        {/* Outer Wheel Month & Cycle Length Badge */}
+                        <text
+                          x={node.labelX}
+                          y={node.labelY - 3}
+                          textAnchor="middle"
+                          className={`text-[10.5px] font-extrabold ${
+                            isHovered ? 'fill-lavender-900' : 'fill-slate-700'
+                          }`}
+                        >
+                          {node.monthLabel}
+                        </text>
+                        <text
+                          x={node.labelX}
+                          y={node.labelY + 9}
+                          textAnchor="middle"
+                          className={`text-[10px] font-bold ${
+                            isOutlier ? 'fill-rose-600' : 'fill-lavender-700'
+                          }`}
+                        >
+                          {node.cycleLength}d
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+
+              {/* Right Column: Interactive 6-Month Wheel Spokes & Phase Key */}
+              <div className="lg:col-span-5 space-y-2.5">
+                <div className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
+                  Tap Any Month Spoke on the Wheel:
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {chartData.map((pt) => {
+                    const isSelected = hoveredPoint?.monthKey === pt.monthKey;
+                    const isOutlier = pt.cycleLength < 25 || pt.cycleLength > 35;
+                    return (
+                      <button
+                        key={pt.monthKey}
+                        type="button"
+                        onClick={() =>
+                          setHoveredPoint((prev) =>
+                            prev?.monthKey === pt.monthKey ? null : pt
+                          )
+                        }
+                        className={`p-2.5 rounded-2xl border text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-lavender-700 text-white border-lavender-900 shadow-xs'
+                            : 'bg-white hover:bg-lavender-50 text-slate-800 border-slate-200'
                         }`}
                       >
-                        {pt.cycleLength}d
-                      </text>
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs font-extrabold">{pt.monthLabel}</span>
+                          <span
+                            className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded-md tabular-nums ${
+                              isSelected
+                                ? 'bg-white/20 text-white'
+                                : isOutlier
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-lavender-50 text-lavender-800'
+                            }`}
+                          >
+                            {pt.cycleLength}d
+                          </span>
+                        </div>
+                        <div
+                          className={`text-[10px] mt-1 font-medium tabular-nums ${
+                            isSelected ? 'text-lavender-100' : 'text-slate-500'
+                          }`}
+                        >
+                          🩸 {pt.periodDuration}d bleed · {pt.startDateLabel}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
 
-                      {/* X-Axis Month Label */}
-                      <text
-                        x={cx}
-                        y={d3Geometry.height - 10}
-                        textAnchor="middle"
-                        className="fill-slate-600 text-[11px] font-bold"
-                      >
-                        {pt.monthLabel}
-                      </text>
-                    </g>
-                  );
-                })}
-              </svg>
+                {/* 4-Phase Outer Ring Legend */}
+                <div className="rounded-2xl bg-white border border-slate-200/90 p-3">
+                  <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">
+                    Outer Wheel 4 Hormonal Stages:
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5 text-[11px] font-bold">
+                    <span className="flex items-center gap-1.5 text-rose-700">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" />
+                      🩸 Menstruation
+                    </span>
+                    <span className="flex items-center gap-1.5 text-violet-700">
+                      <span className="w-2.5 h-2.5 rounded-full bg-violet-500 inline-block" />
+                      🌱 Follicular
+                    </span>
+                    <span className="flex items-center gap-1.5 text-emerald-700">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
+                      🌸 Ovulation
+                    </span>
+                    <span className="flex items-center gap-1.5 text-amber-700">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" />
+                      🌙 Luteal
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         ) : (

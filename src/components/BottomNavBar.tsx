@@ -67,8 +67,8 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
     },
     {
       id: 'guide',
-      label: 'Edu & Contraception',
-      shortLabel: 'Edu & Guide',
+      label: 'Phase & Pill Guide',
+      shortLabel: 'Guide',
       icon: Pill,
       activeBg: isDarkMode ? 'bg-peach-950/80' : 'bg-peach-50',
       activeText: isDarkMode ? 'text-peach-300' : 'text-peach-800',

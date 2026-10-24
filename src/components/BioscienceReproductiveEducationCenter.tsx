@@ -539,6 +539,11 @@ export const BioscienceReproductiveEducationCenter: React.FC<
   onNavigateToUpdateLmp,
   onNavigateToEmergencyPillLogger,
 }) => {
+  // Collapsible button state for the Reproductive Health Education Hub & Endocrine Physiology
+  const [isEducationHubOpen, setIsEducationHubOpen] = useState<boolean>(false);
+  const [isEndocrineOpen, setIsEndocrineOpen] = useState<boolean>(false);
+  const [isBiomarkersOpen, setIsBiomarkersOpen] = useState<boolean>(false);
+
   // Active Top-Level Module Tab
   const [activeModule, setActiveModule] = useState<
     'reproductive_center' | 'contraceptive_guide' | 'bioscience_workbench'
@@ -736,6 +741,7 @@ export const BioscienceReproductiveEducationCenter: React.FC<
       cid: method.pubchemCid,
       roleSummary: `${method.name}: ${method.mechanismOfAction}`,
     };
+    setIsEducationHubOpen(true);
     setActiveModule('bioscience_workbench');
     loadBioTargetDetails(target);
   };
@@ -753,61 +759,148 @@ export const BioscienceReproductiveEducationCenter: React.FC<
   return (
     <section
       id="educational-resources-center"
-      className="bg-[#F8FAFC] rounded-3xl shadow-xs border-2 border-[#E2E8F0] p-5 sm:p-6 space-y-6"
+      className="bg-cream/90 rounded-3xl shadow-xs border-2 border-lavender-200/90 p-5 sm:p-6 space-y-5 transition-all duration-300"
     >
-      {/* HEADER BANNER */}
-      <div className="bg-white rounded-2xl border border-[#E2E8F0] p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div className="space-y-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="px-2.5 py-1 rounded-lg bg-[#0B57D0] text-white text-[11px] font-extrabold uppercase tracking-wider">
-              🧬 Educational Resources · Bioscience &amp; Reproductive Health Center
-            </span>
-            <span className="px-2.5 py-1 rounded-lg bg-[#007B83]/10 text-[#007B83] border border-[#007B83]/30 text-[11px] font-bold">
-              [Literature Curated &amp; Public Science APIs]
-            </span>
+      {/* INTERACTIVE HEADER BANNER & BUTTON LAUNCHER */}
+      <div className="bg-white rounded-2xl border border-lavender-200/80 p-5 flex flex-col gap-4 shadow-2xs">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="px-2.5 py-1 rounded-lg bg-lavender-700 text-white text-[11px] font-extrabold uppercase tracking-wider">
+                🧬 Educational Resources · Bioscience &amp; Reproductive Health
+              </span>
+              <span className="px-2.5 py-1 rounded-lg bg-sage-50 text-sage-800 border border-sage-200 text-[11px] font-bold">
+                Day {cycleDay} of {avgCycleLength}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsEducationHubOpen((prev) => !prev)}
+              aria-expanded={isEducationHubOpen}
+              className="group text-left inline-flex items-center gap-2.5 font-display font-extrabold text-xl sm:text-2xl text-slate-900 hover:text-lavender-700 transition-colors cursor-pointer"
+            >
+              <span>Reproductive Health Education &amp; Contraceptive Guide</span>
+              <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-xl bg-lavender-100 group-hover:bg-lavender-200 text-lavender-900 text-xs font-extrabold">
+                {isEducationHubOpen ? '▲ Hide' : '▼ Open'}
+              </span>
+            </button>
+
+            <p className="text-xs sm:text-sm text-slate-600 max-w-3xl leading-relaxed">
+              Tap the button to explore <strong>Reproductive Health Education</strong>,{' '}
+              <strong>Endocrine Physiology</strong>, <strong>Fertility Biomarkers</strong>,{' '}
+              <strong>Contraceptive Efficacy</strong>, and <strong>Live Molecular Pharmacology</strong>{' '}
+              in a clean, eye-friendly view.
+            </p>
           </div>
-          <h2 className="font-display font-extrabold text-xl sm:text-2xl text-slate-900">
-            Reproductive Health Education Center &amp; Contraceptive Guide
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-600 max-w-3xl leading-relaxed">
-            Evidence-based reproductive endocrinology, biological indicators of fertility and ovulation, objective contraceptive efficacy comparisons, and live molecular pharmacology data from <strong>PubChem</strong>, <strong>UniProtKB</strong>, <strong>AlphaFold DB</strong>, <strong>openFDA</strong>, and <strong>Europe PMC</strong>.
-          </p>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setIsEducationHubOpen((prev) => !prev)}
+              aria-expanded={isEducationHubOpen}
+              className={`px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm transition-all cursor-pointer flex items-center gap-2 shadow-xs border-2 ${
+                isEducationHubOpen
+                  ? 'bg-plum-900 text-gold-500 border-gold-500/60 hover:bg-lavender-900'
+                  : 'bg-gradient-to-r from-lavender-700 to-rose-600 hover:from-lavender-800 hover:to-rose-700 text-white border-white'
+              }`}
+            >
+              <span>🧬</span>
+              <span>
+                {isEducationHubOpen
+                  ? 'Hide Reproductive Health Education ▲'
+                  : 'Reproductive Health Education ▼'}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsEducationHubOpen(true);
+                setActiveModule('reproductive_center');
+                setIsEndocrineOpen((prev) => (isEducationHubOpen && activeModule === 'reproductive_center' ? !prev : true));
+              }}
+              aria-expanded={isEducationHubOpen && activeModule === 'reproductive_center' && isEndocrineOpen}
+              className={`px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm transition-all cursor-pointer flex items-center gap-2 shadow-xs border-2 ${
+                isEducationHubOpen && activeModule === 'reproductive_center' && isEndocrineOpen
+                  ? 'bg-sage-800 text-white border-sage-600'
+                  : 'bg-sage-50 hover:bg-sage-100 text-sage-900 border-sage-300'
+              }`}
+            >
+              <span>🔬</span>
+              <span>
+                {isEducationHubOpen && activeModule === 'reproductive_center' && isEndocrineOpen
+                  ? 'Hide Endocrine Physiology ▲'
+                  : 'Endocrine Physiology ▼'}
+              </span>
+            </button>
+          </div>
         </div>
 
-        {/* 3 CORE EDUCATIONAL MODULE TABS */}
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
+        {/* 3 CORE EDUCATIONAL MODULE BUTTONS */}
+        <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-100">
           <button
             type="button"
-            onClick={() => setActiveModule('reproductive_center')}
-            className={`px-3.5 py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer border ${
-              activeModule === 'reproductive_center'
-                ? 'bg-[#0B57D0] text-white border-[#0B57D0] shadow-xs'
-                : 'bg-white hover:bg-slate-50 text-slate-700 border-[#E2E8F0]'
+            onClick={() => {
+              if (isEducationHubOpen && activeModule === 'reproductive_center') {
+                setIsEducationHubOpen(false);
+              } else {
+                setIsEducationHubOpen(true);
+                setActiveModule('reproductive_center');
+              }
+            }}
+            className={`px-3.5 py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer border flex items-center gap-1.5 ${
+              isEducationHubOpen && activeModule === 'reproductive_center'
+                ? 'bg-lavender-700 text-white border-lavender-700 shadow-xs'
+                : 'bg-cream hover:bg-lavender-50 text-slate-700 border-slate-200'
             }`}
           >
-            🩸 1. Cycle, Fertility &amp; Ovulation
+            <span>🩸 1. Cycle, Fertility &amp; Ovulation</span>
+            <span className="text-[10px] opacity-80">
+              {isEducationHubOpen && activeModule === 'reproductive_center' ? '▲' : '▼'}
+            </span>
           </button>
           <button
             type="button"
-            onClick={() => setActiveModule('contraceptive_guide')}
-            className={`px-3.5 py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer border ${
-              activeModule === 'contraceptive_guide'
-                ? 'bg-[#007B83] text-white border-[#007B83] shadow-xs'
-                : 'bg-white hover:bg-slate-50 text-slate-700 border-[#E2E8F0]'
+            onClick={() => {
+              if (isEducationHubOpen && activeModule === 'contraceptive_guide') {
+                setIsEducationHubOpen(false);
+              } else {
+                setIsEducationHubOpen(true);
+                setActiveModule('contraceptive_guide');
+              }
+            }}
+            className={`px-3.5 py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer border flex items-center gap-1.5 ${
+              isEducationHubOpen && activeModule === 'contraceptive_guide'
+                ? 'bg-sage-700 text-white border-sage-700 shadow-xs'
+                : 'bg-cream hover:bg-sage-50 text-slate-700 border-slate-200'
             }`}
           >
-            🛡️ 2. Contraceptive Information Guide
+            <span>🛡️ 2. Contraceptive Information Guide</span>
+            <span className="text-[10px] opacity-80">
+              {isEducationHubOpen && activeModule === 'contraceptive_guide' ? '▲' : '▼'}
+            </span>
           </button>
           <button
             type="button"
-            onClick={() => setActiveModule('bioscience_workbench')}
-            className={`px-3.5 py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer border ${
-              activeModule === 'bioscience_workbench'
-                ? 'bg-[#9334E6] text-white border-[#9334E6] shadow-xs'
-                : 'bg-white hover:bg-slate-50 text-slate-700 border-[#E2E8F0]'
+            onClick={() => {
+              if (isEducationHubOpen && activeModule === 'bioscience_workbench') {
+                setIsEducationHubOpen(false);
+              } else {
+                setIsEducationHubOpen(true);
+                setActiveModule('bioscience_workbench');
+              }
+            }}
+            className={`px-3.5 py-2.5 rounded-xl font-extrabold text-xs transition-all cursor-pointer border flex items-center gap-1.5 ${
+              isEducationHubOpen && activeModule === 'bioscience_workbench'
+                ? 'bg-plum-900 text-gold-500 border-plum-900 shadow-xs'
+                : 'bg-cream hover:bg-lavender-50 text-slate-700 border-slate-200'
             }`}
           >
-            🔬 3. Live Molecular &amp; Literature Lab
+            <span>🔬 3. Live Molecular &amp; Literature Lab</span>
+            <span className="text-[10px] opacity-80">
+              {isEducationHubOpen && activeModule === 'bioscience_workbench' ? '▲' : '▼'}
+            </span>
           </button>
         </div>
       </div>
@@ -816,174 +909,220 @@ export const BioscienceReproductiveEducationCenter: React.FC<
           MODULE 1: REPRODUCTIVE HEALTH EDUCATION CENTER
           (Menstrual Cycle Endocrinology, Biological Indicators of Fertility, Ovulation)
          ===================================================================== */}
-      {activeModule === 'reproductive_center' && (
-        <div className="space-y-6">
-          {/* Sub-section A: Hypothalamic-Pituitary-Ovarian (HPO) Axis & 4 Cycle Phases */}
-          <div className="bg-white rounded-2xl border border-[#E2E8F0] p-5 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-              <div>
-                <span className="text-[11px] font-extrabold uppercase tracking-wider text-[#0B57D0] block">
+      {isEducationHubOpen && activeModule === 'reproductive_center' && (
+        <div className="space-y-4">
+          {/* Sub-section A: Interactive Button Card for Endocrine Physiology · HPO Axis Synchronization */}
+          <div className="bg-white rounded-2xl border border-lavender-200 p-4 sm:p-5 space-y-4 shadow-2xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-lavender-700 block">
                   Endocrine Physiology · HPO Axis Synchronization
                 </span>
-                <h3 className="font-display font-extrabold text-lg text-slate-900">
-                  The 4 Menstrual Cycle Phases: Ovarian, Endometrial &amp; Hormonal Dynamics
-                </h3>
+                <button
+                  type="button"
+                  onClick={() => setIsEndocrineOpen((prev) => !prev)}
+                  aria-expanded={isEndocrineOpen}
+                  className="text-left font-display font-extrabold text-base sm:text-lg text-slate-900 hover:text-lavender-700 transition-colors cursor-pointer flex items-center gap-2"
+                >
+                  <span>
+                    The 4 Menstrual Cycle Phases: Ovarian, Endometrial &amp; Hormonal Dynamics
+                  </span>
+                </button>
               </div>
-              <span className="text-xs font-bold px-3 py-1 rounded-lg bg-slate-100 text-slate-800 self-start sm:self-auto">
-                Your Active Tracker: Day {cycleDay} of {avgCycleLength}
-              </span>
-            </div>
 
-            {/* Phase Selector Pills */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-              {MENSTRUAL_BIOSCIENCE_PHASES.map((phase) => {
-                const isSelected = phase.stageKey === selectedEduStage;
-                const isUserCurrent = phase.stageKey === currentStageKey;
-                return (
-                  <button
-                    key={phase.stageKey}
-                    type="button"
-                    onClick={() => setSelectedEduStage(phase.stageKey)}
-                    className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                      isSelected
-                        ? 'bg-[#0B57D0] text-white border-[#0B57D0] shadow-xs'
-                        : 'bg-[#F8FAFC] hover:bg-slate-100 text-slate-800 border-[#E2E8F0]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="text-[11px] font-mono font-bold opacity-90">
-                        {phase.typicalDays}
-                      </span>
-                      {isUserCurrent && (
-                        <span
-                          className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
-                            isSelected
-                              ? 'bg-white text-[#0B57D0]'
-                              : 'bg-[#0B57D0]/10 text-[#0B57D0]'
-                          }`}
-                        >
-                          Current
-                        </span>
-                      )}
-                    </div>
-                    <div className="font-display font-extrabold text-xs sm:text-sm mt-1">
-                      {phase.phaseTitle}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Active Phase Detailed Scientific Breakdown */}
-            <div className="rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] p-4 sm:p-5 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] pb-3">
-                <div>
-                  <h4 className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-                    {activePhaseBio.phaseTitle} ({activePhaseBio.typicalDays})
-                  </h4>
-                  <p className="text-xs font-mono text-[#0B57D0] font-semibold mt-0.5">
-                    Dominant Endocrine Profile: {activePhaseBio.dominantHormones}
-                  </p>
-                </div>
-                <span className="px-2.5 py-1 rounded-lg bg-[#059669]/10 text-[#059669] border border-[#059669]/30 text-[11px] font-extrabold">
-                  [Experimentally Determined Physiology]
+              <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                <span className="text-xs font-bold px-3 py-1.5 rounded-xl bg-cream border border-slate-200 text-slate-700">
+                  Day {cycleDay} of {avgCycleLength}
                 </span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs sm:text-sm">
-                <div className="bg-white rounded-xl p-3.5 border border-[#E2E8F0]">
-                  <div className="font-extrabold text-slate-900 mb-1">
-                    🔬 Ovarian &amp; Follicular Event
-                  </div>
-                  <p className="text-slate-700 leading-relaxed">{activePhaseBio.ovarianEvent}</p>
-                </div>
-                <div className="bg-white rounded-xl p-3.5 border border-[#E2E8F0]">
-                  <div className="font-extrabold text-slate-900 mb-1">
-                    🩸 Endometrial (Uterine Lining) Remodeling
-                  </div>
-                  <p className="text-slate-700 leading-relaxed">
-                    {activePhaseBio.endometrialEvent}
-                  </p>
-                </div>
-                <div className="bg-white rounded-xl p-3.5 border border-[#E2E8F0]">
-                  <div className="font-extrabold text-slate-900 mb-1">
-                    💧 Cervical Mucus &amp; Basal Body Temperature (BBT)
-                  </div>
-                  <p className="text-slate-700 leading-relaxed">
-                    <strong>Mucus:</strong> {activePhaseBio.cervicalMucusProfile}
-                    <br />
-                    <strong>BBT:</strong> {activePhaseBio.basalBodyTempProfile}
-                  </p>
-                </div>
-                <div className="bg-white rounded-xl p-3.5 border border-[#E2E8F0]">
-                  <div className="font-extrabold text-slate-900 mb-1">
-                    🤰 Biological Fertility Window &amp; Clinical Pearl
-                  </div>
-                  <p className="text-slate-700 leading-relaxed">
-                    <strong>Fertility Probability:</strong> {activePhaseBio.fertilityStatus}
-                    <br />
-                    <strong>Clinical Note:</strong> {activePhaseBio.clinicalSummary}
-                  </p>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsEndocrineOpen((prev) => !prev)}
+                  aria-expanded={isEndocrineOpen}
+                  className={`px-3.5 py-2 rounded-xl font-extrabold text-xs transition-all cursor-pointer flex items-center gap-1.5 border ${
+                    isEndocrineOpen
+                      ? 'bg-lavender-700 text-white border-lavender-700'
+                      : 'bg-lavender-50 hover:bg-lavender-100 text-lavender-900 border-lavender-200'
+                  }`}
+                >
+                  <span>🔬 {isEndocrineOpen ? 'Hide Endocrine Physiology ▲' : 'Open Endocrine Physiology ▼'}</span>
+                </button>
               </div>
             </div>
+
+            {isEndocrineOpen && (
+              <div className="pt-3 border-t border-slate-100 space-y-4">
+                {/* Phase Selector Pills */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                  {MENSTRUAL_BIOSCIENCE_PHASES.map((phase) => {
+                    const isSelected = phase.stageKey === selectedEduStage;
+                    const isUserCurrent = phase.stageKey === currentStageKey;
+                    return (
+                      <button
+                        key={phase.stageKey}
+                        type="button"
+                        onClick={() => setSelectedEduStage(phase.stageKey)}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-lavender-700 text-white border-lavender-700 shadow-xs'
+                            : 'bg-cream hover:bg-lavender-50 text-slate-800 border-slate-200'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-[11px] font-mono font-bold opacity-90">
+                            {phase.typicalDays}
+                          </span>
+                          {isUserCurrent && (
+                            <span
+                              className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
+                                isSelected
+                                  ? 'bg-white text-lavender-800'
+                                  : 'bg-lavender-100 text-lavender-800'
+                              }`}
+                            >
+                              Current
+                            </span>
+                          )}
+                        </div>
+                        <div className="font-display font-extrabold text-xs sm:text-sm mt-1">
+                          {phase.phaseTitle}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Active Phase Detailed Scientific Breakdown */}
+                <div className="rounded-2xl bg-cream border border-slate-200 p-4 sm:p-5 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                    <div>
+                      <h4 className="font-display font-extrabold text-base sm:text-lg text-slate-900">
+                        {activePhaseBio.phaseTitle} ({activePhaseBio.typicalDays})
+                      </h4>
+                      <p className="text-xs font-mono text-lavender-800 font-semibold mt-0.5">
+                        Dominant Endocrine Profile: {activePhaseBio.dominantHormones}
+                      </p>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-lg bg-sage-50 text-sage-800 border border-sage-200 text-[11px] font-extrabold">
+                      [Experimentally Determined Physiology]
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs sm:text-sm">
+                    <div className="bg-white rounded-xl p-3.5 border border-slate-200">
+                      <div className="font-extrabold text-slate-900 mb-1">
+                        🔬 Ovarian &amp; Follicular Event
+                      </div>
+                      <p className="text-slate-700 leading-relaxed">{activePhaseBio.ovarianEvent}</p>
+                    </div>
+                    <div className="bg-white rounded-xl p-3.5 border border-slate-200">
+                      <div className="font-extrabold text-slate-900 mb-1">
+                        🩸 Endometrial (Uterine Lining) Remodeling
+                      </div>
+                      <p className="text-slate-700 leading-relaxed">
+                        {activePhaseBio.endometrialEvent}
+                      </p>
+                    </div>
+                    <div className="bg-white rounded-xl p-3.5 border border-slate-200">
+                      <div className="font-extrabold text-slate-900 mb-1">
+                        💧 Cervical Mucus &amp; Basal Body Temperature (BBT)
+                      </div>
+                      <p className="text-slate-700 leading-relaxed">
+                        <strong>Mucus:</strong> {activePhaseBio.cervicalMucusProfile}
+                        <br />
+                        <strong>BBT:</strong> {activePhaseBio.basalBodyTempProfile}
+                      </p>
+                    </div>
+                    <div className="bg-white rounded-xl p-3.5 border border-slate-200">
+                      <div className="font-extrabold text-slate-900 mb-1">
+                        🤰 Biological Fertility Window &amp; Clinical Pearl
+                      </div>
+                      <p className="text-slate-700 leading-relaxed">
+                        <strong>Fertility Probability:</strong> {activePhaseBio.fertilityStatus}
+                        <br />
+                        <strong>Clinical Note:</strong> {activePhaseBio.clinicalSummary}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Sub-section B: Biological Indicators of Fertility & Ovulation */}
-          <div className="bg-white rounded-2xl border border-[#E2E8F0] p-5 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          {/* Sub-section B: Interactive Button Card for Biological Indicators of Fertility & Ovulation */}
+          <div className="bg-white rounded-2xl border border-sage-200 p-4 sm:p-5 space-y-4 shadow-2xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <span className="text-[11px] font-extrabold uppercase tracking-wider text-[#007B83] block">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-sage-800 block">
                   Evidence-Based Ovulation &amp; Fertility Biomarkers
                 </span>
-                <h3 className="font-display font-extrabold text-lg text-slate-900">
+                <button
+                  type="button"
+                  onClick={() => setIsBiomarkersOpen((prev) => !prev)}
+                  aria-expanded={isBiomarkersOpen}
+                  className="text-left font-display font-extrabold text-base sm:text-lg text-slate-900 hover:text-sage-800 transition-colors cursor-pointer"
+                >
                   Biological Indicators of Fertility &amp; The 6-Day Fertile Window
-                </h3>
+                </button>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  Conception is biologically possible during a <strong>6-day window</strong> each cycle: the <strong>5 days prior to ovulation</strong> (determined by sperm survival in estrogenic cervical mucus) plus the <strong>24 hours following ovulation</strong> (determined by oocyte lifespan).
+                  Conception is biologically possible during a <strong>6-day window</strong> each cycle: the <strong>5 days prior to ovulation</strong> plus the <strong>24 hours following ovulation</strong>.
                 </p>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setIsBiomarkersOpen((prev) => !prev)}
+                aria-expanded={isBiomarkersOpen}
+                className={`px-3.5 py-2 rounded-xl font-extrabold text-xs transition-all cursor-pointer shrink-0 self-start sm:self-auto border ${
+                  isBiomarkersOpen
+                    ? 'bg-sage-700 text-white border-sage-700'
+                    : 'bg-sage-50 hover:bg-sage-100 text-sage-900 border-sage-200'
+                }`}
+              >
+                <span>🌸 {isBiomarkersOpen ? 'Hide Fertility Indicators ▲' : 'Open Fertility Indicators ▼'}</span>
+              </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {FERTILITY_BIOMARKERS.map((bio) => (
-                <div
-                  key={bio.id}
-                  className="rounded-2xl bg-[#F8FAFC] border border-[#E2E8F0] p-4 space-y-2.5 flex flex-col justify-between"
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <h4 className="font-display font-extrabold text-sm sm:text-base text-slate-900">
-                        {bio.name}
-                      </h4>
-                      <span className="px-2 py-0.5 rounded bg-[#0B57D0]/10 text-[#0B57D0] font-bold text-[10px] shrink-0">
-                        {bio.badge}
-                      </span>
+            {isBiomarkersOpen && (
+              <div className="pt-3 border-t border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
+                {FERTILITY_BIOMARKERS.map((bio) => (
+                  <div
+                    key={bio.id}
+                    className="rounded-2xl bg-cream border border-slate-200 p-4 space-y-2.5 flex flex-col justify-between"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <h4 className="font-display font-extrabold text-sm sm:text-base text-slate-900">
+                          {bio.name}
+                        </h4>
+                        <span className="px-2 py-0.5 rounded bg-lavender-100 text-lavender-900 font-bold text-[10px] shrink-0">
+                          {bio.badge}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-700 leading-relaxed">
+                        <strong>Physiological Mechanism:</strong> {bio.mechanism}
+                      </p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        <div className="p-2.5 rounded-xl bg-emerald-50/80 border border-emerald-200 text-emerald-950">
+                          <strong className="block text-[10px] uppercase tracking-wider text-emerald-800">
+                            Peak / Fertile Indicator:
+                          </strong>
+                          {bio.fertileSign}
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-white border border-slate-200 text-slate-800">
+                          <strong className="block text-[10px] uppercase tracking-wider text-slate-600">
+                            Baseline / Non-Fertile:
+                          </strong>
+                          {bio.nonFertileSign}
+                        </div>
+                      </div>
                     </div>
-                    <p className="text-xs text-slate-700 leading-relaxed">
-                      <strong>Physiological Mechanism:</strong> {bio.mechanism}
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                      <div className="p-2.5 rounded-xl bg-emerald-50/80 border border-emerald-200 text-emerald-950">
-                        <strong className="block text-[10px] uppercase tracking-wider text-emerald-800">
-                          Peak / Fertile Indicator:
-                        </strong>
-                        {bio.fertileSign}
-                      </div>
-                      <div className="p-2.5 rounded-xl bg-slate-100 border border-slate-200 text-slate-800">
-                        <strong className="block text-[10px] uppercase tracking-wider text-slate-600">
-                          Baseline / Non-Fertile:
-                        </strong>
-                        {bio.nonFertileSign}
-                      </div>
+                    <div className="pt-2 border-t border-slate-200 text-[11px] text-slate-600">
+                      <strong>Clinical Interpretation:</strong> {bio.clinicalNote}
                     </div>
                   </div>
-                  <div className="pt-2 border-t border-[#E2E8F0] text-[11px] text-slate-600">
-                    <strong>Clinical Interpretation:</strong> {bio.clinicalNote}
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -992,7 +1131,7 @@ export const BioscienceReproductiveEducationCenter: React.FC<
           MODULE 2: CONTRACEPTIVE INFORMATION GUIDE
           (Methods, Mechanism of Action, Perfect vs. Typical Efficacy & Medical Disclaimer)
          ===================================================================== */}
-      {activeModule === 'contraceptive_guide' && (
+      {isEducationHubOpen && activeModule === 'contraceptive_guide' && (
         <div className="space-y-5">
           {/* Mandatory Healthcare Professional Recommendation Banner */}
           <div className="rounded-2xl bg-amber-50 border-2 border-[#D97706] p-4 sm:p-5 flex items-start gap-3.5">
@@ -1193,7 +1332,7 @@ export const BioscienceReproductiveEducationCenter: React.FC<
           MODULE 3: LIVE MOLECULAR PHARMACOLOGY & LITERATURE WORKBENCH
           (Follows Science Skill Multi-Pane Workbench + Epistemic Provenance)
          ===================================================================== */}
-      {activeModule === 'bioscience_workbench' && (
+      {isEducationHubOpen && activeModule === 'bioscience_workbench' && (
         <div className="space-y-5">
           {/* Top Quick-Try Example Pill Bar (Science Skill Mandatory Pattern) */}
           <div className="bg-white rounded-2xl border border-[#E2E8F0] p-4 space-y-3">

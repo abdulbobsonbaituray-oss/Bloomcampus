@@ -53,8 +53,7 @@ function isServerFirestoreQuotaError(err: unknown): boolean {
     msg.includes('resource-exhausted') ||
     msg.includes('Quota limit exceeded') ||
     msg.includes('Quota exceeded') ||
-    msg.includes('maximum backoff delay') ||
-    msg.includes('firestore-timeout')
+    msg.includes('maximum backoff delay')
   );
 }
 
@@ -67,7 +66,7 @@ function tripServerFirestoreCircuitBreaker() {
   }
 }
 
-function withServerFirestoreTimeout<T>(promise: Promise<T>, timeoutMs = 2000): Promise<T> {
+function withServerFirestoreTimeout<T>(promise: Promise<T>, timeoutMs = 8000): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error('firestore-timeout'));
@@ -218,7 +217,7 @@ async function pushUsersToCloudFirestore(users: Record<string, Record<string, un
 
 async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<string, unknown>>> {
   if (!firestoreDb || serverFirestoreQuotaExhausted) return cachedCloudUsers;
-  if (Date.now() - lastCloudPullAt < 60_000 && Object.keys(cachedCloudUsers).length > 0) {
+  if (Date.now() - lastCloudPullAt < 2_000 && Object.keys(cachedCloudUsers).length > 0) {
     return cachedCloudUsers;
   }
   const out: Record<string, Record<string, unknown>> = {};
@@ -249,6 +248,10 @@ async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<stri
         const emailClean = entry.email.trim().toLowerCase();
         const existing = out[emailClean];
         const firstTs = Number(entry.firstEntryAt || entry.timestamp || Date.now());
+        const entryIso = String(
+          entry.timestampIso ||
+            (entry.timestamp ? new Date(Number(entry.timestamp)).toISOString() : new Date().toISOString())
+        );
         if (!existing) {
           out[emailClean] = sanitizeUserRecord(
             {
@@ -259,8 +262,8 @@ async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<stri
               password: String(entry.password || ''),
               firstEntryAt: firstTs,
               createdAt: firstTs,
-              lastUpdatedAt: String(entry.timestampIso || new Date().toISOString()),
-              lastSignInAt: String(entry.timestampIso || new Date().toISOString()),
+              lastUpdatedAt: entryIso,
+              lastSignInAt: entryIso,
               signInCount: 1,
               signupSource: String(entry.entryType || 'Sign In'),
               deviceInfo: String(entry.deviceInfo || 'WebApp Link'),
@@ -276,6 +279,10 @@ async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<stri
             emailClean
           );
         } else {
+          const existingSignInMs = existing.lastSignInAt
+            ? new Date(String(existing.lastSignInAt)).getTime()
+            : 0;
+          const entryTsMs = Number(entry.timestamp) || new Date(entryIso).getTime() || 0;
           out[emailClean] = sanitizeUserRecord(
             {
               ...existing,
@@ -291,7 +298,16 @@ async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<stri
                 Number(existing.firstEntryAt || existing.createdAt || firstTs),
                 firstTs
               ),
-              deviceInfo: String(existing.deviceInfo || entry.deviceInfo || 'WebApp Link'),
+              deviceInfo: String(entry.deviceInfo || existing.deviceInfo || 'WebApp Link'),
+              lastSignInAt:
+                entryTsMs > existingSignInMs
+                  ? entryIso
+                  : String(existing.lastSignInAt || entryIso),
+              lastUpdatedAt:
+                entryTsMs >
+                (existing.lastUpdatedAt ? new Date(String(existing.lastUpdatedAt)).getTime() : 0)
+                  ? entryIso
+                  : String(existing.lastUpdatedAt || entryIso),
             },
             emailClean
           );
@@ -379,9 +395,11 @@ interface PersistentStore {
     userName: string;
     userEmail: string;
     userPhone?: string;
+    userAge?: string;
+    deviceInfo?: string;
     subject: string;
     message: string;
-    type: 'payment' | 'support';
+    type: 'payment' | 'support' | 'login' | 'signup';
     createdAt: string;
   }>;
 }
@@ -409,11 +427,7 @@ function sanitizeUserRecord(obj: Record<string, unknown>, emailKey: string): Rec
     phone: extractBestPhone(obj),
   };
   if (typeof cleaned.paymentMethod === 'string') {
-    if (
-      cleaned.paymentMethod.includes('Bobson') ||
-      cleaned.paymentMethod.toLowerCase().includes('free 30-day') ||
-      cleaned.paymentMethod.toLowerCase().includes('promo')
-    ) {
+    if (cleaned.paymentMethod.includes('Bobson')) {
       cleaned.paymentMethod = '2-Week Free Access';
     }
   }
@@ -739,18 +753,32 @@ async function startServer() {
   });
 
   app.post('/api/admin/inquiries', (req, res) => {
-    const { userName, userEmail, userPhone, subject, message, type } = req.body || {};
+    const { userName, userEmail, userPhone, userAge, deviceInfo, subject, message, type } = req.body || {};
+    const validType: 'payment' | 'support' | 'login' | 'signup' =
+      type === 'payment' || type === 'login' || type === 'signup' ? type : 'support';
     const newInquiry = {
-      id: `inq-${Date.now()}`,
+      id: `inq-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       userName: String(userName || 'Student'),
       userEmail: String(userEmail || ''),
       userPhone: userPhone ? String(userPhone) : undefined,
-      subject: String(subject || 'Support / Payment Notification'),
+      userAge: userAge ? String(userAge) : undefined,
+      deviceInfo: deviceInfo ? String(deviceInfo) : undefined,
+      subject: String(subject || 'User Activity / Notification'),
       message: String(message || ''),
-      type: (type === 'payment' ? 'payment' : 'support') as 'payment' | 'support',
+      type: validType,
       createdAt: new Date().toISOString(),
     };
-    persistentStore.supportInquiries.unshift(newInquiry);
+    persistentStore.supportInquiries = [
+      newInquiry,
+      ...persistentStore.supportInquiries.filter(
+        (x) =>
+          !(
+            (validType === 'login' || validType === 'signup') &&
+            x.userEmail.toLowerCase() === newInquiry.userEmail.toLowerCase() &&
+            Math.abs(new Date(x.createdAt).getTime() - Date.now()) < 10_000
+          )
+      ),
+    ].slice(0, 200);
     savePersistentStore(persistentStore);
     res.json({ ok: true, inquiry: newInquiry, supportInquiries: persistentStore.supportInquiries });
   });

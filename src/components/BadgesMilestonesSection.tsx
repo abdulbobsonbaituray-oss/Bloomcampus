@@ -11,6 +11,8 @@ import {
   CheckCircle2,
   Lock,
   ArrowRight,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { UserData } from '../types';
 import { diffDays, getSortedPeriods } from '../utils/cycleEngine';
@@ -302,14 +304,17 @@ interface BadgesMilestonesSectionProps {
   userData: UserData;
   onNavigateSection: (section: CoreNavSection, subAction?: 'hydration' | 'trends') => void;
   onSimulateStreakDemo?: () => void;
+  defaultExpanded?: boolean;
 }
 
 export const BadgesMilestonesSection: React.FC<BadgesMilestonesSectionProps> = ({
   userData,
   onNavigateSection,
   onSimulateStreakDemo,
+  defaultExpanded = false,
 }) => {
   const [filter, setFilter] = useState<'all' | 'unlocked' | 'locked'>('all');
+  const [isExpanded, setIsExpanded] = useState<boolean>(defaultExpanded);
 
   const evaluation = useMemo(() => evaluateUserBadges(userData), [userData]);
 
@@ -339,9 +344,9 @@ export const BadgesMilestonesSection: React.FC<BadgesMilestonesSectionProps> = (
   return (
     <section
       id="badges-milestones-section"
-      className="bg-white rounded-3xl shadow-xs border-2 border-amber-200/90 p-5 sm:p-6 space-y-6"
+      className="bg-white rounded-3xl shadow-xs border-2 border-amber-200/90 p-5 sm:p-6 space-y-5 transition-all duration-300"
     >
-      {/* Top Hero Banner for Badges & Streaks */}
+      {/* Top Hero Banner & Interactive Button for Consistency Badges & Cycle Mastery */}
       <div className="rounded-3xl bg-gradient-to-r from-plum-900 via-lavender-900 to-rose-900 text-white p-5 sm:p-6 shadow-md border border-gold-500/40">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1.5">
@@ -354,55 +359,95 @@ export const BadgesMilestonesSection: React.FC<BadgesMilestonesSectionProps> = (
                 🏅 {evaluation.unlockedCount} of {evaluation.totalCount} Badges Unlocked ({evaluation.masteryPercent}%)
               </span>
             </div>
-            <h2 className="font-display font-extrabold text-xl sm:text-2xl text-white flex items-center gap-2">
+
+            <button
+              type="button"
+              onClick={() => setIsExpanded((prev) => !prev)}
+              aria-expanded={isExpanded}
+              className="group text-left font-display font-extrabold text-xl sm:text-2xl text-white hover:text-amber-300 transition-colors flex flex-wrap items-center gap-2.5 cursor-pointer"
+            >
               <span>Consistency Badges &amp; Cycle Mastery</span>
-            </h2>
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/15 group-hover:bg-white/25 text-amber-200 text-xs font-extrabold border border-white/20">
+                {isExpanded ? (
+                  <>
+                    <span>Hide Badges</span>
+                    <ChevronUp className="w-3.5 h-3.5" />
+                  </>
+                ) : (
+                  <>
+                    <span>Open Badges</span>
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </span>
+            </button>
+
             <p className="text-xs sm:text-sm text-lavender-100 max-w-2xl">
-              Earn virtual milestones like <strong>1-Week Streak</strong> and{' '}
-              <strong>Cycle Master</strong> by logging your daily check-ins, hydration, and consecutive period cycles.
+              Tap the button to view or tuck away your <strong>1-Week Streak</strong>,{' '}
+              <strong>Cycle Master</strong>, and wellness consistency rewards.
             </p>
           </div>
 
-          {/* 3 Live Streak & Cycle Counters */}
-          <div className="grid grid-cols-3 gap-2.5 sm:gap-3 shrink-0">
-            <div className="rounded-2xl bg-white/10 backdrop-blur-xs border border-white/15 px-3.5 py-2.5 text-center">
-              <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300 flex items-center justify-center gap-1">
-                <Flame className="w-3.5 h-3.5" />
-                <span>Best Streak</span>
+          {/* 3 Live Streak & Cycle Counters + Toggle Button */}
+          <div className="flex flex-col sm:flex-row lg:flex-col xl:flex-row items-stretch sm:items-center gap-3 shrink-0">
+            <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
+              <div className="rounded-2xl bg-white/10 backdrop-blur-xs border border-white/15 px-3.5 py-2.5 text-center">
+                <div className="text-[10px] font-extrabold uppercase tracking-wider text-amber-300 flex items-center justify-center gap-1">
+                  <Flame className="w-3.5 h-3.5" />
+                  <span>Best Streak</span>
+                </div>
+                <div className="font-display font-extrabold text-lg sm:text-xl text-white tabular-nums mt-0.5">
+                  {evaluation.currentStreakDays}d
+                </div>
+                <div className="text-[10px] text-lavender-200 font-semibold">
+                  {evaluation.currentStreakDays >= 7 ? '🔥 1-Week Unlocked!' : 'Target: 7d'}
+                </div>
               </div>
-              <div className="font-display font-extrabold text-lg sm:text-xl text-white tabular-nums mt-0.5">
-                {evaluation.currentStreakDays}d
+
+              <div className="rounded-2xl bg-white/10 backdrop-blur-xs border border-white/15 px-3.5 py-2.5 text-center">
+                <div className="text-[10px] font-extrabold uppercase tracking-wider text-rose-200 flex items-center justify-center gap-1">
+                  <CalendarCheck2 className="w-3.5 h-3.5" />
+                  <span>Cycles</span>
+                </div>
+                <div className="font-display font-extrabold text-lg sm:text-xl text-white tabular-nums mt-0.5">
+                  {evaluation.consecutiveCyclesCount}
+                </div>
+                <div className="text-[10px] text-lavender-200 font-semibold">
+                  {evaluation.consecutiveCyclesCount >= 3 ? '👑 Cycle Master!' : 'Target: 3'}
+                </div>
               </div>
-              <div className="text-[10px] text-lavender-200 font-semibold">
-                {evaluation.currentStreakDays >= 7 ? '🔥 1-Week Unlocked!' : 'Target: 7d'}
+
+              <div className="rounded-2xl bg-white/10 backdrop-blur-xs border border-white/15 px-3.5 py-2.5 text-center">
+                <div className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-200 flex items-center justify-center gap-1">
+                  <Award className="w-3.5 h-3.5" />
+                  <span>Unlocked</span>
+                </div>
+                <div className="font-display font-extrabold text-lg sm:text-xl text-emerald-300 tabular-nums mt-0.5">
+                  {evaluation.unlockedCount}/{evaluation.totalCount}
+                </div>
+                <div className="text-[10px] text-lavender-200 font-semibold">
+                  {evaluation.totalLoggedDays} days logged
+                </div>
               </div>
             </div>
 
-            <div className="rounded-2xl bg-white/10 backdrop-blur-xs border border-white/15 px-3.5 py-2.5 text-center">
-              <div className="text-[10px] font-extrabold uppercase tracking-wider text-rose-200 flex items-center justify-center gap-1">
-                <CalendarCheck2 className="w-3.5 h-3.5" />
-                <span>Cycles</span>
-              </div>
-              <div className="font-display font-extrabold text-lg sm:text-xl text-white tabular-nums mt-0.5">
-                {evaluation.consecutiveCyclesCount}
-              </div>
-              <div className="text-[10px] text-lavender-200 font-semibold">
-                {evaluation.consecutiveCyclesCount >= 3 ? '👑 Cycle Master!' : 'Target: 3'}
-              </div>
-            </div>
-
-            <div className="rounded-2xl bg-white/10 backdrop-blur-xs border border-white/15 px-3.5 py-2.5 text-center">
-              <div className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-200 flex items-center justify-center gap-1">
-                <Award className="w-3.5 h-3.5" />
-                <span>Unlocked</span>
-              </div>
-              <div className="font-display font-extrabold text-lg sm:text-xl text-emerald-300 tabular-nums mt-0.5">
-                {evaluation.unlockedCount}/{evaluation.totalCount}
-              </div>
-              <div className="text-[10px] text-lavender-200 font-semibold">
-                {evaluation.totalLoggedDays} days logged
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => setIsExpanded((prev) => !prev)}
+              aria-expanded={isExpanded}
+              className={`px-4 py-3 rounded-2xl font-display font-extrabold text-xs sm:text-sm shadow-sm transition-all cursor-pointer flex items-center justify-center gap-2 border-2 ${
+                isExpanded
+                  ? 'bg-white/15 hover:bg-white/25 text-white border-white/30'
+                  : 'bg-gold-500 hover:bg-amber-400 text-plum-900 border-white'
+              }`}
+            >
+              <Trophy className="w-4 h-4" />
+              <span>
+                {isExpanded
+                  ? 'Hide Consistency Badges ▲'
+                  : `Consistency Badges & Cycle Mastery (${evaluation.unlockedCount}/${evaluation.totalCount}) ▼`}
+              </span>
+            </button>
           </div>
         </div>
 
@@ -421,58 +466,60 @@ export const BadgesMilestonesSection: React.FC<BadgesMilestonesSectionProps> = (
         </div>
       </div>
 
-      {/* Filter Bar & Optional Quick Demo Unlock */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-1.5 p-1 bg-cream rounded-2xl border border-slate-200">
-          <button
-            type="button"
-            onClick={() => setFilter('all')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
-              filter === 'all'
-                ? 'bg-slate-900 text-white shadow-2xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            All Badges ({evaluation.totalCount})
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilter('unlocked')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
-              filter === 'unlocked'
-                ? 'bg-emerald-700 text-white shadow-2xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Unlocked ({evaluation.unlockedCount})
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilter('locked')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
-              filter === 'locked'
-                ? 'bg-lavender-700 text-white shadow-2xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            In Progress ({evaluation.totalCount - evaluation.unlockedCount})
-          </button>
-        </div>
+      {/* Collapsible Filter Bar & Badges Grid */}
+      {isExpanded && (
+        <div className="space-y-5 pt-1">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-1.5 p-1 bg-cream rounded-2xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setFilter('all')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
+                  filter === 'all'
+                    ? 'bg-slate-900 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                All Badges ({evaluation.totalCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilter('unlocked')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
+                  filter === 'unlocked'
+                    ? 'bg-emerald-700 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Unlocked ({evaluation.unlockedCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilter('locked')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${
+                  filter === 'locked'
+                    ? 'bg-lavender-700 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                In Progress ({evaluation.totalCount - evaluation.unlockedCount})
+              </button>
+            </div>
 
-        {onSimulateStreakDemo && (
-          <button
-            type="button"
-            onClick={onSimulateStreakDemo}
-            className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-            <span>Boost Sample 7-Day Streak &amp; 3 Cycles</span>
-          </button>
-        )}
-      </div>
+            {onSimulateStreakDemo && (
+              <button
+                type="button"
+                onClick={onSimulateStreakDemo}
+                className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                <span>Boost Sample 7-Day Streak &amp; 3 Cycles</span>
+              </button>
+            )}
+          </div>
 
-      {/* Badges Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+          {/* Badges Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
         {filteredBadges.map((badge) => {
           const pct = Math.min(100, Math.round((badge.currentValue / badge.targetValue) * 100));
 
@@ -582,7 +629,9 @@ export const BadgesMilestonesSection: React.FC<BadgesMilestonesSectionProps> = (
             </div>
           );
         })}
-      </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };

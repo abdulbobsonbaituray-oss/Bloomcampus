@@ -47,8 +47,7 @@ function isFirestoreQuotaOrBackoffError(error: unknown): boolean {
     msg.includes('resource-exhausted') ||
     msg.includes('Quota limit exceeded') ||
     msg.includes('Quota exceeded') ||
-    msg.includes('maximum backoff delay') ||
-    msg.includes('firestore-timeout')
+    msg.includes('maximum backoff delay')
   );
 }
 
@@ -59,7 +58,7 @@ function tripFirestoreQuotaBreaker() {
   }
 }
 
-function withFirestoreTimeout<T>(promise: Promise<T>, timeoutMs = 2500): Promise<T> {
+function withFirestoreTimeout<T>(promise: Promise<T>, timeoutMs = 10000): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error('firestore-timeout'));
@@ -78,14 +77,11 @@ function withFirestoreTimeout<T>(promise: Promise<T>, timeoutMs = 2500): Promise
 
 async function testConnection() {
   try {
-    await withFirestoreTimeout(getDocFromServer(doc(db, 'test', 'connection')), 2500);
+    await withFirestoreTimeout(getDocFromServer(doc(db, 'test', 'connection')), 8000);
   } catch (error) {
     if (isFirestoreQuotaOrBackoffError(error)) {
       tripFirestoreQuotaBreaker();
       return;
-    }
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firestore client is offline; using local and server storage.');
     }
   }
 }
@@ -347,11 +343,15 @@ export async function logCustomerEntryToFirestore(
   const docId = emailToDocId(prepared.email);
   const userPath = `bloomcampus_users/${docId}`;
   const fingerprint = computeUserWriteFingerprint(prepared) + `|${entryType}`;
-  if (lastWrittenHashByPath.get(userPath) === fingerprint) {
+  if (
+    entryType === 'WebApp Session' &&
+    lastWrittenHashByPath.get(userPath) === fingerprint
+  ) {
     return;
   }
 
   const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
   const latestEmailEntryId = `entry_${docId}`.slice(0, 128);
   const entryDoc: CustomerEntryRecord = {
     id: latestEmailEntryId,
@@ -367,12 +367,20 @@ export async function logCustomerEntryToFirestore(
       typeof window !== 'undefined' ? window.location.origin.slice(0, 200) : '',
     firstEntryAt: prepared.firstEntryAt || prepared.createdAt || nowMs,
     timestamp: nowMs,
-    timestampIso: new Date(nowMs).toISOString(),
+    timestampIso: nowIso,
   };
 
   try {
     await withFirestoreTimeout(
-      setDoc(doc(db, 'bloomcampus_users', docId), prepared, { merge: true })
+      setDoc(
+        doc(db, 'bloomcampus_users', docId),
+        {
+          ...prepared,
+          lastSignInAt: nowIso,
+          lastUpdatedAt: nowIso,
+        },
+        { merge: true }
+      )
     );
     await withFirestoreTimeout(
       setDoc(
@@ -381,6 +389,31 @@ export async function logCustomerEntryToFirestore(
         { merge: true }
       )
     );
+
+    // Also record a real-time login/signup notification in `bloomcampus_inquiries` so the Owner Admin sees everyone logging in
+    if (entryType === 'Create Account' || entryType === 'Sign In') {
+      const loginInqId = `login_${docId}`.slice(0, 128);
+      const loginInq: SupportInquiry = {
+        id: loginInqId,
+        userName: entryDoc.name,
+        userEmail: entryDoc.email,
+        userPhone: entryDoc.phone || 'Not entered',
+        userAge: entryDoc.age || '21',
+        deviceInfo: entryDoc.deviceInfo,
+        subject: `${entryType === 'Create Account' ? '🆕 New Sign-Up' : '🔑 User Sign-In'}: ${entryDoc.name} (${entryDoc.email})`,
+        message: `Customer #${entryDoc.customerNumber || 1} • Name: ${entryDoc.name} • Email: ${entryDoc.email} • Age: ${entryDoc.age || '21'} • Phone Used: ${entryDoc.phone || 'Not entered'} • Action: ${entryType} • Device: ${entryDoc.deviceInfo} • Time: ${new Date(nowMs).toLocaleString()}`,
+        type: entryType === 'Create Account' ? 'signup' : 'login',
+        createdAt: nowIso,
+      };
+      await withFirestoreTimeout(
+        setDoc(
+          doc(db, 'bloomcampus_inquiries', loginInqId),
+          cleanFirestorePayload(loginInq),
+          { merge: true }
+        )
+      );
+    }
+
     lastWrittenHashByPath.set(userPath, fingerprint);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, userPath);
@@ -449,6 +482,9 @@ function mergeEntryLogIntoUser(
           Number(entry.firstEntryAt || entry.timestamp || Date.now())
         )
       : Number(entry.firstEntryAt || entry.timestamp || Date.now());
+  const entryIso =
+    entry.timestampIso ||
+    (entry.timestamp ? new Date(entry.timestamp).toISOString() : new Date().toISOString());
 
   if (!existing) {
     return {
@@ -459,8 +495,8 @@ function mergeEntryLogIntoUser(
       password: entry.password || '',
       firstEntryAt: firstTs,
       createdAt: firstTs,
-      lastUpdatedAt: new Date(firstTs).toISOString(),
-      lastSignInAt: entry.timestampIso || new Date().toISOString(),
+      lastUpdatedAt: entryIso,
+      lastSignInAt: entryIso,
       signInCount: 1,
       signupSource: entry.entryType || 'Sign In',
       deviceInfo: entry.deviceInfo || 'WebApp Link',
@@ -475,6 +511,11 @@ function mergeEntryLogIntoUser(
     };
   }
 
+  const existingSignInMs = existing.lastSignInAt ? new Date(existing.lastSignInAt).getTime() : 0;
+  const entryTsMs = Number(entry.timestamp) || new Date(entryIso).getTime() || 0;
+  const latestSignInIso =
+    entryTsMs > existingSignInMs ? entryIso : existing.lastSignInAt || entryIso;
+
   return {
     ...existing,
     email: emailClean,
@@ -488,6 +529,11 @@ function mergeEntryLogIntoUser(
     firstEntryAt: firstTs,
     createdAt: firstTs,
     deviceInfo: entry.deviceInfo || existing.deviceInfo || 'WebApp Link',
+    lastSignInAt: latestSignInIso,
+    lastUpdatedAt:
+      entryTsMs > (existing.lastUpdatedAt ? new Date(existing.lastUpdatedAt).getTime() : 0)
+        ? entryIso
+        : existing.lastUpdatedAt || entryIso,
   };
 }
 
