@@ -15,6 +15,7 @@ import {
 import { CycleMetrics, JournalEntry, StageKey, UserData } from '../types';
 import { PHASE_ADVISOR_DATA, MOOD_CATEGORIES } from '../constants';
 import { formatHumanDate, formatShortMonthDay } from '../utils/cycleEngine';
+import { CrampReliefPosesGallery } from './CrampReliefPosesGallery';
 
 interface CycleJournalPromptsSectionProps {
   userData: UserData;
@@ -748,6 +749,18 @@ export const CycleJournalPromptsSection: React.FC<CycleJournalPromptsSectionProp
           </div>
         </div>
       )}
+
+      {/* PROMINENT VISUAL GALLERY UNDER SAVED REFLECTIONS & SELF-AWARENESS: POSES TO RELIEVE CRAMPS */}
+      <CrampReliefPosesGallery
+        onLogCrampReliefSession={(poseName) => {
+          showToast(
+            `🧘‍♀️ Completed ${poseName}! Gentle cramp-relief stretching recorded for ${formatShortMonthDay(
+              selectedDateStr
+            )}.`,
+            'success'
+          );
+        }}
+      />
     </section>
   );
 };

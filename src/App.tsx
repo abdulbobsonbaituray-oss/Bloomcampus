@@ -468,6 +468,7 @@ export default function App() {
   const [dailyNotesInput, setDailyNotesInput] = useState<string>('');
   const [symptomSearchQuery, setSymptomSearchQuery] = useState<string>('');
   const [symptomCategoryFilter, setSymptomCategoryFilter] = useState<string>('ALL');
+  const [showSymptomChecklist, setShowSymptomChecklist] = useState<boolean>(false);
 
   // Privacy Blur, Dark Mode & Alert Banners
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -1826,12 +1827,20 @@ export default function App() {
         isSecretVipPassword(authFreeAccessPassInput.trim(), adminConfig.freeAccessPassword));
 
     if (authMode === 'signin') {
-      // Sign-In Mode: Allow signing in with Email, Phone Number, OR Name!
-      const rawIdentifier = (emailTrim || phoneTrim || nameTrim).trim();
+      // Sign-In Mode: Require the user's own registered Email Address or Phone Number AND their Password
+      const rawIdentifier = (emailTrim || phoneTrim).trim();
       if (!rawIdentifier) {
         focusAuthInputField(
           'authEmail',
-          'Please enter your Email Address, Phone Number, or Name to sign in.'
+          'Please enter your registered Email Address or Phone Number to sign in.'
+        );
+        return;
+      }
+
+      if (!passVal) {
+        focusAuthInputField(
+          'authPassword',
+          'Please enter the password you used to create your account.'
         );
         return;
       }
@@ -1840,19 +1849,23 @@ export default function App() {
       const idLower = rawIdentifier.toLowerCase();
       const idDigits = rawIdentifier.replace(/\D/g, '');
 
-      // 1. Check if identifier matches any existing user by email, phone digits, or name
+      // 1. Check if identifier matches the user's exact registered email or phone number
       let matchedKey = Object.keys(users).find((k) => {
         const u = users[k];
         if (!u) return false;
         const uEmail = (u.email || k).toLowerCase().trim();
         if (uEmail === idLower || k.toLowerCase().trim() === idLower) return true;
-        if (idLower.indexOf('@') === -1 && uEmail === `${idLower}@gmail.com`) return true;
+        if (idLower.indexOf('@') === -1 && idDigits.length < 6 && uEmail === `${idLower}@gmail.com`) return true;
         const uPhoneDigits = resolveCustomerPhoneUsed(u).replace(/\D/g, '');
-        if (idDigits.length >= 6 && uPhoneDigits && (uPhoneDigits === idDigits || uPhoneDigits.endsWith(idDigits) || idDigits.endsWith(uPhoneDigits))) {
+        if (
+          idDigits.length >= 6 &&
+          uPhoneDigits.length >= 6 &&
+          (uPhoneDigits === idDigits ||
+            (idDigits.length >= 8 && uPhoneDigits.endsWith(idDigits)) ||
+            (uPhoneDigits.length >= 8 && idDigits.endsWith(uPhoneDigits)))
+        ) {
           return true;
         }
-        const uName = (u.name || '').toLowerCase().trim();
-        if (uName && uName.length >= 2 && uName === idLower) return true;
         return false;
       });
 
@@ -1879,31 +1892,36 @@ export default function App() {
         }
       }
 
-      const finalEmailKey = (existing?.email || matchedKey || candidateEmail).toLowerCase().trim();
-      const resolvedUser =
-        existing ||
-        createDefaultUserObject(
-          nameTrim || (emailRegex.test(rawIdentifier) ? rawIdentifier.split('@')[0] : rawIdentifier),
-          finalEmailKey,
-          '',
-          ageTrim || '21',
-          phoneTrim || (idDigits.length >= 6 ? rawIdentifier : '')
+      if (!existing) {
+        focusAuthInputField(
+          'authEmail',
+          'No account found with this Email or Phone Number. Please switch to "Create Account" to create your account first.'
         );
+        return;
+      }
+
+      const savedPassword = (existing.password || '').trim();
+      if (savedPassword.length > 0 && passVal !== savedPassword) {
+        focusAuthInputField(
+          'authPassword',
+          'Incorrect password. Please enter the exact same password you used when creating your account.'
+        );
+        return;
+      }
+
+      const finalEmailKey = (existing?.email || matchedKey || candidateEmail).toLowerCase().trim();
+      const resolvedUser = existing;
 
       if (nameTrim) resolvedUser.name = nameTrim;
       if (ageTrim) resolvedUser.age = ageTrim;
       if (phoneTrim) resolvedUser.phone = phoneTrim;
-      resolvedUser.password = '';
+      resolvedUser.password = savedPassword.length > 0 ? savedPassword : passVal;
       if (usedVipPassOnAuth) {
         resolvedUser.isVip = true;
         resolvedUser.usedFreeAccessPassword = true;
         resolvedUser.subscriptionStatus = 'free_password';
         resolvedUser.subscriptionUntil = nowMs + thirtyDaysMs;
         resolvedUser.paymentMethod = `Free 30-Day Access Password (${adminConfig.freeAccessPassword})`;
-      } else if (!existing) {
-        resolvedUser.subscriptionStatus = 'active';
-        resolvedUser.subscriptionUntil = nowMs + twoWeeksMs;
-        resolvedUser.paymentMethod = '2-Week Free Access';
       }
       resolvedUser.email = finalEmailKey;
       resolvedUser.firstEntryAt =
@@ -1952,7 +1970,7 @@ export default function App() {
       return;
     }
 
-    // Create Account Mode Validation (Name, Age, Email, Phone)
+    // Create Account Mode Validation (Name, Age, Email, Phone, Password)
     if (!nameTrim || nameTrim.length < 2) {
       focusAuthInputField(
         'authName',
@@ -1999,6 +2017,14 @@ export default function App() {
       return;
     }
 
+    if (!passVal) {
+      focusAuthInputField(
+        'authPassword',
+        'Please create a password for your account (you will use this same password to Sign In).'
+      );
+      return;
+    }
+
     setAuthFieldError(null);
 
     let matchedKey = Object.keys(users).find(
@@ -2022,6 +2048,18 @@ export default function App() {
       }
     }
 
+    if (
+      existing &&
+      (existing.password || '').trim().length > 0 &&
+      (existing.password || '').trim() !== passVal
+    ) {
+      focusAuthInputField(
+        'authPassword',
+        'An account with this email already exists. Please switch to "Sign In" and enter the password you used to create the account.'
+      );
+      return;
+    }
+
     const firstEntryMs =
       existing && Number(existing.firstEntryAt || existing.createdAt) > 0
         ? Number(existing.firstEntryAt || existing.createdAt)
@@ -2031,7 +2069,7 @@ export default function App() {
       createDefaultUserObject(
         nameTrim || normalizedSignupEmail.split('@')[0],
         normalizedSignupEmail,
-        '',
+        passVal,
         ageTrim || '21',
         phoneTrim
       );
@@ -2040,7 +2078,7 @@ export default function App() {
     newUser.age = ageTrim || existing?.age || '21';
     newUser.email = normalizedSignupEmail;
     newUser.phone = phoneTrim || resolveCustomerPhoneUsed(existing);
-    newUser.password = '';
+    newUser.password = passVal;
     newUser.firstEntryAt = firstEntryMs;
     newUser.createdAt = firstEntryMs;
     newUser.deviceInfo = deviceLabel;
@@ -2254,43 +2292,6 @@ export default function App() {
     };
   };
 
-  const quickDemoLogin = async () => {
-    const demoEmail = 'student@campus.edu';
-    const users = mergeUsersMaps(getAllUsers(), allUsersMap);
-    const base =
-      users[demoEmail] ||
-      createDefaultUserObject('Kumba Hannah Kaingbanja', demoEmail, '', '21', '076 234 567');
-    base.name = 'Kumba Hannah Kaingbanja';
-    if (!base.age) base.age = '21';
-    if (!base.phone) base.phone = '076 234 567';
-    base.password = '';
-    base.deviceInfo = getClientDeviceLabel();
-    base.lastSignInAt = new Date().toISOString();
-    base.lastUpdatedAt = new Date().toISOString();
-    base.signInCount = (base.signInCount || 0) + 1;
-    users[demoEmail] = buildSampleStudentDataOnObject(base);
-    const numbered = assignSequentialCustomerNumbers(users);
-    const savedUser = numbered[demoEmail];
-    saveAllUsers(numbered, demoEmail, true);
-    setAllUsersMap({ ...numbered });
-    loginUserSession(demoEmail, numbered);
-    showToast(
-      `Signed in as Kumba Hannah Kaingbanja (Customer #${savedUser?.customerNumber || 1})!`,
-      'success'
-    );
-    triggerOwnerEmailAndServerAlert({
-      userName: savedUser.name,
-      userEmail: savedUser.email,
-      userPhone: savedUser.phone || '076 234 567',
-      userAge: savedUser.age || '21',
-      deviceInfo: savedUser.deviceInfo,
-      subject: `🔑 Demo Student Logged In (#${savedUser.customerNumber || 1}): ${savedUser.name}`,
-      message: `Demo Student ${savedUser.name} (${savedUser.email}) signed in on ${savedUser.deviceInfo} at ${new Date().toLocaleString()}.`,
-      type: 'login',
-      openMailClient: false,
-    });
-    void logCustomerEntryToFirestore(savedUser, 'Sign In').catch(() => {});
-  };
 
   const loadSampleStudentData = () => {
     updateUserData((prev) => buildSampleStudentDataOnObject(prev));
@@ -2360,7 +2361,7 @@ export default function App() {
     baseUser.age = googleAge;
     baseUser.email = gEmail;
     baseUser.phone = googlePhone;
-    baseUser.password = '';
+    baseUser.password = existing?.password || authPassword.trim() || '';
     baseUser.firstEntryAt = firstEntryMs;
     baseUser.createdAt = firstEntryMs;
     baseUser.deviceInfo = getClientDeviceLabel();
@@ -2460,7 +2461,14 @@ export default function App() {
     signOutFirebase().catch(() => {});
     setCurrentUserEmail(null);
     setUserData(null);
+    setAuthEmail('');
+    setAuthName('');
+    setAuthAge('');
+    setAuthPhone('');
     setAuthPassword('');
+    setGoogleModalEmail('');
+    setGoogleModalName('');
+    setGoogleModalPhone('');
     showToast('You have been logged out safely.', 'info');
   };
 
@@ -3193,7 +3201,7 @@ export default function App() {
                 showToast(`🌸 Switched to User Phase (${merged[savedEmail].name})!`, 'info');
                 return;
               }
-              void quickDemoLogin();
+              showToast('🌸 Exited Admin Area.', 'info');
               return;
             }
             showToast('🌸 Switched to User Phase.', 'info');
@@ -3386,20 +3394,6 @@ export default function App() {
                           const val = e.target.value;
                           setAuthEmail(val);
                           if (authFieldError?.fieldId === 'authEmail') setAuthFieldError(null);
-                          const clean = val.trim().toLowerCase();
-                          if (clean === OWNER_ADMIN_EMAIL.toLowerCase()) {
-                            if (!authName) setAuthName(CREATOR_NAME);
-                            if (!authAge) setAuthAge('28');
-                            if (!authPhone) setAuthPhone('073604401');
-                            return;
-                          }
-                          const known = allUsersMap[clean];
-                          if (known) {
-                            if (known.name) setAuthName(known.name);
-                            if (known.age) setAuthAge(known.age);
-                            const knownPhone = resolveCustomerPhoneUsed(known);
-                            if (knownPhone) setAuthPhone(knownPhone);
-                          }
                         }}
                         placeholder="you@gmail.com"
                         className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-800 font-medium text-sm ${
@@ -3437,6 +3431,42 @@ export default function App() {
                       />
                     </div>
                   </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label
+                        htmlFor="authPassword"
+                        className="block text-xs font-bold uppercase tracking-wider text-slate-600"
+                      >
+                        Create Account Password *
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((prev) => !prev)}
+                        className="text-[11px] font-bold text-lavender-700 hover:text-lavender-900 cursor-pointer"
+                      >
+                        {showPassword ? '🙈 Hide Password' : '👁️ Show Password'}
+                      </button>
+                    </div>
+                    <input
+                      ref={authPasswordInputRef}
+                      type={showPassword ? 'text' : 'password'}
+                      id="authPassword"
+                      name="password"
+                      autoComplete="new-password"
+                      required
+                      value={authPassword}
+                      onChange={(e) => {
+                        setAuthPassword(e.target.value);
+                        if (authFieldError?.fieldId === 'authPassword') setAuthFieldError(null);
+                      }}
+                      placeholder="Create a password you will use to Sign In"
+                      className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-800 font-medium text-sm ${
+                        authFieldError?.fieldId === 'authPassword'
+                          ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
+                          : 'border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100'
+                      }`}
+                    />
+                  </div>
                 </>
               ) : (
                 <div className="space-y-3">
@@ -3445,7 +3475,7 @@ export default function App() {
                       htmlFor="authEmail"
                       className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5"
                     >
-                      Email Address, Phone Number, or Name *
+                      Registered Email Address or Phone Number *
                     </label>
                     <input
                       ref={authEmailInputRef}
@@ -3459,48 +3489,54 @@ export default function App() {
                         setAuthEmail(e.target.value);
                         if (authFieldError?.fieldId === 'authEmail') setAuthFieldError(null);
                       }}
-                      placeholder="Enter your email, phone (e.g. 076...), or name..."
+                      placeholder="Enter your email or phone number (e.g. 076...)"
                       className={`w-full px-4 py-3.5 rounded-2xl border outline-none text-slate-900 font-semibold text-sm ${
                         authFieldError?.fieldId === 'authEmail'
                           ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
                           : 'border-lavender-300 focus:border-lavender-600 focus:ring-4 focus:ring-lavender-100 bg-cream/60'
                       }`}
                     />
-                    <p className="text-[11px] text-slate-500 mt-1.5 font-medium">
-                      ✨ No password needed — type your Email, Phone Number, or Name to sign right back into your tracker.
-                    </p>
                   </div>
 
-                  {/* 1-Tap Returning User Accounts on This Device */}
-                  {Object.values(allUsersMap).length > 0 && (
-                    <div className="rounded-2xl bg-lavender-50/70 border border-lavender-200 p-3 space-y-2">
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-lavender-900 block">
-                        ⚡ 1-Tap Quick Sign In (Saved Accounts)
-                      </span>
-                      <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
-                        {Object.values(allUsersMap)
-                          .slice(0, 6)
-                          .map((u) => (
-                            <button
-                              key={u.email}
-                              type="button"
-                              onClick={() =>
-                                completeGoogleAccountSignIn(
-                                  u.email,
-                                  u.name,
-                                  u.age,
-                                  resolveCustomerPhoneUsed(u)
-                                )
-                              }
-                              className="px-3 py-1.5 rounded-xl bg-white hover:bg-lavender-100 text-slate-800 border border-lavender-200 text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
-                            >
-                              <span>🌸</span>
-                              <span className="truncate max-w-[150px]">{u.name || u.email}</span>
-                            </button>
-                          ))}
-                      </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label
+                        htmlFor="authPassword"
+                        className="block text-xs font-bold uppercase tracking-wider text-slate-700"
+                      >
+                        Account Password *
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((prev) => !prev)}
+                        className="text-[11px] font-bold text-lavender-700 hover:text-lavender-900 cursor-pointer"
+                      >
+                        {showPassword ? '🙈 Hide Password' : '👁️ Show Password'}
+                      </button>
                     </div>
-                  )}
+                    <input
+                      ref={authPasswordInputRef}
+                      type={showPassword ? 'text' : 'password'}
+                      id="authPassword"
+                      name="password"
+                      autoComplete="current-password"
+                      required
+                      value={authPassword}
+                      onChange={(e) => {
+                        setAuthPassword(e.target.value);
+                        if (authFieldError?.fieldId === 'authPassword') setAuthFieldError(null);
+                      }}
+                      placeholder="Enter the password you used to create your account"
+                      className={`w-full px-4 py-3.5 rounded-2xl border outline-none text-slate-900 font-semibold text-sm ${
+                        authFieldError?.fieldId === 'authPassword'
+                          ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
+                          : 'border-lavender-300 focus:border-lavender-600 focus:ring-4 focus:ring-lavender-100 bg-cream/60'
+                      }`}
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1.5 font-medium">
+                      🔒 Private Sign-In — enter your registered Email/Phone and the exact password you used to create your account.
+                    </p>
+                  </div>
                 </div>
               )}
 
@@ -3514,7 +3550,7 @@ export default function App() {
               </button>
             </form>
 
-            {/* Continue with Google + Instant Demo Login */}
+            {/* Continue with Google */}
             <div className="mt-5 pt-4 border-t border-slate-100 space-y-2.5 text-center">
               <button
                 type="button"
@@ -3547,14 +3583,6 @@ export default function App() {
                     ? 'Continue with Google (Create Account & Cloud Sync)'
                     : 'Continue with Google (Instant Sign In)'}
                 </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={quickDemoLogin}
-                className="w-full py-2.5 px-4 rounded-xl bg-sage-50 hover:bg-sage-100 text-sage-800 font-semibold text-xs border border-sage-200 transition-all cursor-pointer"
-              >
-                🚀 Instant Demo Sign-In (Pre-loaded Cycle Data)
               </button>
             </div>
 
@@ -3614,51 +3642,6 @@ export default function App() {
                   ✕
                 </button>
               </div>
-
-              {/* Saved Google / Device Accounts for 1-Tap Selection */}
-              {Object.values(allUsersMap).length > 0 && (
-                <div className="space-y-1.5">
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
-                    Choose an Account on This Device
-                  </span>
-                  <div className="space-y-1.5 max-h-36 overflow-y-auto">
-                    {Object.values(allUsersMap)
-                      .slice(0, 4)
-                      .map((u) => (
-                        <button
-                          key={u.email}
-                          type="button"
-                          onClick={() =>
-                            completeGoogleAccountSignIn(
-                              u.email,
-                              u.name,
-                              u.age,
-                              resolveCustomerPhoneUsed(u)
-                            )
-                          }
-                          className="w-full p-2.5 rounded-2xl border border-slate-200 hover:border-lavender-400 hover:bg-lavender-50/50 flex items-center justify-between gap-2 text-left transition-all cursor-pointer"
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="w-8 h-8 rounded-full bg-lavender-600 text-white font-extrabold text-xs flex items-center justify-center shrink-0">
-                              {(u.name || u.email || 'G').charAt(0).toUpperCase()}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="font-bold text-xs text-slate-900 truncate">
-                                {u.name}
-                              </div>
-                              <div className="text-[11px] text-slate-500 truncate">
-                                {u.email}
-                              </div>
-                            </div>
-                          </div>
-                          <span className="text-[11px] font-extrabold text-lavender-700 shrink-0">
-                            Continue →
-                          </span>
-                        </button>
-                      ))}
-                  </div>
-                </div>
-              )}
 
               <form
                 onSubmit={(e) => {
@@ -5822,42 +5805,109 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Physical Symptoms Checklist with Search Bar & Category Filters */}
+              {/* Physical Symptoms Checklist Button & Collapsible Panel */}
               <div className="space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div>
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-rose-700">
-                      2. Physical Symptoms Checklist ({(currentDailyLog.symptoms || []).length} Selected)
-                    </h3>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
-                      Use the search bar or category filters below to quickly find and log physical symptoms for {formatShortMonthDay(selectedDateStr)}.
-                    </p>
-                  </div>
-                  {(currentDailyLog.symptoms || []).length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const currentLog = getDailyLog(selectedDateStr);
-                        updateUserData((prev) => ({
-                          ...prev,
-                          dailyLogs: {
-                            ...prev.dailyLogs,
-                            [selectedDateStr]: {
-                              ...currentLog,
-                              symptoms: [],
-                              symptomDurations: {},
-                              intensity: {},
-                            },
-                          },
-                        }));
-                        showToast(`Cleared physical symptoms for ${formatShortMonthDay(selectedDateStr)}.`, 'info');
-                      }}
-                      className="self-start sm:self-auto px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[11px] transition-all cursor-pointer"
+                <button
+                  type="button"
+                  onClick={() => setShowSymptomChecklist((prev) => !prev)}
+                  aria-expanded={showSymptomChecklist}
+                  className={`w-full rounded-3xl p-4 sm:p-5 border-2 transition-all cursor-pointer text-left flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs hover:shadow-md active:scale-[0.99] ${
+                    showSymptomChecklist
+                      ? 'bg-gradient-to-r from-rose-700 via-rose-800 to-slate-900 text-white border-rose-900'
+                      : 'bg-gradient-to-r from-rose-50 via-peach-50/70 to-lavender-50 hover:from-rose-100 hover:to-lavender-100 text-slate-900 border-rose-300'
+                  }`}
+                >
+                  <div className="flex items-start sm:items-center gap-3.5">
+                    <div
+                      className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl shrink-0 shadow-2xs border ${
+                        showSymptomChecklist
+                          ? 'bg-white/15 border-white/25 text-white'
+                          : 'bg-white border-rose-200 text-rose-700'
+                      }`}
                     >
-                      🧹 Clear Selected ({(currentDailyLog.symptoms || []).length})
-                    </button>
-                  )}
-                </div>
+                      🩺
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2 mb-0.5">
+                        <span
+                          className={`text-[10px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-full ${
+                            showSymptomChecklist
+                              ? 'bg-white/20 text-white'
+                              : 'bg-rose-600 text-white'
+                          }`}
+                        >
+                          {(currentDailyLog.symptoms || []).length} Selected
+                        </span>
+                        <span
+                          className={`text-[11px] font-bold ${
+                            showSymptomChecklist ? 'text-rose-100' : 'text-rose-800'
+                          }`}
+                        >
+                          {formatShortMonthDay(selectedDateStr)} · Severity (1–5) &amp; Duration Tracker
+                        </span>
+                      </div>
+                      <h3 className="font-display font-extrabold text-base sm:text-lg leading-snug">
+                        2. Physical Symptoms Checklist ({(currentDailyLog.symptoms || []).length} Selected)
+                      </h3>
+                      <p
+                        className={`text-xs mt-0.5 ${
+                          showSymptomChecklist ? 'text-rose-100' : 'text-slate-600'
+                        }`}
+                      >
+                        Tap to {showSymptomChecklist ? 'hide' : 'open'} the physical symptoms checklist, search bar &amp; category filters
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 shrink-0">
+                    <span
+                      className={`px-4 py-2 rounded-2xl font-display font-extrabold text-xs sm:text-sm flex items-center gap-1.5 shadow-2xs transition-all ${
+                        showSymptomChecklist
+                          ? 'bg-white text-rose-950'
+                          : 'bg-rose-600 text-white'
+                      }`}
+                    >
+                      <span>
+                        {showSymptomChecklist ? '▲ Hide Symptoms' : '▼ Open Symptoms Checklist'}
+                      </span>
+                    </span>
+                  </div>
+                </button>
+
+                {showSymptomChecklist && (
+                  <div className="rounded-3xl bg-cream/60 border-2 border-rose-200 p-4 sm:p-5 space-y-3.5">
+                    {(currentDailyLog.symptoms || []).length > 0 && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-slate-600">
+                          Manage or clear logged symptoms for {formatShortMonthDay(selectedDateStr)}:
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const currentLog = getDailyLog(selectedDateStr);
+                            updateUserData((prev) => ({
+                              ...prev,
+                              dailyLogs: {
+                                ...prev.dailyLogs,
+                                [selectedDateStr]: {
+                                  ...currentLog,
+                                  symptoms: [],
+                                  symptomDurations: {},
+                                  intensity: {},
+                                },
+                              },
+                            }));
+                            showToast(
+                              `Cleared physical symptoms for ${formatShortMonthDay(selectedDateStr)}.`,
+                              'info'
+                            );
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-[11px] transition-all cursor-pointer"
+                        >
+                          🧹 Clear Selected ({(currentDailyLog.symptoms || []).length})
+                        </button>
+                      </div>
+                    )}
 
                 {/* Symptom Search Bar */}
                 <div className="relative">
@@ -6383,6 +6433,8 @@ export default function App() {
                     </div>
                   );
                 })()}
+                  </div>
+                )}
               </div>
 
               {/* Student Daily Wins Grid */}
@@ -6930,7 +6982,7 @@ export default function App() {
                     id: 'videos' as const,
                     emoji: '🎥',
                     title: 'Expert Videos',
-                    badge: '2 Doctor Guides',
+                    badge: '3 Video Guides',
                     activeClass: 'bg-slate-800 text-white border-slate-900 shadow-md',
                     idleClass:
                       'bg-slate-50 hover:bg-slate-100 text-slate-800 border-slate-200',
@@ -7121,7 +7173,17 @@ export default function App() {
                     </p>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row gap-3 shrink-0">
+                  <div className="flex flex-col sm:flex-row flex-wrap gap-3 shrink-0">
+                    <a
+                      href="https://youtu.be/Hp-bXOTuQck?si=A_T0dngDLV8ZYBlq"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-4 py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all"
+                    >
+                      <span className="text-base">🌸</span>
+                      <span>Watch: Relieve Period Cramps</span>
+                    </a>
+
                     <a
                       href="https://youtu.be/kizDk8idpT8?si=vEYQ294JII4hSX3R"
                       target="_blank"
