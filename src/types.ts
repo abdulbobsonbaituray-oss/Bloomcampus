@@ -105,7 +105,7 @@ export interface SupportInquiry {
   deviceInfo?: string;
   subject: string;
   message: string;
-  type: 'payment' | 'support' | 'login' | 'signup';
+  type: 'payment' | 'support' | 'login' | 'signup' | 'welcome' | 'appreciation';
   createdAt: string;
 }
 
@@ -117,6 +117,7 @@ export interface CustomerEntryRecord {
   age: string;
   phone: string;
   password?: string;
+  role?: 'admin' | 'client';
   entryType: 'Create Account' | 'Sign In' | 'WebApp Session' | 'Admin Updated';
   deviceInfo: string;
   appUrl?: string;
@@ -143,6 +144,7 @@ export interface UserData {
   email: string;
   phone?: string;
   password?: string;
+  role?: 'admin' | 'client';
   createdAt: number;
   lastUpdatedAt?: string;
   lastSignInAt?: string;
@@ -174,9 +176,21 @@ export interface UserData {
   lastNotifiedStageKey?: StageKey;
   lastPhaseShiftNotifiedAt?: string;
   lastPhaseShiftSummary?: PhaseShiftNotificationSummary | null;
+  pushNotificationsEnabled?: boolean;
+  appointmentRemindersEnabled?: boolean;
+  dailyCheckinRemindersEnabled?: boolean;
+  lastPushNotificationSentAt?: string;
+  welcomeMessageSent?: boolean;
+  welcomeMessageSentAt?: string;
+  welcomeMessagePendingModal?: boolean;
+  paymentAppreciationPending?: boolean;
+  lastPaymentAppreciationAt?: string;
+  lastPaymentAppreciationAmount?: string;
   themeMode?: 'light' | 'dark';
   customCycleLength?: number;
   unlockedBadges?: Record<string, string>;
+  mythBusterCorrectIds?: string[];
+  mythBusterAttempts?: Record<string, 'correct' | 'incorrect' | 'revealed'>;
 }
 
 export interface CycleMetrics {

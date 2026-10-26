@@ -61,17 +61,25 @@ import { FullScreenCalendarModal } from './components/FullScreenCalendarModal';
 import { OwnerAdminDashboard } from './components/OwnerAdminDashboard';
 import { BottomNavBar, CoreNavSection } from './components/BottomNavBar';
 import { BadgesMilestonesSection, evaluateUserBadges } from './components/BadgesMilestonesSection';
+import { MythBusterQuizSection } from './components/MythBusterQuizSection';
 import { exportClinicSummaryToPDF } from './utils/clinicPdfExport';
 import {
   assignSequentialCustomerNumbers,
+  clearDeletedEmailLocally,
+  deleteMultipleUsersFromFirestore,
+  deleteSupportInquiryFromFirestore,
   deleteUserFromFirestore,
   fetchAllUsersFromFirestore,
   fetchSingleUserFromFirestore,
   getClientDeviceLabel,
+  getLocalDeletedEmailsMap,
   logCustomerEntryToFirestore,
+  markEmailDeletedLocally,
   resolveCustomerPhoneUsed,
+  signInWithEmailPasswordFirebase,
   signInWithGooglePopup,
   signOutFirebase,
+  signUpWithEmailPasswordFirebase,
   subscribeToAdminConfigFirestore,
   subscribeToAllUsersFirestore,
   subscribeToFirebaseAuth,
@@ -124,11 +132,12 @@ function mergeUsersMaps(
   baseUsers: Record<string, UserData>,
   incomingUsers: Record<string, UserData>
 ): Record<string, UserData> {
+  const deletedMap = getLocalDeletedEmailsMap();
   const merged: Record<string, UserData> = {};
   Object.entries(baseUsers || {}).forEach(([k, u]) => {
     if (!k || !u || typeof u !== 'object') return;
     const emailKey = (u.email || k).toLowerCase().trim();
-    if (emailKey) {
+    if (emailKey && !deletedMap[emailKey]) {
       merged[emailKey] = sanitizeClientUser(u, emailKey);
     }
   });
@@ -136,7 +145,7 @@ function mergeUsersMaps(
   Object.entries(incomingUsers || {}).forEach(([rawKey, u]) => {
     if (!rawKey || !u || typeof u !== 'object') return;
     const emailKey = (u.email || rawKey).toLowerCase().trim();
-    if (!emailKey) return;
+    if (!emailKey || deletedMap[emailKey]) return;
     const existing = merged[emailKey];
     if (!existing) {
       merged[emailKey] = sanitizeClientUser(u, emailKey);
@@ -214,6 +223,20 @@ function mergeUsersMaps(
       ...(u.unlockedBadges || {}),
     };
 
+    const mergedMythCorrectIds = Array.from(
+      new Set([
+        ...(Array.isArray(existing.mythBusterCorrectIds) ? existing.mythBusterCorrectIds : []),
+        ...(Array.isArray(u.mythBusterCorrectIds) ? u.mythBusterCorrectIds : []),
+      ])
+    );
+    const mergedMythAttempts: Record<string, 'correct' | 'incorrect' | 'revealed'> = {
+      ...(existing.mythBusterAttempts || {}),
+      ...(u.mythBusterAttempts || {}),
+    };
+    mergedMythCorrectIds.forEach((id) => {
+      mergedMythAttempts[id] = 'correct';
+    });
+
     // 3. Preserve Subscription Status & Payment History
     const existingPayHistory = Array.isArray(existing.paymentHistory) ? existing.paymentHistory : [];
     const incomingPayHistory = Array.isArray(u.paymentHistory) ? u.paymentHistory : [];
@@ -224,6 +247,52 @@ function mergeUsersMaps(
         ? existingPayHistory
         : incomingPayHistory;
 
+    // 4. Preserve Client Appointments & Sidratu Skincare Therapy Logs in Real Time
+    const existingAppts = Array.isArray(existing.appointments) ? existing.appointments : [];
+    const incomingAppts = Array.isArray(u.appointments) ? u.appointments : [];
+    const apptMap = new Map<string, (typeof existingAppts)[number]>();
+    [...existingAppts, ...incomingAppts].forEach((appt) => {
+      if (appt && typeof appt.id === 'string') {
+        apptMap.set(appt.id, appt);
+      }
+    });
+    const bestAppointments =
+      apptMap.size > 0
+        ? Array.from(apptMap.values())
+        : isIncomingNewer
+        ? incomingAppts
+        : existingAppts;
+
+    const existingTherapy = Array.isArray(existing.therapyLogs) ? existing.therapyLogs : [];
+    const incomingTherapy = Array.isArray(u.therapyLogs) ? u.therapyLogs : [];
+    const therapyMap = new Map<string, (typeof existingTherapy)[number]>();
+    [...existingTherapy, ...incomingTherapy].forEach((log) => {
+      if (log && typeof log.id === 'string') {
+        therapyMap.set(log.id, log);
+      }
+    });
+    const bestTherapyLogs =
+      therapyMap.size > 0
+        ? Array.from(therapyMap.values()).sort((a, b) =>
+            (b.sessionDate || '').localeCompare(a.sessionDate || '')
+          )
+        : isIncomingNewer
+        ? incomingTherapy
+        : existingTherapy;
+
+    const bestSkincareGoal =
+      (isIncomingNewer && (u.skincareGoal || '').trim() ? u.skincareGoal?.trim() : '') ||
+      (existing.skincareGoal || '').trim() ||
+      (u.skincareGoal || '').trim() ||
+      undefined;
+
+    const resolvedRole: 'admin' | 'client' =
+      emailKey === OWNER_ADMIN_EMAIL.toLowerCase() ||
+      existing.role === 'admin' ||
+      u.role === 'admin'
+        ? 'admin'
+        : 'client';
+
     merged[emailKey] = sanitizeClientUser(
       {
         ...base,
@@ -231,6 +300,7 @@ function mergeUsersMaps(
         age: bestAge,
         phone: bestPhone,
         password: bestPassword,
+        role: resolvedRole,
         firstEntryAt: earliestFirst,
         createdAt: earliestFirst,
         signInCount: Math.max(Number(existing.signInCount || 1), Number(u.signInCount || 1)),
@@ -239,7 +309,13 @@ function mergeUsersMaps(
         emergencyPills: bestPills,
         journalEntries: bestJournals,
         unlockedBadges: mergedBadges,
+        mythBusterCorrectIds: mergedMythCorrectIds,
+        mythBusterAttempts: mergedMythAttempts,
         paymentHistory: bestPayHistory,
+        appointments: bestAppointments,
+        therapyLogs: bestTherapyLogs,
+        skincareGoal: bestSkincareGoal,
+        welcomeMessageSent: Boolean(existing.welcomeMessageSent || u.welcomeMessageSent),
       },
       emailKey
     );
@@ -459,10 +535,7 @@ export default function App() {
 
   // Smart Phase Advisor State
   const [activeAdvisorStage, setActiveAdvisorStage] = useState<StageKey>('OVULATION');
-  const [showSmartPhaseGuide, setShowSmartPhaseGuide] = useState<boolean>(false);
-
-  // Campus Myth Index
-  const [currentMythIndex, setCurrentMythIndex] = useState<number>(0);
+  const [showSmartPhaseGuide, setShowSmartPhaseGuide] = useState<boolean>(true);
 
   // Daily Notes & Symptom Search Filter Local Input State
   const [dailyNotesInput, setDailyNotesInput] = useState<string>('');
@@ -490,6 +563,25 @@ export default function App() {
   const [showFullScreenCalendar, setShowFullScreenCalendar] = useState<boolean>(false);
   const [showBadgesModal, setShowBadgesModal] = useState<boolean>(false);
   const [showProfileModal, setShowProfileModal] = useState<boolean>(false);
+  const [showPushNotificationsModal, setShowPushNotificationsModal] = useState<boolean>(false);
+  const [mobileGuideTab, setMobileGuideTab] = useState<'android' | 'ios'>('android');
+
+  const resolveUserRole = (
+    email: string,
+    cfg: AdminConfig = adminConfig,
+    existingRole?: 'admin' | 'client'
+  ): 'admin' | 'client' => {
+    const clean = (email || '').trim().toLowerCase();
+    if (!clean) return 'client';
+    if (clean === OWNER_ADMIN_EMAIL.toLowerCase()) return 'admin';
+    if (
+      Array.isArray(cfg?.additionalAdmins) &&
+      cfg.additionalAdmins.some((a) => (a.email || '').trim().toLowerCase() === clean)
+    ) {
+      return 'admin';
+    }
+    return existingRole === 'admin' ? 'admin' : 'client';
+  };
 
   // Paywall / Lock Screen Form State
   const [paymentTab, setPaymentTab] = useState<'orange' | 'free_password'>('orange');
@@ -681,6 +773,7 @@ export default function App() {
 
       resolvedUser.name = fbUser.displayName || resolvedUser.name || gEmail.split('@')[0];
       resolvedUser.email = gEmail;
+      resolvedUser.role = resolveUserRole(gEmail, getAdminConfig(), resolvedUser.role);
       resolvedUser.firstEntryAt = firstMs;
       resolvedUser.createdAt = firstMs;
       resolvedUser.deviceInfo = getClientDeviceLabel();
@@ -688,6 +781,11 @@ export default function App() {
       resolvedUser.subscriptionUntil = resolvedUser.subscriptionUntil || nowMs + twoWeeksMs;
       resolvedUser.lastUpdatedAt = nowIso;
       resolvedUser.lastSignInAt = nowIso;
+      if (!existingRecord && !resolvedUser.welcomeMessageSent) {
+        resolvedUser.welcomeMessageSent = true;
+        resolvedUser.welcomeMessageSentAt = nowIso;
+        resolvedUser.welcomeMessagePendingModal = true;
+      }
 
       const all = getAllUsers();
       all[gEmail] = resolvedUser;
@@ -803,7 +901,12 @@ export default function App() {
         );
       }
     }
-  }, [userData?.periods, userData?.dailyLogs, userData?.journalEntries]);
+  }, [
+    userData?.periods,
+    userData?.dailyLogs,
+    userData?.journalEntries,
+    userData?.mythBusterCorrectIds,
+  ]);
 
   // Helper to dispatch a native Browser Notification (with Service Worker fallback)
   const triggerBrowserNotification = (
@@ -1178,7 +1281,7 @@ export default function App() {
     deviceInfo?: string;
     subject: string;
     message: string;
-    type: 'payment' | 'support' | 'login' | 'signup';
+    type: 'payment' | 'support' | 'login' | 'signup' | 'welcome' | 'appreciation';
     openMailClient?: boolean;
   }) => {
     const newInq: SupportInquiry = {
@@ -1221,6 +1324,73 @@ export default function App() {
       a.click();
       document.body.removeChild(a);
     }
+  };
+
+  // Helper to trigger an Automated Welcome & Thank-You Message when a user creates an account for the first time
+  const triggerAutomatedWelcomeMessage = (newUser: UserData) => {
+    const welcomeSubject = `🌸 Welcome & Thank You for Joining BloomCampus, ${newUser.name}!`;
+    const welcomeBody =
+      `Dear ${newUser.name},\n\n` +
+      `Welcome to BloomCampus & Sidratu Beauty Therapy Skin Care — thank you so much for creating your account with us!\n\n` +
+      `Your account (${newUser.email}) is now active with 2 Weeks (14 Days) of Free Access and real-time Firestore cloud sync for your:\n` +
+      `• Menstrual Cycle & LMP Calendar Predictions\n` +
+      `• Daily Mood, Hydration & Symptom Tracking\n` +
+      `• Sidratu Clinic Appointments & Gold Skincare Timeline (101 Jomo Kenyatta Road, Freetown)\n\n` +
+      `Warm regards,\n` +
+      `${CREATOR_NAME} (${OWNER_ADMIN_EMAIL})\n` +
+      `BloomCampus & Sidratu Beauty Therapy Skin Care`;
+
+    triggerBrowserNotification(
+      `🌸 Welcome to BloomCampus, ${newUser.name}!`,
+      'Thank you for creating your account! Your 14-day free access and real-time cloud sync are now active.',
+      'bloomcampus-welcome-message'
+    );
+
+    triggerOwnerEmailAndServerAlert({
+      userName: newUser.name,
+      userEmail: newUser.email,
+      userPhone: resolveCustomerPhoneUsed(newUser) || 'Not entered',
+      userAge: newUser.age || '21',
+      deviceInfo: newUser.deviceInfo || getClientDeviceLabel(),
+      subject: welcomeSubject,
+      message: welcomeBody,
+      type: 'welcome',
+      openMailClient: false,
+    });
+  };
+
+  // Helper to trigger an Automated Payment Appreciation Message whenever someone makes or completes a payment
+  const triggerPaymentAppreciationMessage = (
+    paidUser: UserData,
+    amountLabel = 'Le 30',
+    contextNote = 'Subscription Support'
+  ) => {
+    const appreciationSubject = `💖 Thank You for Supporting BloomCampus, ${paidUser.name}!`;
+    const appreciationBody =
+      `Dear ${paidUser.name},\n\n` +
+      `Thank you from the bottom of our hearts for your payment of ${amountLabel} (${contextNote})!\n\n` +
+      `Your generous support directly helps BloomCampus & Sidratu Beauty Therapy Skin Care grow one step further so we can empower more students and clients with accurate cycle tracking, wellness guidance, and skincare support.\n\n` +
+      `With sincere gratitude,\n` +
+      `${CREATOR_NAME} (${OWNER_ADMIN_EMAIL})\n` +
+      `BloomCampus & Sidratu Beauty Therapy Skin Care`;
+
+    triggerBrowserNotification(
+      `💖 Thank You for Supporting BloomCampus, ${paidUser.name}!`,
+      `Thank you for your ${amountLabel} payment and for helping the app grow one step further!`,
+      'bloomcampus-payment-appreciation'
+    );
+
+    triggerOwnerEmailAndServerAlert({
+      userName: paidUser.name,
+      userEmail: paidUser.email,
+      userPhone: resolveCustomerPhoneUsed(paidUser) || 'Not entered',
+      userAge: paidUser.age || '21',
+      deviceInfo: paidUser.deviceInfo || getClientDeviceLabel(),
+      subject: appreciationSubject,
+      message: appreciationBody,
+      type: 'appreciation',
+      openMailClient: false,
+    });
   };
 
   // =========================================================================
@@ -1444,6 +1614,7 @@ export default function App() {
   }) => {
     const emailClean = params.email.trim().toLowerCase();
     const origClean = params.originalEmail ? params.originalEmail.trim().toLowerCase() : '';
+    clearDeletedEmailLocally(emailClean);
     const users = mergeUsersMaps(getAllUsers(), allUsersMap);
     const twoWeeksMs = 14 * 24 * 60 * 60 * 1000;
 
@@ -1452,6 +1623,7 @@ export default function App() {
 
     if (origClean && origClean !== emailClean && users[origClean]) {
       delete users[origClean];
+      markEmailDeletedLocally(origClean);
       deleteUserFromFirestore(origClean).catch(() => {});
       fetch('/api/users/delete', {
         method: 'POST',
@@ -1529,18 +1701,70 @@ export default function App() {
 
   const handleDeleteUserByAdmin = (targetEmail: string) => {
     const emailKey = targetEmail.toLowerCase().trim();
+    if (!emailKey) return;
+    markEmailDeletedLocally(emailKey);
     const users = mergeUsersMaps(getAllUsers(), allUsersMap);
     const targetName = users[emailKey]?.name || emailKey;
     delete users[emailKey];
-    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(users));
-    setAllUsersMap({ ...users });
+    const renumbered = assignSequentialCustomerNumbers(users);
+    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(renumbered));
+    setAllUsersMap({ ...renumbered });
     deleteUserFromFirestore(emailKey).catch(() => {});
     fetch('/api/users/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: emailKey }),
     }).catch(() => {});
-    showToast(`🗑️ Removed ${targetName} (${emailKey}) from the app directory.`, 'info');
+    showToast(`🗑️ Permanently deleted ${targetName} (${emailKey}) from Customer Entries.`, 'info');
+  };
+
+  const handleBulkDeleteUsersByAdmin = (targetEmails: string[]) => {
+    const cleaned = Array.from(
+      new Set(targetEmails.map((e) => e.toLowerCase().trim()).filter(Boolean))
+    );
+    if (cleaned.length === 0) return;
+    markEmailDeletedLocally(cleaned);
+    const users = mergeUsersMaps(getAllUsers(), allUsersMap);
+    cleaned.forEach((em) => {
+      delete users[em];
+    });
+    const renumbered = assignSequentialCustomerNumbers(users);
+    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(renumbered));
+    setAllUsersMap({ ...renumbered });
+    deleteMultipleUsersFromFirestore(cleaned).catch(() => {});
+    fetch('/api/users/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emails: cleaned }),
+    }).catch(() => {});
+    showToast(
+      `🗑️ Permanently deleted ${cleaned.length} selected customer ${
+        cleaned.length === 1 ? 'entry' : 'entries'
+      }!`,
+      'info'
+    );
+  };
+
+  const handleDeleteSupportInquiry = (inquiryId?: string, clearAll = false) => {
+    if (clearAll) {
+      setSupportInquiries([]);
+      fetch('/api/admin/inquiries/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clearAll: true }),
+      }).catch(() => {});
+      showToast('🗑️ Cleared all alerts & inquiries from the Admin Inbox.', 'info');
+      return;
+    }
+    if (!inquiryId) return;
+    setSupportInquiries((prev) => prev.filter((item) => item.id !== inquiryId));
+    deleteSupportInquiryFromFirestore(inquiryId).catch(() => {});
+    fetch('/api/admin/inquiries/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: inquiryId }),
+    }).catch(() => {});
+    showToast('🗑️ Removed alert from the Admin Inbox.', 'info');
   };
 
   const handleApproveUserPayment = (targetEmail: string) => {
@@ -1556,6 +1780,7 @@ export default function App() {
       year: 'numeric',
     });
 
+    const nowIso = new Date().toISOString();
     const updatedUser: UserData = {
       ...target,
       subscriptionStatus: 'active',
@@ -1563,18 +1788,21 @@ export default function App() {
       subscriptionUntil: newExpMs,
       paymentMethod: 'Orange Money (Verified by Owner)',
       approvalWelcomePending: true,
+      paymentAppreciationPending: true,
+      lastPaymentAppreciationAt: nowIso,
+      lastPaymentAppreciationAmount: 'Le 30',
       lastApprovedExpirationDate: expFormatted,
       pendingPayment: target.pendingPayment
         ? {
             ...target.pendingPayment,
             status: 'approved',
-            reviewedAt: new Date().toISOString(),
+            reviewedAt: nowIso,
           }
         : null,
       paymentHistory: (target.paymentHistory || []).map((item, idx) =>
         idx === 0 ? { ...item, status: 'approved' } : item
       ),
-      lastUpdatedAt: new Date().toISOString(),
+      lastUpdatedAt: nowIso,
     };
 
     users[emailKey] = updatedUser;
@@ -1584,8 +1812,10 @@ export default function App() {
       setUserData(updatedUser);
     }
 
+    triggerPaymentAppreciationMessage(updatedUser, 'Le 30', 'Approved 30-Day Subscription Pass');
+
     showToast(
-      `✅ Approved ${updatedUser.name} (${updatedUser.email}) for 30 days until ${expFormatted}! In-app welcome banner + Email notification triggered.`,
+      `✅ Approved ${updatedUser.name} (${updatedUser.email}) for 30 days until ${expFormatted}! Triggered Payment Appreciation message & Welcome banner.`,
       'success'
     );
   };
@@ -1871,7 +2101,7 @@ export default function App() {
 
       let existing = matchedKey ? users[matchedKey] : undefined;
 
-      // 2. If not found locally, try Cloud Firestore lookup
+      // 2. If not found locally, try Cloud Firestore lookup and Server API lookup
       const candidateEmail = emailRegex.test(idLower)
         ? idLower
         : idDigits.length >= 6 && !/[a-z]/i.test(idLower)
@@ -1893,9 +2123,33 @@ export default function App() {
       }
 
       if (!existing) {
+        try {
+          const serverRes = await fetch('/api/auth/signin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: candidateEmail, password: passVal }),
+          });
+          if (serverRes.ok) {
+            const serverData = await serverRes.json();
+            if (serverData?.found && serverData?.user) {
+              const sanitizedServer = sanitizeClientUser(
+                serverData.user as UserData,
+                candidateEmail
+              );
+              users[candidateEmail] = sanitizedServer;
+              existing = sanitizedServer;
+              matchedKey = candidateEmail;
+            }
+          }
+        } catch {
+          // Offline fallback
+        }
+      }
+
+      if (!existing) {
         focusAuthInputField(
           'authEmail',
-          'No account found with this Email or Phone Number. Please switch to "Create Account" to create your account first.'
+          'No account found with this Email or Phone Number. Please switch to "Sign Up / Create Account" to create your account first.'
         );
         return;
       }
@@ -1910,6 +2164,8 @@ export default function App() {
       }
 
       const finalEmailKey = (existing?.email || matchedKey || candidateEmail).toLowerCase().trim();
+      clearDeletedEmailLocally(finalEmailKey);
+      void signInWithEmailPasswordFirebase(finalEmailKey, passVal).catch(() => {});
       const resolvedUser = existing;
 
       if (nameTrim) resolvedUser.name = nameTrim;
@@ -1924,6 +2180,7 @@ export default function App() {
         resolvedUser.paymentMethod = `Free 30-Day Access Password (${adminConfig.freeAccessPassword})`;
       }
       resolvedUser.email = finalEmailKey;
+      resolvedUser.role = resolveUserRole(finalEmailKey, adminConfig, resolvedUser.role);
       resolvedUser.firstEntryAt =
         Number(resolvedUser.firstEntryAt || resolvedUser.createdAt) > 0
           ? Number(resolvedUser.firstEntryAt || resolvedUser.createdAt)
@@ -1942,7 +2199,9 @@ export default function App() {
       setAllUsersMap({ ...numbered });
       loginUserSession(finalEmailKey, numbered);
       showToast(
-        `🌸 Welcome back, ${savedUser?.name || finalEmailKey}! (Customer Entry #${savedUser?.customerNumber || 1})`,
+        `🌸 Logged in! Welcome back, ${savedUser?.name || finalEmailKey}! (${
+          savedUser?.role === 'admin' ? '🛡️ Admin' : '🌸 Client'
+        } · Entry #${savedUser?.customerNumber || 1})`,
         'success'
       );
 
@@ -1970,28 +2229,11 @@ export default function App() {
       return;
     }
 
-    // Create Account Mode Validation (Name, Age, Email, Phone, Password)
-    if (!nameTrim || nameTrim.length < 2) {
-      focusAuthInputField(
-        'authName',
-        'Please enter your full name in the "Your Name" field to create your account.'
-      );
-      return;
-    }
-
-    const parsedAge = Number(ageTrim);
-    if (!ageTrim || !Number.isInteger(parsedAge) || Number.isNaN(parsedAge) || parsedAge < 10 || parsedAge > 99) {
-      focusAuthInputField(
-        'authAge',
-        'Please enter your age (between 10 and 99) in the "Age" field.'
-      );
-      return;
-    }
-
+    // Sign Up / Create Account Mode Validation (Email & Password required; Name, Age, Phone optional with smart defaults)
     if (!emailTrim) {
       focusAuthInputField(
         'authEmail',
-        'Please enter your email address in the "Email Address" field.'
+        'Please enter your email address in the "Email Address" field to sign up.'
       );
       return;
     }
@@ -2009,7 +2251,24 @@ export default function App() {
       return;
     }
 
-    if (!phoneTrim || phoneDigits.length < 6) {
+    if (!passVal) {
+      focusAuthInputField(
+        'authPassword',
+        'Please create a password for your account (you will use this same password to Log In).'
+      );
+      return;
+    }
+
+    const parsedAge = Number(ageTrim);
+    if (ageTrim && (!Number.isInteger(parsedAge) || Number.isNaN(parsedAge) || parsedAge < 10 || parsedAge > 99)) {
+      focusAuthInputField(
+        'authAge',
+        'Please enter a valid age between 10 and 99 in the "Age" field.'
+      );
+      return;
+    }
+
+    if (phoneTrim && phoneDigits.length < 6) {
       focusAuthInputField(
         'authPhone',
         'Please enter a valid phone number with at least 6 digits (e.g., 076 123 456).'
@@ -2017,15 +2276,9 @@ export default function App() {
       return;
     }
 
-    if (!passVal) {
-      focusAuthInputField(
-        'authPassword',
-        'Please create a password for your account (you will use this same password to Sign In).'
-      );
-      return;
-    }
-
     setAuthFieldError(null);
+    clearDeletedEmailLocally(normalizedSignupEmail);
+    void signUpWithEmailPasswordFirebase(normalizedSignupEmail, passVal).catch(() => {});
 
     let matchedKey = Object.keys(users).find(
       (k) =>
@@ -2055,7 +2308,7 @@ export default function App() {
     ) {
       focusAuthInputField(
         'authPassword',
-        'An account with this email already exists. Please switch to "Sign In" and enter the password you used to create the account.'
+        'An account with this email already exists. Please switch to "Log In / Sign In" and enter the password you used to create the account.'
       );
       return;
     }
@@ -2074,11 +2327,13 @@ export default function App() {
         phoneTrim
       );
 
+    const isFirstTimeAccountCreation = !existing || !existing.welcomeMessageSent;
     newUser.name = nameTrim || existing?.name || normalizedSignupEmail.split('@')[0];
     newUser.age = ageTrim || existing?.age || '21';
     newUser.email = normalizedSignupEmail;
     newUser.phone = phoneTrim || resolveCustomerPhoneUsed(existing);
     newUser.password = passVal;
+    newUser.role = resolveUserRole(normalizedSignupEmail, adminConfig, existing?.role);
     newUser.firstEntryAt = firstEntryMs;
     newUser.createdAt = firstEntryMs;
     newUser.deviceInfo = deviceLabel;
@@ -2099,6 +2354,11 @@ export default function App() {
     newUser.lastSignInAt = nowIso;
     newUser.signInCount = existing ? (existing.signInCount || 1) + 1 : 1;
     newUser.signupSource = 'Create Account';
+    if (isFirstTimeAccountCreation) {
+      newUser.welcomeMessageSent = true;
+      newUser.welcomeMessageSentAt = nowIso;
+      newUser.welcomeMessagePendingModal = true;
+    }
 
     users[normalizedSignupEmail] = newUser;
     const numbered = assignSequentialCustomerNumbers(users);
@@ -2109,9 +2369,13 @@ export default function App() {
     showToast(
       usedVipPassOnAuth
         ? `🔑 Welcome, ${newUser.name}! Entry #${savedUser?.customerNumber || 1} unlocked with 30-Day Free Access Password.`
-        : `🌸 Welcome, ${newUser.name}! Entry #${savedUser?.customerNumber || 1} saved with 2 weeks (14 days) of free access.`,
+        : `🎉 Welcome & Thank You, ${newUser.name}! Account created (Entry #${savedUser?.customerNumber || 1}) — 2 weeks free access active.`,
       'success'
     );
+
+    if (isFirstTimeAccountCreation) {
+      triggerAutomatedWelcomeMessage(savedUser);
+    }
 
     triggerOwnerEmailAndServerAlert({
       userName: savedUser.name,
@@ -2124,6 +2388,7 @@ export default function App() {
         `Customer Entry #${savedUser.customerNumber || 1} signed up in BloomCampus!\n` +
         `• Name: ${savedUser.name}\n` +
         `• Email: ${savedUser.email}\n` +
+        `• Role: ${savedUser.role === 'admin' ? 'Admin' : 'Client'}\n` +
         `• Age: ${savedUser.age || '21'}\n` +
         `• Phone Number Used: ${resolveCustomerPhoneUsed(savedUser) || 'Not entered'}\n` +
         `• Device: ${deviceLabel}\n` +
@@ -2357,11 +2622,13 @@ export default function App() {
       existing ||
       createDefaultUserObject(googleDisplayName, gEmail, '', googleAge, googlePhone);
 
+    const isFirstTimeGoogleSignup = !existing || !existing.welcomeMessageSent;
     baseUser.name = googleDisplayName;
     baseUser.age = googleAge;
     baseUser.email = gEmail;
     baseUser.phone = googlePhone;
     baseUser.password = existing?.password || authPassword.trim() || '';
+    baseUser.role = resolveUserRole(gEmail, adminConfig, existing?.role);
     baseUser.firstEntryAt = firstEntryMs;
     baseUser.createdAt = firstEntryMs;
     baseUser.deviceInfo = getClientDeviceLabel();
@@ -2372,6 +2639,11 @@ export default function App() {
     baseUser.lastSignInAt = nowIso;
     baseUser.signInCount = existing ? (existing.signInCount || 1) + 1 : 1;
     baseUser.signupSource = existing ? 'Sign In' : 'Create Account';
+    if (isFirstTimeGoogleSignup) {
+      baseUser.welcomeMessageSent = true;
+      baseUser.welcomeMessageSentAt = nowIso;
+      baseUser.welcomeMessagePendingModal = true;
+    }
 
     users[gEmail] = baseUser;
     const numbered = assignSequentialCustomerNumbers(users);
@@ -2381,10 +2653,14 @@ export default function App() {
     setShowGoogleAccountModal(false);
     loginUserSession(gEmail, numbered);
 
+    if (isFirstTimeGoogleSignup) {
+      triggerAutomatedWelcomeMessage(savedUser);
+    }
+
     showToast(
-      `🌸 Signed in with Google as ${baseUser.name} (${gEmail})! Synced to Cloud (Entry #${
-        savedUser?.customerNumber || 1
-      }).`,
+      `🌸 Signed in with Google as ${baseUser.name} (${gEmail})! Role: ${
+        savedUser?.role === 'admin' ? '🛡️ Admin' : '🌸 Client'
+      } · Synced to Firestore (Entry #${savedUser?.customerNumber || 1}).`,
       'success'
     );
 
@@ -2399,6 +2675,7 @@ export default function App() {
         `Customer Entry #${savedUser.customerNumber || 1} signed in via Google!\n` +
         `• Name: ${savedUser.name}\n` +
         `• Email: ${savedUser.email}\n` +
+        `• Role: ${savedUser.role === 'admin' ? 'Admin' : 'Client'}\n` +
         `• Age: ${savedUser.age || '21'}\n` +
         `• Phone Number Used: ${resolveCustomerPhoneUsed(savedUser) || 'Not entered'}\n` +
         `• Device: ${savedUser.deviceInfo}\n` +
@@ -2983,6 +3260,9 @@ export default function App() {
       subscriptionStatus: 'pending_verification',
       subscriptionUntil: null,
       paymentMethod: 'Orange Money (Pending Verification)',
+      paymentAppreciationPending: true,
+      lastPaymentAppreciationAt: nowIso,
+      lastPaymentAppreciationAmount: 'Le 30',
       pendingPayment: {
         id: `pay-${Date.now()}`,
         senderPhone,
@@ -3004,6 +3284,12 @@ export default function App() {
         ...(prev.paymentHistory || []),
       ],
     }));
+
+    triggerPaymentAppreciationMessage(
+      { ...userData, phone: senderPhone },
+      'Le 30',
+      `Orange Money Payment (Ref: ${txId})`
+    );
 
     const emailSubject = `🟧 Orange Money Payment Verification Request — ${userData.name}`;
     const emailBody =
@@ -3028,13 +3314,13 @@ export default function App() {
 
     setLatestPaymentReceiptMessage(emailBody);
     setPaymentReceiptText(
-      `Your Orange Money payment (Sender: ${senderPhone}, Tx ID: ${txId}) has been submitted and is Pending Owner Verification.`
+      `💖 Thank you for supporting BloomCampus and helping it grow one step further! Your Orange Money payment (Sender: ${senderPhone}, Tx ID: ${txId}) has been submitted.`
     );
     setIsPaywallPreview(false);
     setShowPaywallModal(true);
     showToast(
-      '⏳ Orange Money payment submitted! Showing Pending Approval screen & triggered email alert to owner.',
-      'info'
+      '💖 Thank you for your payment & for helping BloomCampus grow one step further! Payment submitted for verification.',
+      'success'
     );
   };
 
@@ -3189,6 +3475,8 @@ export default function App() {
           onClearPendingVerification={handleRemovePendingVerification}
           onRegisterNewUserByAdmin={handleRegisterNewUserByAdmin}
           onDeleteUser={handleDeleteUserByAdmin}
+          onBulkDeleteUsers={handleBulkDeleteUsersByAdmin}
+          onDeleteSupportInquiry={handleDeleteSupportInquiry}
           onRefreshUsers={syncLatestUsersFromEverywhere}
           onExitAdmin={() => {
             setIsAdminView(false);
@@ -3259,7 +3547,7 @@ export default function App() {
               <div className="mt-2.5 flex items-center justify-center gap-2 text-xs font-semibold text-sage-800">
                 <span>🎁 2 Weeks (14 Days) Free Access</span>
                 <span aria-hidden="true">·</span>
-                <span>🌸 Instant Sign In &amp; Cycle Tracking</span>
+                <span>🌸 Sign Up &amp; Log In with Email &amp; Password</span>
               </div>
             </div>
 
@@ -3271,13 +3559,13 @@ export default function App() {
                   setAuthMode('signup');
                   setAuthFieldError(null);
                 }}
-                className={`py-2.5 rounded-xl font-bold text-sm transition-all ${
+                className={`py-2.5 rounded-xl font-bold text-sm transition-all cursor-pointer ${
                   authMode === 'signup'
                     ? 'bg-white text-lavender-700 shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Create Account
+                Sign Up (Create Account)
               </button>
               <button
                 type="button"
@@ -3285,13 +3573,13 @@ export default function App() {
                   setAuthMode('signin');
                   setAuthFieldError(null);
                 }}
-                className={`py-2.5 rounded-xl font-bold text-sm transition-all ${
+                className={`py-2.5 rounded-xl font-bold text-sm transition-all cursor-pointer ${
                   authMode === 'signin'
                     ? 'bg-white text-lavender-700 shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Sign In
+                Log In (Sign In)
               </button>
             </div>
 
@@ -3312,17 +3600,84 @@ export default function App() {
               </div>
             )}
 
-            {/* Auth Form — Create Account vs Streamlined Sign In */}
+            {/* Auth Form — Sign Up vs Log In with Email & Password */}
             <form onSubmit={handleAuthSubmit} noValidate className="space-y-3.5">
               {authMode === 'signup' ? (
                 <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label
+                        htmlFor="authEmail"
+                        className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5"
+                      >
+                        Email Address *
+                      </label>
+                      <input
+                        ref={authEmailInputRef}
+                        type="email"
+                        id="authEmail"
+                        name="email"
+                        autoComplete="email"
+                        required
+                        value={authEmail}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setAuthEmail(val);
+                          if (authFieldError?.fieldId === 'authEmail') setAuthFieldError(null);
+                        }}
+                        placeholder="you@gmail.com"
+                        className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-900 font-semibold text-sm ${
+                          authFieldError?.fieldId === 'authEmail'
+                            ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
+                            : 'border-lavender-300 focus:border-lavender-600 focus:ring-4 focus:ring-lavender-100 bg-cream/60'
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label
+                          htmlFor="authPassword"
+                          className="block text-xs font-bold uppercase tracking-wider text-slate-700"
+                        >
+                          Password *
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((prev) => !prev)}
+                          className="text-[11px] font-bold text-lavender-700 hover:text-lavender-900 cursor-pointer"
+                        >
+                          {showPassword ? '🙈 Hide' : '👁️ Show'}
+                        </button>
+                      </div>
+                      <input
+                        ref={authPasswordInputRef}
+                        type={showPassword ? 'text' : 'password'}
+                        id="authPassword"
+                        name="password"
+                        autoComplete="new-password"
+                        required
+                        value={authPassword}
+                        onChange={(e) => {
+                          setAuthPassword(e.target.value);
+                          if (authFieldError?.fieldId === 'authPassword') setAuthFieldError(null);
+                        }}
+                        placeholder="Create your password"
+                        className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-900 font-semibold text-sm ${
+                          authFieldError?.fieldId === 'authPassword'
+                            ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
+                            : 'border-lavender-300 focus:border-lavender-600 focus:ring-4 focus:ring-lavender-100 bg-cream/60'
+                        }`}
+                      />
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div className="sm:col-span-2">
                       <label
                         htmlFor="authName"
                         className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
                       >
-                        Your Name *
+                        Your Name
                       </label>
                       <input
                         ref={authNameInputRef}
@@ -3330,7 +3685,6 @@ export default function App() {
                         id="authName"
                         name="name"
                         autoComplete="name"
-                        required
                         value={authName}
                         onChange={(e) => {
                           setAuthName(e.target.value);
@@ -3349,7 +3703,7 @@ export default function App() {
                         htmlFor="authAge"
                         className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
                       >
-                        Age *
+                        Age
                       </label>
                       <input
                         ref={authAgeInputRef}
@@ -3358,7 +3712,6 @@ export default function App() {
                         name="age"
                         min="10"
                         max="99"
-                        required
                         value={authAge}
                         onChange={(e) => {
                           setAuthAge(e.target.value);
@@ -3374,94 +3727,27 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label
-                        htmlFor="authEmail"
-                        className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
-                      >
-                        Email Address *
-                      </label>
-                      <input
-                        ref={authEmailInputRef}
-                        type="email"
-                        id="authEmail"
-                        name="email"
-                        autoComplete="email"
-                        required
-                        value={authEmail}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setAuthEmail(val);
-                          if (authFieldError?.fieldId === 'authEmail') setAuthFieldError(null);
-                        }}
-                        placeholder="you@gmail.com"
-                        className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-800 font-medium text-sm ${
-                          authFieldError?.fieldId === 'authEmail'
-                            ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
-                            : 'border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100'
-                        }`}
-                      />
-                    </div>
-                    <div>
-                      <label
-                        htmlFor="authPhone"
-                        className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
-                      >
-                        Phone Number Used *
-                      </label>
-                      <input
-                        ref={authPhoneInputRef}
-                        type="tel"
-                        id="authPhone"
-                        name="tel"
-                        autoComplete="tel"
-                        required
-                        value={authPhone}
-                        onChange={(e) => {
-                          setAuthPhone(e.target.value);
-                          if (authFieldError?.fieldId === 'authPhone') setAuthFieldError(null);
-                        }}
-                        placeholder="e.g., 076 123 456"
-                        className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-800 font-medium text-sm ${
-                          authFieldError?.fieldId === 'authPhone'
-                            ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
-                            : 'border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100'
-                        }`}
-                      />
-                    </div>
-                  </div>
                   <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label
-                        htmlFor="authPassword"
-                        className="block text-xs font-bold uppercase tracking-wider text-slate-600"
-                      >
-                        Create Account Password *
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword((prev) => !prev)}
-                        className="text-[11px] font-bold text-lavender-700 hover:text-lavender-900 cursor-pointer"
-                      >
-                        {showPassword ? '🙈 Hide Password' : '👁️ Show Password'}
-                      </button>
-                    </div>
+                    <label
+                      htmlFor="authPhone"
+                      className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5"
+                    >
+                      Phone Number Used
+                    </label>
                     <input
-                      ref={authPasswordInputRef}
-                      type={showPassword ? 'text' : 'password'}
-                      id="authPassword"
-                      name="password"
-                      autoComplete="new-password"
-                      required
-                      value={authPassword}
+                      ref={authPhoneInputRef}
+                      type="tel"
+                      id="authPhone"
+                      name="tel"
+                      autoComplete="tel"
+                      value={authPhone}
                       onChange={(e) => {
-                        setAuthPassword(e.target.value);
-                        if (authFieldError?.fieldId === 'authPassword') setAuthFieldError(null);
+                        setAuthPhone(e.target.value);
+                        if (authFieldError?.fieldId === 'authPhone') setAuthFieldError(null);
                       }}
-                      placeholder="Create a password you will use to Sign In"
+                      placeholder="e.g., 076 123 456"
                       className={`w-full px-4 py-3 rounded-2xl border outline-none text-slate-800 font-medium text-sm ${
-                        authFieldError?.fieldId === 'authPassword'
+                        authFieldError?.fieldId === 'authPhone'
                           ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
                           : 'border-slate-200 focus:border-lavender-500 focus:ring-4 focus:ring-lavender-100'
                       }`}
@@ -3489,7 +3775,7 @@ export default function App() {
                         setAuthEmail(e.target.value);
                         if (authFieldError?.fieldId === 'authEmail') setAuthFieldError(null);
                       }}
-                      placeholder="Enter your email or phone number (e.g. 076...)"
+                      placeholder="Enter your email or phone number (e.g. you@gmail.com)"
                       className={`w-full px-4 py-3.5 rounded-2xl border outline-none text-slate-900 font-semibold text-sm ${
                         authFieldError?.fieldId === 'authEmail'
                           ? 'border-rose-500 ring-4 ring-rose-100 bg-rose-50/30'
@@ -3534,7 +3820,7 @@ export default function App() {
                       }`}
                     />
                     <p className="text-[11px] text-slate-500 mt-1.5 font-medium">
-                      🔒 Private Sign-In — enter your registered Email/Phone and the exact password you used to create your account.
+                      🔒 Private Log-In — enter your registered Email/Phone and the exact password you used to sign up.
                     </p>
                   </div>
                 </div>
@@ -3545,8 +3831,8 @@ export default function App() {
                 className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-lavender-500 to-rose-500 hover:from-lavender-700 hover:to-rose-700 text-white font-bold text-base shadow-lg shadow-lavender-200 transition-all active:scale-[0.99] cursor-pointer"
               >
                 {authMode === 'signup'
-                  ? 'Create Account & Start 2-Week Free Access 🌸'
-                  : 'Sign In to My Tracker 🌸'}
+                  ? 'Sign Up & Start 2-Week Free Access 🌸'
+                  : 'Log In to My Tracker 🌸'}
               </button>
             </form>
 
@@ -3584,6 +3870,85 @@ export default function App() {
                     : 'Continue with Google (Instant Sign In)'}
                 </span>
               </button>
+            </div>
+
+            {/* STEP-BY-STEP MOBILE INSTALLATION GUIDE (INSIDE LOGIN & CREATE ACCOUNT SECTIONS) */}
+            <div className="mt-5 pt-4 border-t border-lavender-200">
+              <div className="rounded-2xl bg-gradient-to-br from-lavender-50 via-cream to-rose-50 border border-lavender-200 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-lavender-700 text-white text-[10px] font-extrabold uppercase tracking-wider">
+                      📲 Mobile Installation Guide
+                    </span>
+                    <h2 className="font-display font-extrabold text-xs sm:text-sm text-slate-900 mt-1">
+                      How to Download &amp; Install BloomCampus on Your Phone
+                    </h2>
+                  </div>
+                  <PWAInstallButton />
+                </div>
+
+                {/* Platform Selector Tabs: Android vs iPhone/iPad */}
+                <div className="grid grid-cols-2 gap-1.5 p-1 bg-white rounded-xl border border-lavender-200">
+                  <button
+                    type="button"
+                    onClick={() => setMobileGuideTab('android')}
+                    className={`py-1.5 px-2.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                      mobileGuideTab === 'android'
+                        ? 'bg-lavender-700 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    🤖 Android (Chrome)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMobileGuideTab('ios')}
+                    className={`py-1.5 px-2.5 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                      mobileGuideTab === 'ios'
+                        ? 'bg-lavender-700 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    🍎 iPhone / iPad (Safari)
+                  </button>
+                </div>
+
+                {mobileGuideTab === 'android' ? (
+                  <ol className="space-y-1.5 text-left text-[11px] text-slate-700 font-medium list-decimal list-inside bg-white/90 rounded-xl p-3 border border-lavender-100">
+                    <li>
+                      Open this link in <strong>Google Chrome</strong> on your Android phone.
+                    </li>
+                    <li>
+                      Tap the <strong>Install App</strong> button above, or tap the{' '}
+                      <strong>⋮ Three-Dot Menu</strong> in the top-right corner of Chrome.
+                    </li>
+                    <li>
+                      Tap <strong>&ldquo;Install app&rdquo;</strong> or{' '}
+                      <strong>&ldquo;Add to Home screen&rdquo;</strong>, then confirm{' '}
+                      <strong>Install</strong> to launch BloomCampus from your home screen like a native app!
+                    </li>
+                  </ol>
+                ) : (
+                  <ol className="space-y-1.5 text-left text-[11px] text-slate-700 font-medium list-decimal list-inside bg-white/90 rounded-xl p-3 border border-lavender-100">
+                    <li>
+                      Open this link in <strong>Safari</strong> on your iPhone or iPad.
+                    </li>
+                    <li>
+                      Tap the <strong>Share icon</strong> (square with an upward arrow{' '}
+                      <strong>⬆️</strong>) at the bottom of Safari.
+                    </li>
+                    <li>
+                      Scroll down and tap <strong>&ldquo;Add to Home Screen&rdquo;</strong>, then tap{' '}
+                      <strong>Add</strong> in the top-right corner to install BloomCampus on your phone!
+                    </li>
+                  </ol>
+                )}
+
+                <div className="text-[10px] font-bold text-sage-800 flex items-center justify-between gap-2 pt-0.5">
+                  <span>☁️ Real-Time Firestore Sync Across Phone &amp; Laptop</span>
+                  <span>🔔 Mobile Push Alerts Ready</span>
+                </div>
+              </div>
             </div>
 
             {/* Creator Branding Footer on Auth Screen */}
@@ -4273,6 +4638,18 @@ export default function App() {
                   Hi, {userData.name}
                   {userData.age ? ` (${userData.age})` : ''}!
                 </span>
+                <span
+                  className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border whitespace-nowrap ${
+                    resolveUserRole(userData.email, adminConfig, userData.role) === 'admin'
+                      ? 'bg-plum-900 text-gold-500 border-gold-500/60'
+                      : 'bg-lavender-100 text-lavender-900 border-lavender-300'
+                  }`}
+                  title="Role-Based Access Permission"
+                >
+                  {resolveUserRole(userData.email, adminConfig, userData.role) === 'admin'
+                    ? '🛡️ Admin'
+                    : '🌸 Client'}
+                </span>
                 <div className="inline-flex items-center gap-1">
                   <button
                     type="button"
@@ -4314,9 +4691,19 @@ export default function App() {
             </div>
           </div>
 
-          {/* Zone 2: Clean Compact Quick Actions (Admin, Light/Dark, and Profile & Sync are strictly inside Menu) */}
+          {/* Zone 2: Clean Compact Quick Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <PWAInstallButton />
+
+            <button
+              type="button"
+              onClick={() => setShowPushNotificationsModal(true)}
+              className="px-2.5 sm:px-3 py-2 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-900 text-xs font-extrabold flex items-center gap-1 border border-lavender-300 transition-all whitespace-nowrap shrink-0 cursor-pointer"
+              title="Configure Mobile Push Notifications & Reminders"
+            >
+              <span>🔔</span>
+              <span className="hidden md:inline">Push Alerts</span>
+            </button>
 
             <button
               type="button"
@@ -4372,6 +4759,74 @@ export default function App() {
 
       {/* MAIN CONTENT */}
       <main className="max-w-6xl mx-auto w-full px-4 py-6 space-y-6 flex-1">
+        {/* AUTOMATED WELCOME & THANK-YOU MESSAGE BANNER (FIRST-TIME ACCOUNT CREATION) */}
+        {userData.welcomeMessagePendingModal && (
+          <div className="rounded-3xl bg-gradient-to-r from-plum-900 via-lavender-800 to-rose-800 text-white p-5 sm:p-6 shadow-xl border-2 border-gold-500 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1.5">
+              <div className="inline-flex items-center gap-2 px-3 py-0.5 rounded-full bg-gold-500 text-plum-900 text-[10px] font-extrabold uppercase tracking-wider">
+                🌸 Automated Welcome &amp; Thank-You Message
+              </div>
+              <h3 className="font-display font-extrabold text-lg sm:text-xl text-white">
+                Welcome to BloomCampus, {userData.name}! Thank You for Creating Your Account!
+              </h3>
+              <p className="text-xs sm:text-sm text-lavender-100 leading-relaxed">
+                We are thrilled to welcome you to the BloomCampus &amp; Sidratu Beauty Therapy Skin Care community. Your <strong>14-Day Free Access Pass</strong> is active, and your appointments, cycle logs, mood tracking, and skincare timeline are synced in real time via Firestore.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowPushNotificationsModal(true)}
+                className="px-3.5 py-2.5 rounded-xl bg-gold-500 hover:bg-amber-400 text-plum-900 font-extrabold text-xs shadow-sm cursor-pointer"
+              >
+                🔔 Enable Mobile Push Alerts
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  updateUserData((prev) => ({
+                    ...prev,
+                    welcomeMessagePendingModal: false,
+                  }))
+                }
+                className="px-3.5 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 text-white font-extrabold text-xs cursor-pointer"
+              >
+                🌸 Thank You!
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* AUTOMATED PAYMENT APPRECIATION BANNER (THANKING USERS FOR SUPPORTING THE APP & HELPING IT GROW) */}
+        {userData.paymentAppreciationPending && (
+          <div className="rounded-3xl bg-gradient-to-r from-rose-800 via-plum-900 to-amber-800 text-white p-5 sm:p-6 shadow-xl border-2 border-gold-500 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1.5">
+              <div className="inline-flex items-center gap-2 px-3 py-0.5 rounded-full bg-gold-500 text-plum-900 text-[10px] font-extrabold uppercase tracking-wider">
+                💖 Automated Supporter Appreciation Message
+              </div>
+              <h3 className="font-display font-extrabold text-lg sm:text-xl text-white">
+                Thank You So Much for Supporting BloomCampus, {userData.name}!
+              </h3>
+              <p className="text-xs sm:text-sm text-amber-100 leading-relaxed">
+                We deeply appreciate your payment of{' '}
+                <strong>{userData.lastPaymentAppreciationAmount || 'Le 30'}</strong>. Thank you for supporting the app and helping BloomCampus &amp; Sidratu Beauty Therapy Skin Care grow one step further for every student and client!
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                updateUserData((prev) => ({
+                  ...prev,
+                  paymentAppreciationPending: false,
+                }))
+              }
+              className="px-4 py-2.5 rounded-xl bg-gold-500 hover:bg-amber-400 text-plum-900 font-extrabold text-xs shrink-0 shadow-sm cursor-pointer"
+            >
+              💖 You&apos;re Welcome!
+            </button>
+          </div>
+        )}
+
         {/* IN-APP WELCOME-BACK BANNER WHEN OWNER APPROVES PAYMENT */}
         {userData.approvalWelcomePending && (
           <div className="rounded-3xl bg-gradient-to-r from-sage-800 via-emerald-700 to-plum-900 text-white p-5 sm:p-6 shadow-xl border-2 border-gold-500 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -6845,45 +7300,24 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Campus Myth vs. Fact */}
-                  <div className="rounded-2xl bg-lavender-50/70 border border-lavender-200 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-lg">💡</span>
-                        <span className="font-display font-extrabold text-sm text-slate-900">
-                          Campus Myth vs. Fact ({currentMythIndex + 1}/{CAMPUS_MYTHS.length})
-                        </span>
-                      </div>
-                      <div className="text-xs font-bold text-rose-700">
-                        {CAMPUS_MYTHS[currentMythIndex].myth}
-                      </div>
-                      <div className="text-xs text-slate-700 leading-relaxed">
-                        {CAMPUS_MYTHS[currentMythIndex].fact}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setCurrentMythIndex(
-                            (prev) => (prev - 1 + CAMPUS_MYTHS.length) % CAMPUS_MYTHS.length
-                          )
-                        }
-                        className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold text-xs cursor-pointer"
-                      >
-                        ⬅️ Prev
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setCurrentMythIndex((prev) => (prev + 1) % CAMPUS_MYTHS.length)
-                        }
-                        className="px-4 py-2 rounded-xl bg-lavender-600 hover:bg-lavender-800 text-white font-bold text-xs cursor-pointer"
-                      >
-                        Next Tip ➡️
-                      </button>
-                    </div>
-                  </div>
+                  {/* Interactive Campus Myth Buster Quiz Component */}
+                  <MythBusterQuizSection
+                    userData={userData}
+                    onUpdateUser={updateUserData}
+                    onOpenBadgesModal={() => setShowBadgesModal(true)}
+                    showToast={showToast}
+                  />
+                </div>
+              )}
+
+              {!showSmartPhaseGuide && (
+                <div className="mt-5 pt-5 border-t border-sage-100">
+                  <MythBusterQuizSection
+                    userData={userData}
+                    onUpdateUser={updateUserData}
+                    onOpenBadgesModal={() => setShowBadgesModal(true)}
+                    showToast={showToast}
+                  />
                 </div>
               )}
             </section>
@@ -8317,6 +8751,256 @@ export default function App() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MOBILE PUSH NOTIFICATIONS & REMINDERS MODAL */}
+      {showPushNotificationsModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border-2 border-lavender-300 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <span className="text-[11px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-lavender-700 text-white">
+                  🔔 Mobile Push Notifications Center
+                </span>
+                <h3 className="font-display font-extrabold text-lg sm:text-xl text-slate-900 mt-1">
+                  Phone Reminders &amp; Real-Time Updates
+                </h3>
+                <p className="text-xs text-slate-600">
+                  Receive timely cycle alerts, Sidratu appointment reminders, and wellness updates directly on your phone.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPushNotificationsModal(false)}
+                className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Browser / Phone Permission Status Card */}
+            <div className="rounded-2xl bg-cream border border-lavender-200 p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-extrabold text-slate-900">
+                  Mobile Device Push Status
+                </span>
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold ${
+                    typeof window !== 'undefined' &&
+                    'Notification' in window &&
+                    Notification.permission === 'granted' &&
+                    userData.pushNotificationsEnabled !== false
+                      ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
+                      : 'bg-amber-100 text-amber-900 border border-amber-300'
+                  }`}
+                >
+                  {typeof window !== 'undefined' && 'Notification' in window
+                    ? Notification.permission === 'granted' &&
+                      userData.pushNotificationsEnabled !== false
+                      ? '✅ Active on This Device'
+                      : Notification.permission === 'denied'
+                      ? '⚠️ Blocked in Browser Settings'
+                      : '🔔 Tap Below to Enable'
+                    : '📱 In-App Alerts Active'}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    let perm: NotificationPermission = 'default';
+                    if (typeof window !== 'undefined' && 'Notification' in window) {
+                      try {
+                        perm = await Notification.requestPermission();
+                      } catch {
+                        perm = Notification.permission;
+                      }
+                    }
+                    const nextEnabled = userData.pushNotificationsEnabled === false ? true : true;
+                    updateUserData((prev) => ({
+                      ...prev,
+                      pushNotificationsEnabled: nextEnabled,
+                      cycleRemindersEnabled: true,
+                      phaseShiftNotificationsEnabled: true,
+                      appointmentRemindersEnabled: true,
+                      dailyCheckinRemindersEnabled: true,
+                      lastPushNotificationSentAt: new Date().toISOString(),
+                    }));
+                    if (perm === 'granted') {
+                      triggerBrowserNotification(
+                        '🔔 BloomCampus Mobile Push Enabled!',
+                        `Hi ${userData.name}, you will now receive timely cycle, mood, and Sidratu appointment reminders directly on your phone!`,
+                        'bloomcampus-push-enabled'
+                      );
+                      showToast('✅ Mobile Push Notifications enabled & synced to Firestore!', 'success');
+                    } else {
+                      showToast(
+                        '🔔 Push reminders enabled in your profile! Allow browser notifications in phone settings for lock-screen popups.',
+                        'info'
+                      );
+                    }
+                  }}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-lavender-700 hover:bg-lavender-800 text-white font-extrabold text-xs shadow-sm transition-all cursor-pointer"
+                >
+                  🔔 Enable All Mobile Push Notifications
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nowIso = new Date().toISOString();
+                    updateUserData((prev) => ({
+                      ...prev,
+                      lastPushNotificationSentAt: nowIso,
+                    }));
+                    const sent = triggerBrowserNotification(
+                      `📲 BloomCampus Reminder for ${userData.name}`,
+                      `Cycle Day ${todayMetrics.cycleDay} (${stageInfo.shortName}): Remember to log your mood, hydrate (8 glasses), and check your Sidratu skincare routine!`,
+                      'bloomcampus-test-push'
+                    );
+                    if (sent) {
+                      showToast('📲 Sent live Push Notification to your phone/browser!', 'success');
+                    } else {
+                      showToast(
+                        `📲 Push Reminder Preview: Cycle Day ${todayMetrics.cycleDay} (${stageInfo.shortName}) — Hydrate & log today's mood!`,
+                        'info'
+                      );
+                    }
+                  }}
+                  className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs shadow-sm transition-all cursor-pointer"
+                >
+                  📲 Send Test Push Alert Now
+                </button>
+              </div>
+            </div>
+
+            {/* Individual Push Notification Categories */}
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
+                <div>
+                  <div className="font-bold text-xs text-slate-900">
+                    🎒 2-Day Period &amp; Campus Bag Reminders
+                  </div>
+                  <div className="text-[11px] text-slate-600">
+                    Alerts you 2 days before your predicted period ({todayMetrics.nextPeriodDateStr ? formatHumanDate(todayMetrics.nextPeriodDateStr) : 'auto-calculated'}).
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleToggleCycleReminders}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold text-xs cursor-pointer ${
+                    userData.cycleRemindersEnabled
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {userData.cycleRemindersEnabled ? 'ON' : 'OFF'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
+                <div>
+                  <div className="font-bold text-xs text-slate-900">
+                    🔄 Cycle Phase Shift Nutrition &amp; Skincare Alerts
+                  </div>
+                  <div className="text-[11px] text-slate-600">
+                    Notifies your phone whenever you transition into a new cycle stage.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleTogglePhaseShiftNotifications}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold text-xs cursor-pointer ${
+                    userData.phaseShiftNotificationsEnabled !== false
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {userData.phaseShiftNotificationsEnabled !== false ? 'ON' : 'OFF'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
+                <div>
+                  <div className="font-bold text-xs text-slate-900">
+                    📅 Sidratu Clinic Appointment Reminders
+                  </div>
+                  <div className="text-[11px] text-slate-600">
+                    Instant mobile confirmation &amp; reminders for 101 Jomo Kenyatta Rd bookings ({(userData.appointments || []).length} synced).
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextVal = userData.appointmentRemindersEnabled === false;
+                    updateUserData((prev) => ({
+                      ...prev,
+                      appointmentRemindersEnabled: nextVal,
+                    }));
+                    showToast(
+                      nextVal
+                        ? '📅 Sidratu Appointment Push Reminders ON!'
+                        : '🔕 Sidratu Appointment Push Reminders turned off.',
+                      'info'
+                    );
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold text-xs cursor-pointer ${
+                    userData.appointmentRemindersEnabled !== false
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {userData.appointmentRemindersEnabled !== false ? 'ON' : 'OFF'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
+                <div>
+                  <div className="font-bold text-xs text-slate-900">
+                    💧 Daily Mood &amp; Hydration Check-In Reminders
+                  </div>
+                  <div className="text-[11px] text-slate-600">
+                    Gentle daily phone check-ins for mood, symptoms, and water intake.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextVal = userData.dailyCheckinRemindersEnabled === false;
+                    updateUserData((prev) => ({
+                      ...prev,
+                      dailyCheckinRemindersEnabled: nextVal,
+                    }));
+                    showToast(
+                      nextVal
+                        ? '💧 Daily Mood & Hydration Push Reminders ON!'
+                        : '🔕 Daily Check-In Push Reminders turned off.',
+                      'info'
+                    );
+                  }}
+                  className={`px-3 py-1.5 rounded-xl font-extrabold text-xs cursor-pointer ${
+                    userData.dailyCheckinRemindersEnabled !== false
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {userData.dailyCheckinRemindersEnabled !== false ? 'ON' : 'OFF'}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowPushNotificationsModal(false)}
+                className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

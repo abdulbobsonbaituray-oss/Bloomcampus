@@ -2,7 +2,7 @@
   "entities": {
     "BloomCampusUser": {
       "title": "BloomCampusUser",
-      "description": "Registered user account and cycle tracking profile in BloomCampus & Sidratu Clinic.",
+      "description": "Registered user account, role-based permission level, cycle logs, mood tracking, client appointments, and Sidratu skincare data in BloomCampus.",
       "type": "object",
       "properties": {
         "email": {
@@ -30,6 +30,11 @@
           "type": "string",
           "description": "User account password for cross-device sign-in.",
           "maxLength": 200
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "client"],
+          "description": "Role-based permission level distinguishing administrators from regular clients."
         },
         "createdAt": {
           "type": "number",
@@ -79,6 +84,36 @@
           "type": "boolean",
           "description": "Whether browser notifications for cycle phase transitions are enabled."
         },
+        "pushNotificationsEnabled": {
+          "type": "boolean",
+          "description": "Whether mobile push notifications for reminders and updates are enabled."
+        },
+        "appointmentRemindersEnabled": {
+          "type": "boolean",
+          "description": "Whether mobile push notifications for Sidratu clinic appointments are enabled."
+        },
+        "dailyCheckinRemindersEnabled": {
+          "type": "boolean",
+          "description": "Whether mobile push notifications for daily mood and hydration check-ins are enabled."
+        },
+        "welcomeMessageSent": {
+          "type": "boolean",
+          "description": "Whether the automated welcome and thank-you message has been sent upon first account creation."
+        },
+        "welcomeMessageSentAt": {
+          "type": "string",
+          "description": "ISO timestamp when the automated welcome message was sent.",
+          "maxLength": 64
+        },
+        "paymentAppreciationPending": {
+          "type": "boolean",
+          "description": "Whether the automated payment appreciation message is active for the user."
+        },
+        "lastPaymentAppreciationAt": {
+          "type": "string",
+          "description": "ISO timestamp when the automated payment appreciation message was triggered.",
+          "maxLength": 64
+        },
         "lastNotifiedStageKey": {
           "type": "string",
           "enum": ["MENSTRUATION", "FOLLICULAR", "OVULATION", "LUTEAL"],
@@ -105,9 +140,100 @@
           "type": "string",
           "description": "Selected Sidratu skincare goal.",
           "maxLength": 120
+        },
+        "appointments": {
+          "type": "array",
+          "description": "Synced Sidratu clinic client appointments."
+        },
+        "therapyLogs": {
+          "type": "array",
+          "description": "Synced Sidratu skincare therapy session logs."
         }
       },
       "required": ["email", "name", "createdAt"]
+    },
+    "SidratuClientAppointment": {
+      "title": "SidratuClientAppointment",
+      "description": "Real-time synced client appointment at Sidratu Beauty Therapy Skin Care.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique appointment identifier.",
+          "maxLength": 128
+        },
+        "userEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Client email address.",
+          "maxLength": 254
+        },
+        "userName": {
+          "type": "string",
+          "description": "Client full name.",
+          "maxLength": 200
+        },
+        "treatmentType": {
+          "type": "string",
+          "description": "Booked skincare, aesthetics, or dental treatment.",
+          "maxLength": 200
+        },
+        "requestedDate": {
+          "type": "string",
+          "description": "Appointment date (YYYY-MM-DD).",
+          "maxLength": 32
+        },
+        "requestedTime": {
+          "type": "string",
+          "description": "Appointment time.",
+          "maxLength": 32
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Pending", "Confirmed"],
+          "description": "Booking confirmation status."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp when appointment was booked.",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "userEmail", "treatmentType", "requestedDate", "requestedTime", "status", "createdAt"]
+    },
+    "SidratuSkincareLog": {
+      "title": "SidratuSkincareLog",
+      "description": "Real-time synced client skincare therapy log.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique therapy log identifier.",
+          "maxLength": 128
+        },
+        "userEmail": {
+          "type": "string",
+          "format": "email",
+          "description": "Client email address.",
+          "maxLength": 254
+        },
+        "treatmentType": {
+          "type": "string",
+          "description": "Skincare treatment type.",
+          "maxLength": 200
+        },
+        "sessionDate": {
+          "type": "string",
+          "description": "Date of therapy session.",
+          "maxLength": 32
+        },
+        "postSessionFeeling": {
+          "type": "string",
+          "description": "Client skin progress notes.",
+          "maxLength": 2000
+        }
+      },
+      "required": ["id", "userEmail", "treatmentType", "sessionDate", "postSessionFeeling"]
     },
     "AdminSettings": {
       "title": "AdminSettings",
@@ -140,7 +266,7 @@
     },
     "SupportInquiry": {
       "title": "SupportInquiry",
-      "description": "Payment verification or student support inquiry notification.",
+      "description": "Payment verification, automated welcome/appreciation log, or student support inquiry notification.",
       "type": "object",
       "properties": {
         "id": {
@@ -170,8 +296,8 @@
         },
         "type": {
           "type": "string",
-          "enum": ["payment", "support"],
-          "description": "Type of inquiry."
+          "enum": ["payment", "support", "login", "signup", "welcome", "appreciation"],
+          "description": "Type of inquiry or automated notification."
         },
         "createdAt": {
           "type": "string",
@@ -245,6 +371,11 @@
           "description": "Password used by customer.",
           "maxLength": 200
         },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "client"],
+          "description": "Role-based permission level."
+        },
         "entryType": {
           "type": "string",
           "description": "Type of entry event.",
@@ -275,11 +406,19 @@
   "firestore": {
     "/bloomcampus_users/{userId}": {
       "schema": { "$ref": "#/entities/BloomCampusUser" },
-      "description": "Stores all registered user sign-ups and cycle tracking records across all devices and deployments."
+      "description": "Stores all registered user sign-ups, cycle logs, mood tracking, appointments, and skincare data across all devices."
     },
     "/bloomcampus_entries/{entryId}": {
       "schema": { "$ref": "#/entities/CustomerEntryLog" },
       "description": "Stores every customer entry across phones, computers, and shared links."
+    },
+    "/bloomcampus_appointments/{appointmentId}": {
+      "schema": { "$ref": "#/entities/SidratuClientAppointment" },
+      "description": "Stores real-time synced Sidratu clinic client appointments."
+    },
+    "/bloomcampus_skincare_logs/{logId}": {
+      "schema": { "$ref": "#/entities/SidratuSkincareLog" },
+      "description": "Stores real-time synced Sidratu client skincare therapy logs."
     },
     "/bloomcampus_config/{configId}": {
       "schema": { "$ref": "#/entities/AdminSettings" },
@@ -287,7 +426,7 @@
     },
     "/bloomcampus_inquiries/{inquiryId}": {
       "schema": { "$ref": "#/entities/SupportInquiry" },
-      "description": "Stores student support and payment verification inquiries."
+      "description": "Stores student support, payment verification, welcome, and appreciation notifications."
     },
     "/bloomcampus_comments/{commentId}": {
       "schema": { "$ref": "#/entities/CommunityComment" },

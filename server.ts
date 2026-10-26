@@ -145,6 +145,8 @@ function assignServerCustomerNumbers(
 
 function computeServerUserFingerprint(u: Record<string, unknown>): string {
   const periods = Array.isArray(u.periods) ? u.periods : [];
+  const appointments = Array.isArray(u.appointments) ? u.appointments : [];
+  const therapyLogs = Array.isArray(u.therapyLogs) ? u.therapyLogs : [];
   const dailyLogs = u.dailyLogs && typeof u.dailyLogs === 'object' ? Object.keys(u.dailyLogs) : [];
   return JSON.stringify({
     email: u.email,
@@ -152,13 +154,21 @@ function computeServerUserFingerprint(u: Record<string, unknown>): string {
     age: u.age || '',
     phone: u.phone || '',
     password: u.password || '',
+    role: u.role || 'client',
     customerNumber: u.customerNumber || 0,
     firstEntryAt: u.firstEntryAt || u.createdAt || 0,
     subscriptionStatus: u.subscriptionStatus || 'active',
     subscriptionUntil: u.subscriptionUntil || 0,
     periodsLen: periods.length,
     lastPeriod: periods.length > 0 ? periods[periods.length - 1] : null,
+    appointmentsLen: appointments.length,
+    lastAppointment: appointments.length > 0 ? appointments[0] : null,
+    therapyLogsLen: therapyLogs.length,
+    lastTherapyLog: therapyLogs.length > 0 ? therapyLogs[0] : null,
+    skincareGoal: u.skincareGoal || '',
     dailyLogsLen: dailyLogs.length,
+    welcomeMessageSent: Boolean(u.welcomeMessageSent),
+    paymentAppreciationPending: Boolean(u.paymentAppreciationPending),
   });
 }
 
@@ -215,10 +225,26 @@ async function pushUsersToCloudFirestore(users: Record<string, Record<string, un
   }
 }
 
-async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<string, unknown>>> {
-  if (!firestoreDb || serverFirestoreQuotaExhausted) return cachedCloudUsers;
+async function pullUsersFromCloudFirestore(
+  deletedEmails: Record<string, number> = {}
+): Promise<Record<string, Record<string, unknown>>> {
+  if (!firestoreDb || serverFirestoreQuotaExhausted) {
+    const filteredCached: Record<string, Record<string, unknown>> = {};
+    for (const [k, v] of Object.entries(cachedCloudUsers)) {
+      if (!deletedEmails[k.toLowerCase().trim()]) {
+        filteredCached[k] = v;
+      }
+    }
+    return filteredCached;
+  }
   if (Date.now() - lastCloudPullAt < 2_000 && Object.keys(cachedCloudUsers).length > 0) {
-    return cachedCloudUsers;
+    const filteredCached: Record<string, Record<string, unknown>> = {};
+    for (const [k, v] of Object.entries(cachedCloudUsers)) {
+      if (!deletedEmails[k.toLowerCase().trim()]) {
+        filteredCached[k] = v;
+      }
+    }
+    return filteredCached;
   }
   const out: Record<string, Record<string, unknown>> = {};
   try {
@@ -229,6 +255,7 @@ async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<stri
       const data = d.data() as Record<string, unknown>;
       if (data && typeof data.email === 'string') {
         const emailClean = data.email.trim().toLowerCase();
+        if (deletedEmails[emailClean]) return;
         out[emailClean] = sanitizeUserRecord(data, emailClean);
       }
     });
@@ -246,6 +273,7 @@ async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<stri
       const entry = d.data() as Record<string, unknown>;
       if (entry && typeof entry.email === 'string') {
         const emailClean = entry.email.trim().toLowerCase();
+        if (deletedEmails[emailClean]) return;
         const existing = out[emailClean];
         const firstTs = Number(entry.firstEntryAt || entry.timestamp || Date.now());
         const entryIso = String(
@@ -320,9 +348,7 @@ async function pullUsersFromCloudFirestore(): Promise<Record<string, Record<stri
     }
   }
   lastCloudPullAt = Date.now();
-  if (Object.keys(out).length > 0) {
-    cachedCloudUsers = out;
-  }
+  cachedCloudUsers = out;
   return assignServerCustomerNumbers(out);
 }
 
@@ -377,6 +403,7 @@ const TMP_STORE_PATH = path.join(TMP_DATA_DIR, 'bloomcampus_store.json');
 
 interface PersistentStore {
   users: Record<string, Record<string, unknown>>;
+  deletedEmails: Record<string, number>;
   communityComments: CommunityComment[];
   adminConfig: {
     ownerEmail: string;
@@ -399,7 +426,7 @@ interface PersistentStore {
     deviceInfo?: string;
     subject: string;
     message: string;
-    type: 'payment' | 'support' | 'login' | 'signup';
+    type: 'payment' | 'support' | 'login' | 'signup' | 'welcome' | 'appreciation';
     createdAt: string;
   }>;
 }
@@ -445,7 +472,8 @@ function getSafeTimestamp(obj: Record<string, unknown>): number {
 
 function mergeUserRecords(
   existingUsers: Record<string, Record<string, unknown>>,
-  incomingUsers: Record<string, unknown>
+  incomingUsers: Record<string, unknown>,
+  deletedEmails: Record<string, number> = {}
 ): Record<string, Record<string, unknown>> {
   const merged: Record<string, Record<string, unknown>> = {};
   Object.entries(existingUsers || {}).forEach(([k, v]) => {
@@ -453,7 +481,7 @@ function mergeUserRecords(
     const emailKey = String((v as Record<string, unknown>).email || k)
       .toLowerCase()
       .trim();
-    if (emailKey) {
+    if (emailKey && !deletedEmails[emailKey]) {
       merged[emailKey] = sanitizeUserRecord(v as Record<string, unknown>, emailKey);
     }
   });
@@ -464,7 +492,7 @@ function mergeUserRecords(
     const emailKey = String(incomingObj.email || rawKey)
       .toLowerCase()
       .trim();
-    if (!emailKey) return;
+    if (!emailKey || deletedEmails[emailKey]) return;
     const currentObj = merged[emailKey];
     if (!currentObj) {
       merged[emailKey] = sanitizeUserRecord(incomingObj, emailKey);
@@ -509,6 +537,36 @@ function mergeUserRecords(
         : '') ||
       String(incomingObj.name || currentObj.name || emailKey.split('@')[0] || 'Student').trim();
 
+    const currAppts = Array.isArray(currentObj.appointments) ? currentObj.appointments : [];
+    const incAppts = Array.isArray(incomingObj.appointments) ? incomingObj.appointments : [];
+    const apptMap = new Map<string, unknown>();
+    [...currAppts, ...incAppts].forEach((a: unknown) => {
+      if (a && typeof a === 'object' && typeof (a as { id?: string }).id === 'string') {
+        apptMap.set((a as { id: string }).id, a);
+      }
+    });
+    const mergedAppts =
+      apptMap.size > 0
+        ? Array.from(apptMap.values())
+        : incUpdated >= currUpdated
+        ? incAppts
+        : currAppts;
+
+    const currTherapy = Array.isArray(currentObj.therapyLogs) ? currentObj.therapyLogs : [];
+    const incTherapy = Array.isArray(incomingObj.therapyLogs) ? incomingObj.therapyLogs : [];
+    const therapyMap = new Map<string, unknown>();
+    [...currTherapy, ...incTherapy].forEach((t: unknown) => {
+      if (t && typeof t === 'object' && typeof (t as { id?: string }).id === 'string') {
+        therapyMap.set((t as { id: string }).id, t);
+      }
+    });
+    const mergedTherapy =
+      therapyMap.size > 0
+        ? Array.from(therapyMap.values())
+        : incUpdated >= currUpdated
+        ? incTherapy
+        : currTherapy;
+
     merged[emailKey] = sanitizeUserRecord(
       {
         ...base,
@@ -516,6 +574,15 @@ function mergeUserRecords(
         age: bestAge,
         phone: bestPhone,
         password: bestPassword,
+        role:
+          currentObj.role === 'admin' || incomingObj.role === 'admin' || emailKey === 'abdulbobsonbaituray@gmail.com'
+            ? 'admin'
+            : 'client',
+        appointments: mergedAppts,
+        therapyLogs: mergedTherapy,
+        skincareGoal:
+          String((incUpdated >= currUpdated ? incomingObj.skincareGoal : currentObj.skincareGoal) || currentObj.skincareGoal || incomingObj.skincareGoal || '').trim() || undefined,
+        welcomeMessageSent: Boolean(currentObj.welcomeMessageSent || incomingObj.welcomeMessageSent),
         firstEntryAt: earliestFirst,
         createdAt: earliestFirst,
         signInCount: Math.max(
@@ -531,6 +598,7 @@ function mergeUserRecords(
 
 function loadPersistentStore(): PersistentStore {
   let mergedUsers: Record<string, Record<string, unknown>> = {};
+  let deletedEmails: Record<string, number> = {};
   let comments: CommunityComment[] = [...DEFAULT_COMMENTS];
   let adminCfg = { ...DEFAULT_ADMIN_CFG };
   let inquiries: PersistentStore['supportInquiries'] = [];
@@ -540,8 +608,11 @@ function loadPersistentStore(): PersistentStore {
       if (fs.existsSync(candidatePath)) {
         const raw = fs.readFileSync(candidatePath, 'utf-8');
         const parsed = JSON.parse(raw);
+        if (parsed.deletedEmails && typeof parsed.deletedEmails === 'object') {
+          deletedEmails = { ...deletedEmails, ...parsed.deletedEmails };
+        }
         if (parsed.users && typeof parsed.users === 'object') {
-          mergedUsers = mergeUserRecords(mergedUsers, parsed.users);
+          mergedUsers = mergeUserRecords(mergedUsers, parsed.users, deletedEmails);
         }
         if (Array.isArray(parsed.communityComments) && parsed.communityComments.length > 0) {
           comments = parsed.communityComments;
@@ -566,6 +637,7 @@ function loadPersistentStore(): PersistentStore {
 
   return {
     users: mergedUsers,
+    deletedEmails,
     communityComments: comments,
     adminConfig: adminCfg,
     supportInquiries: inquiries,
@@ -594,9 +666,13 @@ const persistentStore = loadPersistentStore();
 (async () => {
   try {
     await pushUsersToCloudFirestore(persistentStore.users);
-    const cloudUsers = await pullUsersFromCloudFirestore();
+    const cloudUsers = await pullUsersFromCloudFirestore(persistentStore.deletedEmails);
     if (Object.keys(cloudUsers).length > 0) {
-      persistentStore.users = mergeUserRecords(persistentStore.users, cloudUsers);
+      persistentStore.users = mergeUserRecords(
+        persistentStore.users,
+        cloudUsers,
+        persistentStore.deletedEmails
+      );
       savePersistentStore(persistentStore);
     }
   } catch {
@@ -613,9 +689,13 @@ async function startServer() {
 
   // Persistent User Memory Sync Endpoints
   app.get('/api/users/sync', async (req, res) => {
-    const cloudUsers = await pullUsersFromCloudFirestore();
+    const cloudUsers = await pullUsersFromCloudFirestore(persistentStore.deletedEmails);
     if (Object.keys(cloudUsers).length > 0) {
-      persistentStore.users = mergeUserRecords(persistentStore.users, cloudUsers);
+      persistentStore.users = mergeUserRecords(
+        persistentStore.users,
+        cloudUsers,
+        persistentStore.deletedEmails
+      );
       savePersistentStore(persistentStore);
     }
     const email = typeof req.query.email === 'string' ? req.query.email.toLowerCase().trim() : '';
@@ -623,6 +703,7 @@ async function startServer() {
       res.json({
         user: persistentStore.users[email] || null,
         users: persistentStore.users,
+        deletedEmails: persistentStore.deletedEmails,
         totalUsers: Object.keys(persistentStore.users).length,
         adminConfig: persistentStore.adminConfig,
         supportInquiries: persistentStore.supportInquiries,
@@ -631,6 +712,7 @@ async function startServer() {
     }
     res.json({
       users: persistentStore.users,
+      deletedEmails: persistentStore.deletedEmails,
       totalUsers: Object.keys(persistentStore.users).length,
       adminConfig: persistentStore.adminConfig,
       supportInquiries: persistentStore.supportInquiries,
@@ -639,25 +721,41 @@ async function startServer() {
 
   app.post('/api/users/sync', async (req, res) => {
     const { email, userData, allUsers, adminConfig, forceOverwriteUser } = req.body || {};
-    const cloudUsers = await pullUsersFromCloudFirestore();
+    if (email && typeof email === 'string' && forceOverwriteUser) {
+      const cleanForceEmail = email.toLowerCase().trim();
+      delete persistentStore.deletedEmails[cleanForceEmail];
+    }
+    const cloudUsers = await pullUsersFromCloudFirestore(persistentStore.deletedEmails);
     if (Object.keys(cloudUsers).length > 0) {
-      persistentStore.users = mergeUserRecords(persistentStore.users, cloudUsers);
+      persistentStore.users = mergeUserRecords(
+        persistentStore.users,
+        cloudUsers,
+        persistentStore.deletedEmails
+      );
     }
     if (allUsers && typeof allUsers === 'object') {
-      persistentStore.users = mergeUserRecords(persistentStore.users, allUsers);
+      persistentStore.users = mergeUserRecords(
+        persistentStore.users,
+        allUsers,
+        persistentStore.deletedEmails
+      );
     }
     if (email && typeof email === 'string' && userData && typeof userData === 'object') {
       const cleanEmail = email.toLowerCase().trim();
       const userObj = userData as Record<string, unknown>;
       if (forceOverwriteUser) {
+        delete persistentStore.deletedEmails[cleanEmail];
         persistentStore.users[cleanEmail] = sanitizeUserRecord(
           { ...userObj, email: cleanEmail },
           cleanEmail
         );
-      } else {
-        persistentStore.users = mergeUserRecords(persistentStore.users, {
-          [cleanEmail]: { ...userObj, email: cleanEmail },
-        });
+        persistentStore.users = assignServerCustomerNumbers(persistentStore.users);
+      } else if (!persistentStore.deletedEmails[cleanEmail]) {
+        persistentStore.users = mergeUserRecords(
+          persistentStore.users,
+          { [cleanEmail]: { ...userObj, email: cleanEmail } },
+          persistentStore.deletedEmails
+        );
       }
     }
     if (adminConfig && typeof adminConfig === 'object') {
@@ -674,6 +772,7 @@ async function startServer() {
       ok: true,
       savedAt: new Date().toISOString(),
       users: persistentStore.users,
+      deletedEmails: persistentStore.deletedEmails,
       totalUsers: Object.keys(persistentStore.users).length,
       adminConfig: persistentStore.adminConfig,
       supportInquiries: persistentStore.supportInquiries,
@@ -681,26 +780,50 @@ async function startServer() {
   });
 
   app.post('/api/users/delete', async (req, res) => {
-    const { email } = req.body || {};
-    const cleanEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
-    if (!cleanEmail) {
-      res.status(400).json({ error: 'Email is required.' });
-      return;
+    const { email, emails } = req.body || {};
+    const targetList: string[] = [];
+    if (typeof email === 'string' && email.trim()) {
+      targetList.push(email.toLowerCase().trim());
     }
-    delete persistentStore.users[cleanEmail];
-    savePersistentStore(persistentStore);
-    if (firestoreDb && !serverFirestoreQuotaExhausted) {
-      try {
-        await withServerFirestoreTimeout(
-          deleteDoc(doc(firestoreDb, 'bloomcampus_users', emailToFirestoreDocId(cleanEmail)))
-        );
-      } catch {
-        // ignore
+    if (Array.isArray(emails)) {
+      for (const em of emails) {
+        if (typeof em === 'string' && em.trim()) {
+          targetList.push(em.toLowerCase().trim());
+        }
       }
     }
+    const uniqueTargets = Array.from(new Set(targetList));
+    if (uniqueTargets.length === 0) {
+      res.status(400).json({ error: 'At least one email is required.' });
+      return;
+    }
+    const nowTs = Date.now();
+    for (const cleanEmail of uniqueTargets) {
+      persistentStore.deletedEmails[cleanEmail] = nowTs;
+      delete persistentStore.users[cleanEmail];
+      delete cachedCloudUsers[cleanEmail];
+      const docId = emailToFirestoreDocId(cleanEmail);
+      serverWrittenFingerprints.delete(docId);
+      if (firestoreDb && !serverFirestoreQuotaExhausted) {
+        try {
+          await withServerFirestoreTimeout(
+            deleteDoc(doc(firestoreDb, 'bloomcampus_users', docId))
+          );
+          await withServerFirestoreTimeout(
+            deleteDoc(doc(firestoreDb, 'bloomcampus_entries', `entry_${docId}`.slice(0, 128)))
+          );
+        } catch {
+          // ignore
+        }
+      }
+    }
+    persistentStore.users = assignServerCustomerNumbers(persistentStore.users);
+    savePersistentStore(persistentStore);
     res.json({
       ok: true,
+      deleted: uniqueTargets,
       users: persistentStore.users,
+      deletedEmails: persistentStore.deletedEmails,
       totalUsers: Object.keys(persistentStore.users).length,
     });
   });
@@ -714,9 +837,13 @@ async function startServer() {
       res.status(400).json({ error: 'Email is required.' });
       return;
     }
-    const cloudUsers = await pullUsersFromCloudFirestore();
+    const cloudUsers = await pullUsersFromCloudFirestore(persistentStore.deletedEmails);
     if (Object.keys(cloudUsers).length > 0) {
-      persistentStore.users = mergeUserRecords(persistentStore.users, cloudUsers);
+      persistentStore.users = mergeUserRecords(
+        persistentStore.users,
+        cloudUsers,
+        persistentStore.deletedEmails
+      );
       savePersistentStore(persistentStore);
     }
     const foundUser = persistentStore.users[emailClean] || null;
@@ -754,8 +881,14 @@ async function startServer() {
 
   app.post('/api/admin/inquiries', (req, res) => {
     const { userName, userEmail, userPhone, userAge, deviceInfo, subject, message, type } = req.body || {};
-    const validType: 'payment' | 'support' | 'login' | 'signup' =
-      type === 'payment' || type === 'login' || type === 'signup' ? type : 'support';
+    const validType: 'payment' | 'support' | 'login' | 'signup' | 'welcome' | 'appreciation' =
+      type === 'payment' ||
+      type === 'login' ||
+      type === 'signup' ||
+      type === 'welcome' ||
+      type === 'appreciation'
+        ? type
+        : 'support';
     const newInquiry = {
       id: `inq-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       userName: String(userName || 'Student'),
@@ -781,6 +914,35 @@ async function startServer() {
     ].slice(0, 200);
     savePersistentStore(persistentStore);
     res.json({ ok: true, inquiry: newInquiry, supportInquiries: persistentStore.supportInquiries });
+  });
+
+  app.post('/api/admin/inquiries/delete', async (req, res) => {
+    const { id, clearAll } = req.body || {};
+    if (clearAll) {
+      persistentStore.supportInquiries = [];
+      savePersistentStore(persistentStore);
+      res.json({ ok: true, supportInquiries: [] });
+      return;
+    }
+    const targetId = typeof id === 'string' ? id.trim() : '';
+    if (!targetId) {
+      res.status(400).json({ error: 'Inquiry ID is required.' });
+      return;
+    }
+    persistentStore.supportInquiries = persistentStore.supportInquiries.filter(
+      (inq) => inq.id !== targetId
+    );
+    savePersistentStore(persistentStore);
+    if (firestoreDb && !serverFirestoreQuotaExhausted) {
+      try {
+        await withServerFirestoreTimeout(
+          deleteDoc(doc(firestoreDb, 'bloomcampus_inquiries', emailToFirestoreDocId(targetId)))
+        );
+      } catch {
+        // ignore
+      }
+    }
+    res.json({ ok: true, supportInquiries: persistentStore.supportInquiries });
   });
 
   app.get('/api/community/comments', (_req, res) => {

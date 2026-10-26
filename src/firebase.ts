@@ -1,8 +1,10 @@
 import { initializeApp } from 'firebase/app';
 import {
+  createUserWithEmailAndPassword,
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
   User as FirebaseUser,
@@ -21,7 +23,14 @@ import {
   setLogLevel,
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
-import { AdminConfig, CustomerEntryRecord, SupportInquiry, UserData } from './types';
+import {
+  AdminConfig,
+  CustomerEntryRecord,
+  SidratuAppointment,
+  SupportInquiry,
+  TherapySessionLog,
+  UserData,
+} from './types';
 
 // Silence internal @firebase/firestore SDK backoff / quota console.error spam
 try {
@@ -89,17 +98,18 @@ testConnection();
 
 function computeUserWriteFingerprint(user: UserData): string {
   return JSON.stringify({
-    // 1. User Profile
+    // 1. User Profile & Role
     email: user.email,
     name: user.name,
     age: user.age || '',
     phone: user.phone || '',
     password: user.password || '',
+    role: user.role || 'client',
     customerNumber: user.customerNumber || 0,
     firstEntryAt: user.firstEntryAt || user.createdAt || 0,
     skincareGoal: user.skincareGoal || '',
     themeMode: user.themeMode || 'light',
-    // 2. Subscription Status
+    // 2. Subscription Status & Automated Welcome/Appreciation Flags
     subscriptionStatus: user.subscriptionStatus || 'active',
     subscriptionUntil: user.subscriptionUntil || 0,
     paymentMethod: user.paymentMethod || '2-Week Free Access',
@@ -107,17 +117,22 @@ function computeUserWriteFingerprint(user: UserData): string {
     usedFreeAccessPassword: Boolean(user.usedFreeAccessPassword),
     pendingPayment: user.pendingPayment || null,
     paymentHistoryLen: Array.isArray(user.paymentHistory) ? user.paymentHistory.length : 0,
-    // 3. Period Tracking Information
+    welcomeMessageSent: Boolean(user.welcomeMessageSent),
+    paymentAppreciationPending: Boolean(user.paymentAppreciationPending),
+    pushNotificationsEnabled: Boolean(user.pushNotificationsEnabled),
+    // 3. Period Tracking, Mood, Appointments & Skincare Information
     periods: Array.isArray(user.periods) ? user.periods : [],
     customCycleLength: user.customCycleLength || 28,
     cycleRemindersEnabled: Boolean(user.cycleRemindersEnabled),
     emergencyPills: Array.isArray(user.emergencyPills) ? user.emergencyPills : [],
     dailyLogs: user.dailyLogs || {},
     journalEntriesLen: Array.isArray(user.journalEntries) ? user.journalEntries.length : 0,
-    appointmentsLen: Array.isArray(user.appointments) ? user.appointments.length : 0,
-    therapyLogsLen: Array.isArray(user.therapyLogs) ? user.therapyLogs.length : 0,
+    appointments: Array.isArray(user.appointments) ? user.appointments : [],
+    therapyLogs: Array.isArray(user.therapyLogs) ? user.therapyLogs : [],
     academicTasksLen: Array.isArray(user.academicTasks) ? user.academicTasks.length : 0,
     badgesCount: user.unlockedBadges ? Object.keys(user.unlockedBadges).length : 0,
+    mythBusterCorrectIds: Array.isArray(user.mythBusterCorrectIds) ? user.mythBusterCorrectIds : [],
+    mythBusterAttemptsCount: user.mythBusterAttempts ? Object.keys(user.mythBusterAttempts).length : 0,
   });
 }
 
@@ -292,14 +307,20 @@ export function prepareUserForFirestore(user: UserData, fallbackEmail?: string):
         }))
     : [];
 
+  const resolvedRole: 'admin' | 'client' =
+    user?.role === 'admin' || emailClean === 'abdulbobsonbaituray@gmail.com'
+      ? 'admin'
+      : 'client';
+
   const cleaned = cleanFirestorePayload({
     ...user,
-    // 1. User Profile
+    // 1. User Profile & Role-Based Permission
     email: emailClean,
     name: nameClean || 'Student',
     age: ageUsed,
     phone: phoneUsed,
     password: passwordUsed,
+    role: resolvedRole,
     firstEntryAt: firstEntryMs,
     createdAt: firstEntryMs,
     deviceInfo: (user?.deviceInfo || getClientDeviceLabel()).slice(0, 200),
@@ -307,7 +328,7 @@ export function prepareUserForFirestore(user: UserData, fallbackEmail?: string):
       user?.lastAppUrl ||
       (typeof window !== 'undefined' ? window.location.origin : ''),
     lastUpdatedAt: user?.lastUpdatedAt || new Date().toISOString(),
-    // 2. Subscription Status
+    // 2. Subscription Status & Automated Welcome/Appreciation State
     subscriptionStatus: user?.subscriptionStatus || 'active',
     subscriptionUntil:
       user?.subscriptionUntil !== undefined
@@ -318,16 +339,29 @@ export function prepareUserForFirestore(user: UserData, fallbackEmail?: string):
     usedFreeAccessPassword: Boolean(user?.usedFreeAccessPassword),
     pendingPayment: user?.pendingPayment || null,
     paymentHistory: Array.isArray(user?.paymentHistory) ? user.paymentHistory : [],
-    // 3. Period Tracking Information
+    welcomeMessageSent: Boolean(user?.welcomeMessageSent),
+    welcomeMessageSentAt: user?.welcomeMessageSentAt || '',
+    welcomeMessagePendingModal: Boolean(user?.welcomeMessagePendingModal),
+    paymentAppreciationPending: Boolean(user?.paymentAppreciationPending),
+    lastPaymentAppreciationAt: user?.lastPaymentAppreciationAt || '',
+    lastPaymentAppreciationAmount: user?.lastPaymentAppreciationAmount || '',
+    // 3. Period Tracking, Mood, Skincare & Client Appointments
     periods: normalizedPeriods,
     customCycleLength:
       typeof user?.customCycleLength === 'number' && user.customCycleLength >= 21 && user.customCycleLength <= 45
         ? user.customCycleLength
         : 28,
     cycleRemindersEnabled: Boolean(user?.cycleRemindersEnabled),
+    pushNotificationsEnabled: Boolean(user?.pushNotificationsEnabled),
+    appointmentRemindersEnabled: user?.appointmentRemindersEnabled !== false,
+    dailyCheckinRemindersEnabled: Boolean(user?.dailyCheckinRemindersEnabled),
     emergencyPills: Array.isArray(user?.emergencyPills) ? user.emergencyPills : [],
     dailyLogs: user?.dailyLogs && typeof user.dailyLogs === 'object' ? user.dailyLogs : {},
     journalEntries: Array.isArray(user?.journalEntries) ? user.journalEntries : [],
+    skincareGoal: (user?.skincareGoal || 'Even Skin Tone & Clear Dark Spots').slice(0, 120),
+    appointments: Array.isArray(user?.appointments) ? user.appointments : [],
+    therapyLogs: Array.isArray(user?.therapyLogs) ? user.therapyLogs : [],
+    academicTasks: Array.isArray(user?.academicTasks) ? user.academicTasks : [],
     unlockedBadges: user?.unlockedBadges && typeof user.unlockedBadges === 'object' ? user.unlockedBadges : {},
   });
   return cleaned;
@@ -537,8 +571,61 @@ function mergeEntryLogIntoUser(
   };
 }
 
+const DELETED_EMAILS_STORAGE_KEY = 'bloomcampus_deleted_emails_v1';
+
+export function getLocalDeletedEmailsMap(): Record<string, number> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(DELETED_EMAILS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function markEmailDeletedLocally(emailOrEmails: string | string[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const current = getLocalDeletedEmailsMap();
+    const list = Array.isArray(emailOrEmails) ? emailOrEmails : [emailOrEmails];
+    const nowTs = Date.now();
+    for (const em of list) {
+      const clean = String(em || '').trim().toLowerCase();
+      if (clean) {
+        current[clean] = nowTs;
+      }
+    }
+    localStorage.setItem(DELETED_EMAILS_STORAGE_KEY, JSON.stringify(current));
+  } catch {
+    // ignore
+  }
+}
+
+export function clearDeletedEmailLocally(email: string): void {
+  if (typeof window === 'undefined' || !email) return;
+  try {
+    const clean = email.trim().toLowerCase();
+    const current = getLocalDeletedEmailsMap();
+    if (current[clean]) {
+      delete current[clean];
+      localStorage.setItem(DELETED_EMAILS_STORAGE_KEY, JSON.stringify(current));
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function isEmailDeletedLocally(email: string): boolean {
+  if (!email) return false;
+  const current = getLocalDeletedEmailsMap();
+  return Boolean(current[email.trim().toLowerCase()]);
+}
+
 export async function fetchAllUsersFromFirestore(): Promise<Record<string, UserData>> {
   if (firestoreQuotaExhausted) return {};
+  const deletedMap = getLocalDeletedEmailsMap();
   const path = 'bloomcampus_users';
   const result: Record<string, UserData> = {};
   try {
@@ -547,6 +634,7 @@ export async function fetchAllUsersFromFirestore(): Promise<Record<string, UserD
       const data = docSnap.data() as UserData;
       if (data && data.email) {
         const emailClean = data.email.trim().toLowerCase();
+        if (deletedMap[emailClean]) return;
         result[emailClean] = {
           ...data,
           email: emailClean,
@@ -570,6 +658,7 @@ export async function fetchAllUsersFromFirestore(): Promise<Record<string, UserD
       const entry = docSnap.data() as CustomerEntryRecord;
       if (entry && entry.email) {
         const emailClean = entry.email.trim().toLowerCase();
+        if (deletedMap[emailClean]) return;
         result[emailClean] = mergeEntryLogIntoUser(result[emailClean], entry);
       }
     });
@@ -581,8 +670,11 @@ export async function fetchAllUsersFromFirestore(): Promise<Record<string, UserD
 }
 
 export async function deleteUserFromFirestore(email: string): Promise<void> {
+  const clean = email.trim().toLowerCase();
+  if (!clean) return;
+  markEmailDeletedLocally(clean);
   if (firestoreQuotaExhausted) return;
-  const docId = emailToDocId(email);
+  const docId = emailToDocId(clean);
   const path = `bloomcampus_users/${docId}`;
   try {
     await withFirestoreTimeout(deleteDoc(doc(db, 'bloomcampus_users', docId)));
@@ -592,6 +684,15 @@ export async function deleteUserFromFirestore(email: string): Promise<void> {
     lastWrittenHashByPath.delete(path);
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export async function deleteMultipleUsersFromFirestore(emails: string[]): Promise<void> {
+  const cleaned = emails.map((e) => e.trim().toLowerCase()).filter(Boolean);
+  if (cleaned.length === 0) return;
+  markEmailDeletedLocally(cleaned);
+  for (const em of cleaned) {
+    await deleteUserFromFirestore(em);
   }
 }
 
@@ -606,10 +707,17 @@ export function subscribeToAllUsersFirestore(
   let latestEntriesSnap: CustomerEntryRecord[] = [];
 
   const emitCombined = () => {
-    const combined: Record<string, UserData> = { ...latestUsersSnap };
+    const deletedMap = getLocalDeletedEmailsMap();
+    const combined: Record<string, UserData> = {};
+    for (const [emailKey, u] of Object.entries(latestUsersSnap)) {
+      if (!deletedMap[emailKey]) {
+        combined[emailKey] = u;
+      }
+    }
     for (const entry of latestEntriesSnap) {
       if (entry && typeof entry.email === 'string') {
         const emailKey = entry.email.trim().toLowerCase();
+        if (deletedMap[emailKey]) continue;
         combined[emailKey] = mergeEntryLogIntoUser(combined[emailKey], entry);
       }
     }
@@ -619,11 +727,13 @@ export function subscribeToAllUsersFirestore(
   const unsubUsers = onSnapshot(
     collection(db, path),
     (snapshot) => {
+      const deletedMap = getLocalDeletedEmailsMap();
       const users: Record<string, UserData> = {};
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as UserData;
         if (data && typeof data.email === 'string') {
           const emailKey = data.email.trim().toLowerCase();
+          if (deletedMap[emailKey]) return;
           users[emailKey] = {
             ...data,
             email: emailKey,
@@ -642,10 +752,13 @@ export function subscribeToAllUsersFirestore(
   const unsubEntries = onSnapshot(
     collection(db, 'bloomcampus_entries'),
     (snapshot) => {
+      const deletedMap = getLocalDeletedEmailsMap();
       const entries: CustomerEntryRecord[] = [];
       snapshot.forEach((docSnap) => {
         const data = docSnap.data() as CustomerEntryRecord;
         if (data && typeof data.email === 'string') {
+          const emailKey = data.email.trim().toLowerCase();
+          if (deletedMap[emailKey]) return;
           entries.push(data);
         }
       });
@@ -734,6 +847,14 @@ export async function syncSupportInquiryToFirestore(inq: SupportInquiry): Promis
   if (lastWrittenHashByPath.has(path)) {
     return;
   }
+  const validType: SupportInquiry['type'] =
+    inq.type === 'payment' ||
+    inq.type === 'login' ||
+    inq.type === 'signup' ||
+    inq.type === 'welcome' ||
+    inq.type === 'appreciation'
+      ? inq.type
+      : 'support';
   const cleaned = cleanFirestorePayload({
     id: String(inq.id || docId).slice(0, 128),
     userName: String(inq.userName || 'Student').slice(0, 200),
@@ -741,7 +862,7 @@ export async function syncSupportInquiryToFirestore(inq: SupportInquiry): Promis
     userPhone: inq.userPhone ? String(inq.userPhone).slice(0, 60) : '',
     subject: String(inq.subject || 'Inquiry').slice(0, 300),
     message: String(inq.message || '').slice(0, 5000),
-    type: inq.type === 'payment' ? 'payment' : 'support',
+    type: validType,
     createdAt: String(inq.createdAt || new Date().toISOString()).slice(0, 64),
   });
   try {
@@ -751,6 +872,70 @@ export async function syncSupportInquiryToFirestore(inq: SupportInquiry): Promis
     lastWrittenHashByPath.set(path, 'written');
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function syncClientAppointmentToFirestore(
+  userEmail: string,
+  userName: string,
+  appointment: SidratuAppointment
+): Promise<void> {
+  if (firestoreQuotaExhausted || !userEmail || !appointment?.id) return;
+  const docId = emailToDocId(`${userEmail}_${appointment.id}`).slice(0, 128);
+  const path = `bloomcampus_appointments/${docId}`;
+  const cleaned = cleanFirestorePayload({
+    id: String(appointment.id).slice(0, 128),
+    userEmail: userEmail.trim().toLowerCase().slice(0, 254),
+    userName: (userName || 'Client').trim().slice(0, 200),
+    treatmentType: String(appointment.treatmentType || 'Facial Treatment').slice(0, 200),
+    requestedDate: String(appointment.requestedDate || '').slice(0, 32),
+    requestedTime: String(appointment.requestedTime || '').slice(0, 32),
+    notes: String(appointment.notes || '').slice(0, 1000),
+    status: appointment.status === 'Pending' ? 'Pending' : 'Confirmed',
+    createdAt: String(appointment.createdAt || new Date().toISOString()).slice(0, 64),
+  });
+  try {
+    await withFirestoreTimeout(
+      setDoc(doc(db, 'bloomcampus_appointments', docId), cleaned, { merge: true })
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function syncClientSkincareLogToFirestore(
+  userEmail: string,
+  log: TherapySessionLog
+): Promise<void> {
+  if (firestoreQuotaExhausted || !userEmail || !log?.id) return;
+  const docId = emailToDocId(`${userEmail}_${log.id}`).slice(0, 128);
+  const path = `bloomcampus_skincare_logs/${docId}`;
+  const cleaned = cleanFirestorePayload({
+    id: String(log.id).slice(0, 128),
+    userEmail: userEmail.trim().toLowerCase().slice(0, 254),
+    treatmentType: String(log.treatmentType || 'Facial Treatment').slice(0, 200),
+    sessionDate: String(log.sessionDate || '').slice(0, 32),
+    postSessionFeeling: String(log.postSessionFeeling || '').slice(0, 2000),
+    stageAtSession: String(log.stageAtSession || '').slice(0, 64),
+  });
+  try {
+    await withFirestoreTimeout(
+      setDoc(doc(db, 'bloomcampus_skincare_logs', docId), cleaned, { merge: true })
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteSupportInquiryFromFirestore(id: string): Promise<void> {
+  if (firestoreQuotaExhausted || !id) return;
+  const docId = emailToDocId(id);
+  const path = `bloomcampus_inquiries/${docId}`;
+  try {
+    await withFirestoreTimeout(deleteDoc(doc(db, 'bloomcampus_inquiries', docId)));
+    lastWrittenHashByPath.delete(path);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
@@ -780,6 +965,7 @@ export function subscribeToSupportInquiriesFirestore(
 export async function fetchSingleUserFromFirestore(email: string): Promise<UserData | null> {
   if (firestoreQuotaExhausted || !email) return null;
   const emailClean = email.trim().toLowerCase();
+  if (isEmailDeletedLocally(emailClean)) return null;
   const docId = emailToDocId(emailClean);
   const path = `bloomcampus_users/${docId}`;
   try {
@@ -795,6 +981,30 @@ export async function fetchSingleUserFromFirestore(email: string): Promise<UserD
     return null;
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
+    return null;
+  }
+}
+
+export async function signUpWithEmailPasswordFirebase(
+  email: string,
+  password: string
+): Promise<FirebaseUser | null> {
+  try {
+    const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    return cred.user;
+  } catch {
+    return null;
+  }
+}
+
+export async function signInWithEmailPasswordFirebase(
+  email: string,
+  password: string
+): Promise<FirebaseUser | null> {
+  try {
+    const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+    return cred.user;
+  } catch {
     return null;
   }
 }

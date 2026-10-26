@@ -140,12 +140,34 @@ export function evaluateUserBadges(userData: UserData): BadgeEvaluationResult {
   // Journal reflections count
   const journalCount = (userData.journalEntries || []).length;
 
+  // Myth Buster correct guesses count
+  const mythBusterCorrectCount = Array.isArray(userData.mythBusterCorrectIds)
+    ? userData.mythBusterCorrectIds.length
+    : 0;
+
   // First check-in (any period or daily log)
   const firstCheckInProgress = activeDates.length > 0 || totalPeriodsCount > 0 ? 1 : 0;
 
   const unlockedMap = userData.unlockedBadges || {};
 
   const badges: BadgeMilestone[] = [
+    {
+      id: 'myth-buster',
+      title: 'Myth Buster',
+      subtitle: '5 Campus Myths & Facts Mastered',
+      description:
+        'Test your campus reproductive & hormonal science knowledge in the interactive Myth Buster Quiz and get 5 correct guesses!',
+      category: 'Mindfulness',
+      emoji: '🧠',
+      currentValue: Math.min(5, mythBusterCorrectCount),
+      targetValue: 5,
+      unitLabel: 'correct guesses',
+      isUnlocked: mythBusterCorrectCount >= 5 || Boolean(unlockedMap['myth-buster']),
+      unlockedAtIso: unlockedMap['myth-buster'],
+      actionLabel: 'Play Myth Buster Quiz',
+      targetSection: 'guide',
+      accentColor: 'lavender',
+    },
     {
       id: 'streak-7',
       title: '1-Week Streak',

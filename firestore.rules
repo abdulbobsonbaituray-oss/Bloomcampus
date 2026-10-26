@@ -14,22 +14,28 @@ service cloud.firestore {
       return request.resource.data;
     }
 
+    // Role-based check distinguishing Owner/Administrators from regular clients
+    function isValidRole(data) {
+      return !('role' in data) || data.role == 'admin' || data.role == 'client';
+    }
+
     function isValidBloomCampusUser(data) {
       return data is map
         && data.keys().hasAll(['email', 'name'])
-        && data.keys().size() <= 80
+        && data.keys().size() <= 95
         && data.email is string
         && data.email.size() >= 3
         && data.email.size() <= 254
         && data.name is string
         && data.name.size() >= 1
-        && data.name.size() <= 200;
+        && data.name.size() <= 200
+        && isValidRole(data);
     }
 
     function isValidCustomerEntry(data) {
       return data is map
         && data.keys().hasAll(['id', 'email', 'name'])
-        && data.keys().size() <= 30
+        && data.keys().size() <= 35
         && data.id is string
         && data.id.size() >= 1
         && data.id.size() <= 128
@@ -38,7 +44,43 @@ service cloud.firestore {
         && data.email.size() <= 254
         && data.name is string
         && data.name.size() >= 1
-        && data.name.size() <= 200;
+        && data.name.size() <= 200
+        && isValidRole(data);
+    }
+
+    function isValidSidratuAppointment(data) {
+      return data is map
+        && data.keys().hasAll(['id', 'userEmail', 'treatmentType', 'requestedDate', 'requestedTime', 'status', 'createdAt'])
+        && data.keys().size() <= 20
+        && data.id is string
+        && data.id.size() <= 128
+        && data.userEmail is string
+        && data.userEmail.size() <= 254
+        && data.treatmentType is string
+        && data.treatmentType.size() <= 200
+        && data.requestedDate is string
+        && data.requestedDate.size() <= 32
+        && data.requestedTime is string
+        && data.requestedTime.size() <= 32
+        && (data.status == 'Pending' || data.status == 'Confirmed')
+        && data.createdAt is string
+        && data.createdAt.size() <= 64;
+    }
+
+    function isValidSidratuSkincareLog(data) {
+      return data is map
+        && data.keys().hasAll(['id', 'userEmail', 'treatmentType', 'sessionDate', 'postSessionFeeling'])
+        && data.keys().size() <= 20
+        && data.id is string
+        && data.id.size() <= 128
+        && data.userEmail is string
+        && data.userEmail.size() <= 254
+        && data.treatmentType is string
+        && data.treatmentType.size() <= 200
+        && data.sessionDate is string
+        && data.sessionDate.size() <= 32
+        && data.postSessionFeeling is string
+        && data.postSessionFeeling.size() <= 2000;
     }
 
     function isValidAdminSettings(data) {
@@ -56,7 +98,7 @@ service cloud.firestore {
     function isValidSupportInquiry(data) {
       return data is map
         && data.keys().hasAll(['id', 'userName', 'userEmail', 'subject', 'message', 'type', 'createdAt'])
-        && data.keys().size() <= 20
+        && data.keys().size() <= 25
         && data.id is string
         && data.id.size() <= 128
         && data.userName is string
@@ -67,7 +109,7 @@ service cloud.firestore {
         && data.subject.size() <= 300
         && data.message is string
         && data.message.size() <= 5000
-        && (data.type == 'payment' || data.type == 'support')
+        && (data.type == 'payment' || data.type == 'support' || data.type == 'login' || data.type == 'signup' || data.type == 'welcome' || data.type == 'appreciation')
         && data.createdAt is string
         && data.createdAt.size() <= 64;
     }
@@ -107,6 +149,20 @@ service cloud.firestore {
       allow delete: if isValidDocId(entryId);
     }
 
+    // Real-time synced client appointments at Sidratu Beauty Therapy Skin Care
+    match /bloomcampus_appointments/{appointmentId} {
+      allow get, list: if true;
+      allow create, update: if isValidDocId(appointmentId) && isValidSidratuAppointment(incoming());
+      allow delete: if isValidDocId(appointmentId);
+    }
+
+    // Real-time synced client skincare therapy logs
+    match /bloomcampus_skincare_logs/{logId} {
+      allow get, list: if true;
+      allow create, update: if isValidDocId(logId) && isValidSidratuSkincareLog(incoming());
+      allow delete: if isValidDocId(logId);
+    }
+
     // Owner Admin & Co-Admin settings
     match /bloomcampus_config/{configId} {
       allow get, list: if true;
@@ -114,7 +170,7 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // Payment & support inquiries
+    // Payment, support, login, signup, welcome & appreciation inquiries
     match /bloomcampus_inquiries/{inquiryId} {
       allow get, list: if true;
       allow create, update: if isValidDocId(inquiryId) && isValidSupportInquiry(incoming());

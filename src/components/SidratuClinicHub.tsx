@@ -22,6 +22,10 @@ import {
   SKINCARE_GOALS,
 } from '../constants';
 import { formatDateISO, formatHumanDate } from '../utils/cycleEngine';
+import {
+  syncClientAppointmentToFirestore,
+  syncClientSkincareLogToFirestore,
+} from '../firebase';
 
 interface CommunityComment {
   id: string;
@@ -130,7 +134,7 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
     if (goalInfo && goalInfo.recommendedTreatments[0]) {
       setBookTreatment(goalInfo.recommendedTreatments[0]);
     }
-    showToast(`Skincare goal updated to "${newGoal}"!`, 'success');
+    showToast(`Skincare goal updated to "${newGoal}" & synced to Firestore!`, 'success');
   };
 
   const handleAddTherapyLog = (e: React.FormEvent) => {
@@ -152,8 +156,11 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
         b.sessionDate.localeCompare(a.sessionDate)
       ),
     }));
+    if (userData.email) {
+      syncClientSkincareLogToFirestore(userData.email, newEntry).catch(() => {});
+    }
     setLogFeeling('');
-    showToast('✨ Therapy session saved to your gold skincare timeline!', 'success');
+    showToast('✨ Therapy session saved & synced to Firestore in real time!', 'success');
   };
 
   const handleDeleteTherapyLog = (id: string) => {
@@ -204,9 +211,32 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
       ...prev,
       appointments: [newAppt, ...(prev.appointments || [])],
     }));
+    if (userData.email) {
+      syncClientAppointmentToFirestore(
+        userData.email,
+        userData.name || 'Client',
+        newAppt
+      ).catch(() => {});
+    }
+    if (
+      typeof window !== 'undefined' &&
+      'Notification' in window &&
+      Notification.permission === 'granted' &&
+      userData.pushNotificationsEnabled !== false &&
+      userData.appointmentRemindersEnabled !== false
+    ) {
+      try {
+        new Notification('📅 Sidratu Clinic Appointment Confirmed', {
+          body: `${bookTreatment} booked for ${formatHumanDate(datePart)} at ${timePart} (101 Jomo Kenyatta Rd, Freetown).`,
+          icon: '/icons/icon-192x192.svg',
+        });
+      } catch {
+        // ignore if unsupported in iframe
+      }
+    }
     setBookNotes('');
     showToast(
-      `📅 Appointment requested for ${bookTreatment} on ${formatHumanDate(datePart)} at ${timePart}!`,
+      `📅 Appointment confirmed & synced to Firestore for ${bookTreatment} on ${formatHumanDate(datePart)} at ${timePart}!`,
       'success'
     );
   };

@@ -30,8 +30,13 @@ import {
   Plus,
   ArrowRightLeft,
   BellRing,
-  ChevronDown,
-  ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  LayoutGrid,
+  Table as TableIcon,
+  ArrowUpDown,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import { AdminAccount, AdminConfig, SupportInquiry, UserData } from '../types';
 import {
@@ -51,6 +56,21 @@ interface CustomRevenueItem {
   originalInput: string;
   createdAt: string;
 }
+
+export type AdminPageId =
+  | 'entries'
+  | 'overview'
+  | 'revenue'
+  | 'converter'
+  | 'security'
+  | 'inbox';
+
+type SortField =
+  | 'entry_asc'
+  | 'entry_desc'
+  | 'recent_login'
+  | 'name_asc'
+  | 'days_desc';
 
 const STORAGE_REVENUE_ITEMS_KEY = 'bloomcampus_admin_revenue_items_v1';
 const STORAGE_PASS_PRICE_KEY = 'bloomcampus_admin_pass_price_sle_v1';
@@ -77,6 +97,8 @@ interface OwnerAdminDashboardProps {
     subscriptionDays?: number;
   }) => void;
   onDeleteUser?: (userEmail: string) => void;
+  onBulkDeleteUsers?: (userEmails: string[]) => void;
+  onDeleteSupportInquiry?: (inquiryId?: string, clearAll?: boolean) => void;
   onRefreshUsers: () => Promise<number> | void;
   onExitAdmin: () => void;
   showToast: (msg: string, type?: 'success' | 'warning' | 'info') => void;
@@ -93,74 +115,49 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
   onClearPendingVerification,
   onRegisterNewUserByAdmin,
   onDeleteUser,
+  onBulkDeleteUsers,
+  onDeleteSupportInquiry,
   onRefreshUsers,
   onExitAdmin,
   showToast,
 }) => {
+  // Multi-Page Admin Navigation State
+  const [activeAdminPage, setActiveAdminPage] = useState<AdminPageId>('entries');
+
+  // Search, Filter, Sort & Pagination State for Dedicated Customer Entries Page
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTab, setFilterTab] = useState<
     'all' | 'pending' | 'active' | 'expired' | 'free_password'
   >('all');
+  const [sortBy, setSortBy] = useState<SortField>('entry_asc');
+  const [entriesViewLayout, setEntriesViewLayout] = useState<'table' | 'cards' | 'both'>('table');
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
+
+  // Inbox Page Search & Filter State
+  const [inboxSearchQuery, setInboxSearchQuery] = useState('');
+  const [inboxFilterType, setInboxFilterType] = useState<'all' | 'login' | 'payment' | 'support'>('all');
+  const [inboxPage, setInboxPage] = useState<number>(1);
+
   const [adminPassInput, setAdminPassInput] = useState(adminConfig.adminPassword);
   const [freePassInput, setFreePassInput] = useState(adminConfig.freeAccessPassword);
   const [lastApprovedUserEmail, setLastApprovedUserEmail] = useState<string | null>(null);
   const [isSyncingEntries, setIsSyncingEntries] = useState<boolean>(false);
-  const [viewMode, setViewMode] = useState<'both' | 'table' | 'cards'>('table');
-
-  // Collapsible Table / Section Buttons State (Reduces Vertical Space)
-  const [openTables, setOpenTables] = useState<{
-    liveLogins: boolean;
-    moneyCalc: boolean;
-    currencyCalc: boolean;
-    customerTable: boolean;
-    customerCards: boolean;
-    teamAdmins: boolean;
-    adminCodes: boolean;
-    inboxAlerts: boolean;
-  }>({
-    liveLogins: false,
-    moneyCalc: false,
-    currencyCalc: false,
-    customerTable: true,
-    customerCards: false,
-    teamAdmins: false,
-    adminCodes: false,
-    inboxAlerts: false,
-  });
-
-  const toggleTableSection = (key: keyof typeof openTables) => {
-    setOpenTables((prev) => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const setAllTablesOpen = (isOpen: boolean) => {
-    setOpenTables({
-      liveLogins: isOpen,
-      moneyCalc: isOpen,
-      currencyCalc: isOpen,
-      customerTable: isOpen,
-      customerCards: isOpen,
-      teamAdmins: isOpen,
-      adminCodes: isOpen,
-      inboxAlerts: isOpen,
-    });
-  };
-
-  // Dedicated "Search for Someone" input & active search state
-  const [personSearchInput, setPersonSearchInput] = useState<string>('');
-  const [isSearchBoxFocused, setIsSearchBoxFocused] = useState<boolean>(false);
 
   // Add / Manage Additional Admin Accounts state
   const [newAdminEmail, setNewAdminEmail] = useState('');
   const [newAdminPassword, setNewAdminPassword] = useState('');
   const [newAdminName, setNewAdminName] = useState('');
 
-  // Manual Register / Edit Customer Entry state (No User Password Field)
+  // Manual Register / Edit Customer Entry state
   const [showAddUserForm, setShowAddUserForm] = useState(false);
   const [editingOriginalEmail, setEditingOriginalEmail] = useState<string | null>(null);
   const [manualUserName, setManualUserName] = useState('');
   const [manualUserAge, setManualUserAge] = useState('21');
   const [manualUserEmail, setManualUserEmail] = useState('');
   const [manualUserPhone, setManualUserPhone] = useState('');
+  const [manualUserPassword, setManualUserPassword] = useState('');
   const [manualSubStatus, setManualSubStatus] = useState<
     'active' | 'pending_verification' | 'expired' | 'free_password'
   >('active');
@@ -320,18 +317,42 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     });
   }, [usersMap]);
 
-  // Recent logins sorted by most recent sign-in or entry timestamp
+  // Recent logins sorted by most recent sign-in or entry timestamp, filtered by searchQuery & filterTab
   const recentLoginsList = useMemo(() => {
-    return [...usersList].sort((a, b) => {
-      const aTime = a.lastSignInAt
-        ? new Date(a.lastSignInAt).getTime()
-        : Number(a.firstEntryAt || a.createdAt || 0);
-      const bTime = b.lastSignInAt
-        ? new Date(b.lastSignInAt).getTime()
-        : Number(b.firstEntryAt || b.createdAt || 0);
-      return bTime - aTime;
-    });
-  }, [usersList]);
+    const q = searchQuery.toLowerCase().trim();
+    return [...usersList]
+      .filter((u) => {
+        const st = getTrialStatus(u);
+        const phoneUsed = resolveCustomerPhoneUsed(u);
+        const matchesSearch =
+          !q ||
+          (u.name || '').toLowerCase().includes(q) ||
+          (u.email || '').toLowerCase().includes(q) ||
+          phoneUsed.toLowerCase().includes(q);
+        if (!matchesSearch) return false;
+        if (filterTab === 'all') return true;
+        if (filterTab === 'pending') {
+          return st.status === 'pending_verification' || u.pendingPayment?.status === 'pending';
+        }
+        if (filterTab === 'expired') return st.status === 'expired';
+        if (filterTab === 'free_password') return st.status === 'free_password';
+        if (filterTab === 'active') {
+          return (
+            st.status === 'trial' || st.status === 'subscribed' || st.status === 'free_password'
+          );
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const aTime = a.lastSignInAt
+          ? new Date(a.lastSignInAt).getTime()
+          : Number(a.firstEntryAt || a.createdAt || 0);
+        const bTime = b.lastSignInAt
+          ? new Date(b.lastSignInAt).getTime()
+          : Number(b.firstEntryAt || b.createdAt || 0);
+        return bTime - aTime;
+      });
+  }, [usersList, searchQuery, filterTab]);
 
   const stats = useMemo(() => {
     let total = 0;
@@ -357,7 +378,6 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
         if (st.status === 'trial') trial++;
       }
 
-      // Count any extra approved payments in paymentHistory beyond current active status
       const approvedHistoryCount = (u.paymentHistory || []).filter(
         (h) => h.status === 'approved'
       ).length;
@@ -529,8 +549,9 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     setAutoMoneyAdjustmentSle(cleanTarget - revenueSummary.rawAutoPassRevenueSle);
   };
 
+  // Filtered and Sorted Users for the Dedicated Customer Entries Page
   const filteredUsers = useMemo(() => {
-    return usersList.filter((u) => {
+    const matched = usersList.filter((u) => {
       const q = searchQuery.toLowerCase().trim();
       const st = getTrialStatus(u);
       const custNumStr = `#${u.customerNumber || ''}`;
@@ -542,6 +563,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
         (u.age || '').toLowerCase().includes(q) ||
         phoneUsed.toLowerCase().includes(q) ||
         custNumStr.includes(q) ||
+        String(u.customerNumber || '').includes(q) ||
         (u.pendingPayment?.transactionId || '').toLowerCase().includes(q);
 
       if (!matchesSearch) return false;
@@ -558,7 +580,114 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
       }
       return true;
     });
-  }, [usersList, searchQuery, filterTab]);
+
+    const sorted = [...matched];
+    sorted.sort((a, b) => {
+      if (sortBy === 'entry_asc') {
+        return (a.customerNumber || 999999) - (b.customerNumber || 999999);
+      }
+      if (sortBy === 'entry_desc') {
+        return (b.customerNumber || 0) - (a.customerNumber || 0);
+      }
+      if (sortBy === 'recent_login') {
+        const aTime = a.lastSignInAt
+          ? new Date(a.lastSignInAt).getTime()
+          : Number(a.firstEntryAt || a.createdAt || 0);
+        const bTime = b.lastSignInAt
+          ? new Date(b.lastSignInAt).getTime()
+          : Number(b.firstEntryAt || b.createdAt || 0);
+        return bTime - aTime;
+      }
+      if (sortBy === 'name_asc') {
+        return (a.name || a.email || '').localeCompare(b.name || b.email || '');
+      }
+      if (sortBy === 'days_desc') {
+        return getTrialStatus(b).daysLeft - getTrialStatus(a).daysLeft;
+      }
+      return 0;
+    });
+
+    return sorted;
+  }, [usersList, searchQuery, filterTab, sortBy]);
+
+  // Reset pagination to Page 1 whenever search query, status filter, sort, or page size changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterTab, sortBy, pageSize]);
+
+  const totalPages = useMemo(() => {
+    if (pageSize <= 0) return 1;
+    return Math.max(1, Math.ceil(filteredUsers.length / pageSize));
+  }, [filteredUsers.length, pageSize]);
+
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+
+  const paginatedUsers = useMemo(() => {
+    if (pageSize <= 0) return filteredUsers;
+    const startIdx = (safeCurrentPage - 1) * pageSize;
+    return filteredUsers.slice(startIdx, startIdx + pageSize);
+  }, [filteredUsers, safeCurrentPage, pageSize]);
+
+  const pageStartItem =
+    filteredUsers.length === 0
+      ? 0
+      : pageSize <= 0
+      ? 1
+      : (safeCurrentPage - 1) * pageSize + 1;
+  const pageEndItem =
+    filteredUsers.length === 0
+      ? 0
+      : pageSize <= 0
+      ? filteredUsers.length
+      : Math.min(filteredUsers.length, safeCurrentPage * pageSize);
+
+  // Clean up selectedEmails if any were deleted
+  useEffect(() => {
+    setSelectedEmails((prev) => prev.filter((em) => Boolean(usersMap[em])));
+  }, [usersMap]);
+
+  const isAllCurrentPageSelected =
+    paginatedUsers.length > 0 &&
+    paginatedUsers.every((u) => selectedEmails.includes(u.email.toLowerCase().trim()));
+
+  const handleToggleSelectUser = (email: string) => {
+    const clean = email.toLowerCase().trim();
+    setSelectedEmails((prev) =>
+      prev.includes(clean) ? prev.filter((x) => x !== clean) : [...prev, clean]
+    );
+  };
+
+  const handleToggleSelectPage = () => {
+    const pageEmails = paginatedUsers.map((u) => u.email.toLowerCase().trim());
+    if (isAllCurrentPageSelected) {
+      setSelectedEmails((prev) => prev.filter((em) => !pageEmails.includes(em)));
+    } else {
+      setSelectedEmails((prev) => Array.from(new Set([...prev, ...pageEmails])));
+    }
+  };
+
+  const handleDeleteSingleCustomer = (email: string) => {
+    const clean = email.toLowerCase().trim();
+    if (!clean) return;
+    setSelectedEmails((prev) => prev.filter((x) => x !== clean));
+    if (lastApprovedUserEmail?.toLowerCase().trim() === clean) {
+      setLastApprovedUserEmail(null);
+    }
+    if (onDeleteUser) {
+      onDeleteUser(clean);
+    }
+  };
+
+  const handleBulkDeleteSelected = () => {
+    if (selectedEmails.length === 0) return;
+    const targets = [...selectedEmails];
+    setSelectedEmails([]);
+    if (onBulkDeleteUsers) {
+      onBulkDeleteUsers(targets);
+    } else if (onDeleteUser) {
+      targets.forEach((em) => onDeleteUser(em));
+    }
+  };
 
   const handleManualSyncClick = async () => {
     setIsSyncingEntries(true);
@@ -675,7 +804,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
       additionalAdmins: updatedList,
       updatedAt: new Date().toISOString(),
     });
-    showToast(`Removed admin access for ${emailToRemove}.`, 'info');
+    showToast(`🗑️ Removed admin access for ${emailToRemove}.`, 'info');
   };
 
   const handleOpenEditCustomerEntry = (u: UserData) => {
@@ -685,6 +814,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     setManualUserAge(u.age || '21');
     setManualUserEmail(u.email || '');
     setManualUserPhone(resolveCustomerPhoneUsed(u));
+    setManualUserPassword(u.password || '');
     setManualSubStatus(
       st.status === 'expired'
         ? 'expired'
@@ -695,8 +825,9 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
         : 'active'
     );
     setManualSubDays(String(st.daysLeft > 0 ? st.daysLeft : 14));
+    setActiveAdminPage('entries');
     setShowAddUserForm(true);
-    window.scrollTo({ top: 180, behavior: 'smooth' });
+    window.scrollTo({ top: 140, behavior: 'smooth' });
   };
 
   const handleManualUserSubmit = (e: React.FormEvent) => {
@@ -713,7 +844,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
       age: manualUserAge.trim() || '21',
       email: emailClean,
       phone: manualUserPhone.trim(),
-      password: '',
+      password: manualUserPassword.trim(),
       originalEmail: editingOriginalEmail || undefined,
       subscriptionStatus: manualSubStatus,
       subscriptionDays: !Number.isNaN(parsedDays) ? parsedDays : 14,
@@ -723,6 +854,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     setManualUserAge('21');
     setManualUserEmail('');
     setManualUserPhone('');
+    setManualUserPassword('');
     setManualSubStatus('active');
     setManualSubDays('14');
     setShowAddUserForm(false);
@@ -744,9 +876,10 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     ];
     const rows = usersList.map((u, idx) => {
       const st = getTrialStatus(u);
-      const firstDateStr = u.firstEntryAt || u.createdAt
-        ? new Date(u.firstEntryAt || u.createdAt).toLocaleString()
-        : '';
+      const firstDateStr =
+        u.firstEntryAt || u.createdAt
+          ? new Date(u.firstEntryAt || u.createdAt).toLocaleString()
+          : '';
       const lastSignInStr = u.lastSignInAt
         ? new Date(u.lastSignInAt).toLocaleString()
         : firstDateStr;
@@ -818,16 +951,24 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    showToast(`✉️ Opened email to ${OWNER_ADMIN_EMAIL} with all ${usersList.length} user logins!`, 'success');
+    showToast(
+      `✉️ Opened email to ${OWNER_ADMIN_EMAIL} with all ${usersList.length} user logins!`,
+      'success'
+    );
   };
 
   const handleWhatsAppAllLoginsToOwner = () => {
     const report = buildCustomerReportText();
     const waHref = `https://wa.me/23273604401?text=${encodeURIComponent(report)}`;
-    window.open(waHref, '_blank', 'noopener,noreferrer');
+    const a = document.createElement('a');
+    a.href = waHref;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
-  // Build mailto link to send approval confirmation email from Owner to User
   const buildApprovalEmailHref = (u: UserData) => {
     const expDate = u.subscriptionUntil
       ? new Date(u.subscriptionUntil).toLocaleDateString('en-US', {
@@ -850,7 +991,6 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     )}&body=${encodeURIComponent(body)}`;
   };
 
-  // Build WhatsApp confirmation link for Sierra Leone numbers
   const buildWhatsAppHref = (u: UserData) => {
     const rawPhone = resolveCustomerPhoneUsed(u);
     const digits = rawPhone.replace(/\D/g, '');
@@ -872,7 +1012,6 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
       : `https://wa.me/?text=${encodeURIComponent(text)}`;
   };
 
-  // Build SMS confirmation link for mobile devices
   const buildSmsHref = (u: UserData) => {
     const rawPhone = resolveCustomerPhoneUsed(u);
     const expDate = u.subscriptionUntil
@@ -886,11 +1025,97 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     return `sms:${rawPhone}?body=${encodeURIComponent(text)}`;
   };
 
+  // Filtered Inquiries for Page 6 (Alerts & Support Inbox Page)
+  const filteredInquiries = useMemo(() => {
+    return supportInquiries.filter((inq) => {
+      if (
+        inboxFilterType === 'login' &&
+        inq.type !== 'login' &&
+        inq.type !== 'signup' &&
+        inq.type !== 'welcome'
+      ) {
+        return false;
+      }
+      if (
+        inboxFilterType === 'payment' &&
+        inq.type !== 'payment' &&
+        inq.type !== 'appreciation'
+      ) {
+        return false;
+      }
+      if (inboxFilterType === 'support' && inq.type !== 'support') {
+        return false;
+      }
+      const q = inboxSearchQuery.toLowerCase().trim();
+      if (!q) return true;
+      return (
+        (inq.userName || '').toLowerCase().includes(q) ||
+        (inq.userEmail || '').toLowerCase().includes(q) ||
+        (inq.userPhone || '').toLowerCase().includes(q) ||
+        (inq.subject || '').toLowerCase().includes(q) ||
+        (inq.message || '').toLowerCase().includes(q)
+      );
+    });
+  }, [supportInquiries, inboxFilterType, inboxSearchQuery]);
+
+  const INBOX_PAGE_SIZE = 20;
+  const totalInboxPages = Math.max(1, Math.ceil(filteredInquiries.length / INBOX_PAGE_SIZE));
+  const safeInboxPage = Math.min(inboxPage, totalInboxPages);
+  const paginatedInquiries = filteredInquiries.slice(
+    (safeInboxPage - 1) * INBOX_PAGE_SIZE,
+    safeInboxPage * INBOX_PAGE_SIZE
+  );
+
+  // Admin Pages Config
+  const adminPages: Array<{
+    id: AdminPageId;
+    label: string;
+    badge?: string;
+    description: string;
+  }> = [
+    {
+      id: 'entries',
+      label: '👥 Customer Entries Page',
+      badge: `${stats.total}`,
+      description: 'Dedicated directory with Search Bar, Pagination & Bulk Delete for lots of people',
+    },
+    {
+      id: 'overview',
+      label: '📊 Overview & Live Logins',
+      badge: `${recentLoginsList.length}`,
+      description: 'KPI summary cards, real-time sign-ins & quick actions',
+    },
+    {
+      id: 'revenue',
+      label: '💰 Money & Revenue Page',
+      badge: `Le ${revenueSummary.grandTotalSle.toLocaleString()}`,
+      description: 'App earnings calculator, auto-money reducer & custom ledger',
+    },
+    {
+      id: 'converter',
+      label: '💱 USD ⇄ Leones Page',
+      badge: `$1 = Le ${usdToSleRate}`,
+      description: 'Live currency converter & arithmetic check calculator',
+    },
+    {
+      id: 'security',
+      label: '🛡️ Team Admins & Codes',
+      badge: `${1 + additionalAdmins.length}`,
+      description: 'Manage co-admins, owner password & 30-day free code',
+    },
+    {
+      id: 'inbox',
+      label: '📬 Alerts & Support Inbox',
+      badge: `${supportInquiries.length}`,
+      description: 'Searchable login, payment & support notifications',
+    },
+  ];
+
   return (
     <div className="min-h-screen bg-cream text-slate-800 flex flex-col">
       {/* Top Owner Admin Header */}
       <header className="bg-gradient-to-r from-plum-900 via-lavender-900 to-plum-900 text-white shadow-lg border-b border-gold-500/30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex items-start sm:items-center gap-3.5">
             <div className="w-12 h-12 rounded-2xl bg-gold-500/20 border border-gold-400/50 flex items-center justify-center text-gold-400 shrink-0">
               <ShieldAlert className="w-6 h-6" />
@@ -898,7 +1123,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[11px] font-extrabold uppercase tracking-widest px-2.5 py-0.5 rounded-md bg-gold-500 text-plum-900">
-                  Owner Admin Console
+                  Multi-Page Owner Admin Console
                 </span>
                 <span className="text-xs text-gold-400 font-mono">{OWNER_ADMIN_EMAIL}</span>
                 <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-400/40 text-emerald-200">
@@ -910,29 +1135,32 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                 </span>
               </div>
               <h1 className="font-display font-extrabold text-xl sm:text-2xl text-white mt-1">
-                Live People Logging In, App Money Calculator &amp; USD ⇄ Leones Converter
+                BloomCampus &amp; Sidratu Multi-Page Admin Portal
               </h1>
               <p className="text-xs text-white/80 mt-0.5">
-                Created by <strong>{CREATOR_NAME}</strong> · Real-Time Login Sync Across All Phones &amp; Computers (User Passwords Removed)
+                Created by <strong>{CREATOR_NAME}</strong> · Switch between 6 dedicated Admin Pages below
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => {
-                const el = document.getElementById('admin-person-search-input');
-                if (el) {
-                  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                  (el as HTMLInputElement).focus();
-                }
+                setActiveAdminPage('entries');
+                window.setTimeout(() => {
+                  const el = document.getElementById('entries-page-search-input');
+                  if (el) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    (el as HTMLInputElement).focus();
+                  }
+                }, 60);
               }}
               className="px-3.5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-plum-900 text-xs font-extrabold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
-              title="Jump to Search for Someone in the Admin Area"
+              title="Open Dedicated Customer Entries Page & Search Bar"
             >
               <Search className="w-3.5 h-3.5" />
-              <span>Search Someone</span>
+              <span>Find Entry ({stats.total})</span>
             </button>
             <button
               type="button"
@@ -962,1265 +1190,70 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
             </button>
           </div>
         </div>
-      </header>
 
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 space-y-6 flex-1">
-        {/* =================================================================== */}
-        {/* TOP KPI SUMMARY CARDS                                               */}
-        {/* =================================================================== */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
-          <div className="bg-gradient-to-br from-plum-900 to-lavender-900 text-white rounded-2xl p-4 border-2 border-gold-500/50 shadow-sm">
-            <div className="flex items-center justify-between text-gold-400 text-xs font-extrabold uppercase">
-              <span>People in App</span>
-              <Users className="w-4 h-4 text-gold-400" />
-            </div>
-            <div className="font-display font-extrabold text-3xl text-white mt-1 tabular-nums">
-              {stats.total}
-            </div>
-            <p className="text-[11px] text-white/80 mt-0.5">
-              Total registered accounts
-            </p>
-          </div>
-
-          <div className="bg-gradient-to-br from-emerald-900 to-sage-900 text-white rounded-2xl p-4 border-2 border-emerald-400/50 shadow-sm">
-            <div className="flex items-center justify-between text-emerald-300 text-xs font-extrabold uppercase">
-              <span>Money Made</span>
-              <TrendingUp className="w-4 h-4 text-emerald-300" />
-            </div>
-            <div className="font-display font-extrabold text-2xl sm:text-3xl text-white mt-1 tabular-nums">
-              Le {revenueSummary.grandTotalSle.toLocaleString()}
-            </div>
-            <p className="text-[11px] text-emerald-200 mt-0.5 font-mono">
-              ≈ ${revenueSummary.grandTotalUsd.toFixed(2)} USD
-            </p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-4 border-2 border-orange-300 shadow-xs">
-            <div className="flex items-center justify-between text-orange-800 text-xs font-extrabold">
-              <span>Pending Orange Money</span>
-              <Clock className="w-4 h-4 text-orange-600" />
-            </div>
-            <div className="font-display font-extrabold text-3xl text-orange-600 mt-1 tabular-nums">
-              {stats.pending}
-            </div>
-            <p className="text-[11px] text-orange-800 mt-0.5">
-              Le {(stats.pending * passPriceSle).toLocaleString()} awaiting approval
-            </p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-4 border border-sage-200 shadow-xs">
-            <div className="flex items-center justify-between text-sage-800 text-xs font-bold">
-              <span>2-Week Free Users</span>
-              <CheckCircle2 className="w-4 h-4 text-sage-600" />
-            </div>
-            <div className="font-display font-extrabold text-3xl text-sage-800 mt-1 tabular-nums">
-              {stats.trial}
-            </div>
-            <p className="text-[11px] text-slate-500 mt-0.5">Active 14-day free access</p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-4 border border-lavender-200 shadow-xs">
-            <div className="flex items-center justify-between text-lavender-900 text-xs font-bold">
-              <span>Paid + 30d Pass</span>
-              <KeyRound className="w-4 h-4 text-lavender-700" />
-            </div>
-            <div className="font-display font-extrabold text-3xl text-lavender-900 mt-1 tabular-nums">
-              {stats.subscribed + stats.freePass}
-            </div>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              {stats.subscribed} Paid · {stats.freePass} Free Code
-            </p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-4 border border-rose-200 shadow-xs">
-            <div className="flex items-center justify-between text-rose-800 text-xs font-bold">
-              <span>Expired / Locked</span>
-              <Lock className="w-4 h-4 text-rose-600" />
-            </div>
-            <div className="font-display font-extrabold text-3xl text-rose-700 mt-1 tabular-nums">
-              {stats.expired}
-            </div>
-            <p className="text-[11px] text-slate-500 mt-0.5">Requires renewal</p>
-          </div>
-        </div>
-
-        {/* =================================================================== */}
-        {/* DEDICATED "SEARCH FOR SOMEONE" BAR & INSTANT PERSON FINDER          */}
-        {/* =================================================================== */}
-        <section className="bg-white rounded-3xl border-2 border-plum-900/20 p-4 sm:p-5 shadow-xs space-y-3">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-2xl bg-plum-900 text-gold-400 flex items-center justify-center shrink-0">
-                <Search className="w-5 h-5" />
-              </div>
-              <div>
-                <h2 className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-                  🔍 Search for Someone in the Admin Area
-                </h2>
-                <p className="text-xs text-slate-600">
-                  Search any person by <strong>Name</strong>, <strong>Email</strong>, <strong>Phone Number</strong>, <strong>Age</strong>, or <strong>Customer #</strong> to give 1 Month Free (Le 0) or manage their account immediately.
-                </p>
-              </div>
-            </div>
-
-            {onExtendUserFreeAccess && usersList.length > 0 && (
-              <button
-                type="button"
-                onClick={() => onExtendUserFreeAccess('ALL', 30)}
-                className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-plum-900 font-extrabold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer self-start md:self-auto shrink-0"
-                title="Give every logged-in person 1 Month (30 Days) Free with Le 0 added to Money Made"
-              >
-                <span>🎁 Give All {usersList.length} People 1 Month Free (Le 0)</span>
-              </button>
-            )}
-          </div>
-
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              setSearchQuery(personSearchInput.trim());
-              setIsSearchBoxFocused(true);
-              if (!personSearchInput.trim()) {
-                showToast('Showing all people in the app.', 'info');
-              } else {
-                showToast(`🔍 Searching for "${personSearchInput.trim()}"...`, 'info');
-              }
-            }}
-            className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2"
-          >
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                id="admin-person-search-input"
-                type="text"
-                value={personSearchInput}
-                onFocus={() => setIsSearchBoxFocused(true)}
-                onChange={(e) => {
-                  setPersonSearchInput(e.target.value);
-                  setSearchQuery(e.target.value);
-                }}
-                placeholder="Type Name, Email, Phone Number (076...), Age, or #1..."
-                className="w-full pl-10 pr-4 py-2.5 rounded-xl border-2 border-lavender-300 bg-cream/60 text-xs sm:text-sm font-semibold text-slate-900 outline-none focus:border-plum-900 focus:bg-white"
-              />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="submit"
-                className="px-4 py-2.5 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-400 font-extrabold text-xs sm:text-sm flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer shrink-0"
-              >
-                <Search className="w-4 h-4" />
-                <span>Search Person</span>
-              </button>
-
-              {(personSearchInput.trim() !== '' || searchQuery.trim() !== '') && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPersonSearchInput('');
-                    setSearchQuery('');
-                    setIsSearchBoxFocused(false);
-                  }}
-                  className="px-3 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-extrabold text-xs cursor-pointer shrink-0"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-          </form>
-
-          {/* Instant Search Results Preview when searching for someone */}
-          {searchQuery.trim() !== '' && (
-            <div className="rounded-2xl bg-lavender-50/70 border-2 border-lavender-300 p-3.5 space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-extrabold text-plum-900">
-                  🔍 Found {filteredUsers.length} {filteredUsers.length === 1 ? 'Person' : 'People'} matching &ldquo;{searchQuery}&rdquo;
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenTables((prev) => ({ ...prev, customerTable: true }));
-                  }}
-                  className="text-[11px] font-extrabold text-lavender-800 underline cursor-pointer"
-                >
-                  Open Full Customer Table Below
-                </button>
-              </div>
-
-              {filteredUsers.length === 0 ? (
-                <div className="rounded-xl bg-white p-3 text-xs text-slate-600 border border-slate-200">
-                  No person found matching <strong>&ldquo;{searchQuery}&rdquo;</strong>. Try searching by part of their name, email, or phone number, or click <strong>&ldquo;Sync All Entries&rdquo;</strong> at the top.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-80 overflow-y-auto pr-1">
-                  {filteredUsers.map((u, idx) => {
-                    const st = getTrialStatus(u);
-                    const custNum = u.customerNumber || idx + 1;
-                    const phoneUsed = resolveCustomerPhoneUsed(u) || 'No phone';
-                    return (
-                      <div
-                        key={`search-hit-${u.email}`}
-                        className="rounded-xl bg-white border border-lavender-200 p-3 flex flex-col justify-between gap-2 shadow-2xs"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="px-2 py-0.5 rounded-md bg-plum-900 text-gold-400 font-mono font-extrabold text-[10px]">
-                                #{custNum}
-                              </span>
-                              <span className="font-display font-extrabold text-sm text-slate-900">
-                                {u.name || 'Student'}
-                              </span>
-                              <span className="text-[11px] font-mono text-slate-500">
-                                ({u.age ? `${u.age} yrs` : '21 yrs'})
-                              </span>
-                            </div>
-                            <div className="text-xs font-mono font-bold text-lavender-900 break-all mt-0.5">
-                              ✉️ {u.email}
-                            </div>
-                            <div className="text-[11px] font-mono font-semibold text-sage-900">
-                              📞 {phoneUsed} • <strong>{st.daysLeft}d left</strong> ({st.status === 'free_password' ? '1M Free' : st.status === 'trial' ? '2W Free' : st.status})
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100">
-                          {onExtendUserFreeAccess && (
-                            <button
-                              type="button"
-                              onClick={() => onExtendUserFreeAccess(u.email, 30)}
-                              className="px-2.5 py-1.5 rounded-lg bg-plum-900 hover:bg-lavender-900 text-gold-400 font-extrabold text-[11px] cursor-pointer"
-                              title="Give 1 Month (30 Days) Free without adding money (Le 0)"
-                            >
-                              🎁 1 Month Free (Le 0)
-                            </button>
-                          )}
-                          {onExtendUserFreeAccess && (
-                            <button
-                              type="button"
-                              onClick={() => onExtendUserFreeAccess(u.email, 14)}
-                              className="px-2 py-1.5 rounded-lg bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-[10px] cursor-pointer"
-                            >
-                              +14d Free
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onApproveUserPayment(u.email);
-                              setLastApprovedUserEmail(u.email);
-                            }}
-                            className="px-2 py-1.5 rounded-lg bg-sage-600 hover:bg-sage-800 text-white font-extrabold text-[10px] cursor-pointer"
-                          >
-                            Paid +30d (+Le {passPriceSle})
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setOpenTables((prev) => ({ ...prev, customerTable: true }));
-                              handleOpenEditCustomerEntry(u);
-                            }}
-                            className="px-2 py-1.5 rounded-lg bg-lavender-100 hover:bg-lavender-200 text-lavender-900 font-extrabold text-[10px] cursor-pointer"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onRejectOrExpireUser(u.email, 'expire')}
-                            className="px-2 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-bold text-[10px] cursor-pointer"
-                          >
-                            Lock
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* =================================================================== */}
-        {/* COMPACT TABLE & TOOL LAUNCHER BUTTONS BAR (SAVES SPACE)             */}
-        {/* =================================================================== */}
-        <section className="bg-white rounded-3xl border-2 border-gold-500/40 p-4 sm:p-5 shadow-xs space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="font-display font-extrabold text-sm sm:text-base text-slate-900">
-                🗂️ Admin Tables &amp; Calculators (Click Any Button Below to Open or Hide Table)
-              </h2>
-              <p className="text-[11px] text-slate-500">
-                Each table is turned into a compact button so your Admin Area stays clean and easy to use.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setAllTablesOpen(true)}
-                className="px-3 py-1.5 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-900 border border-lavender-200 font-extrabold text-[11px] cursor-pointer"
-              >
-                Expand All Tables
-              </button>
-              <button
-                type="button"
-                onClick={() => setAllTablesOpen(false)}
-                className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[11px] cursor-pointer"
-              >
-                Collapse All (Save Space)
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {[
-              {
-                key: 'customerTable' as const,
-                label: `📋 Customer Table (${filteredUsers.length})`,
-                sub: '1st Entry to Latest',
-              },
-              {
-                key: 'liveLogins' as const,
-                label: `🟢 Live People Logging In (${recentLoginsList.length})`,
-                sub: 'Give 1M Free (Le 0)',
-              },
-              {
-                key: 'moneyCalc' as const,
-                label: `💰 Money Made (Le ${revenueSummary.grandTotalSle.toLocaleString()})`,
-                sub: 'Add or Reduce Money',
-              },
-              {
-                key: 'currencyCalc' as const,
-                label: `💱 USD ($) ⇄ Leones`,
-                sub: `$1 = Le ${usdToSleRate}`,
-              },
-              {
-                key: 'customerCards' as const,
-                label: `🪪 Detailed Customer Cards (${filteredUsers.length})`,
-                sub: 'Full Actions & Logs',
-              },
-              {
-                key: 'teamAdmins' as const,
-                label: `🛡️ Team Admins (${1 + additionalAdmins.length})`,
-                sub: 'Add / Remove Admins',
-              },
-              {
-                key: 'adminCodes' as const,
-                label: `🔑 Admin & 30d Free Codes`,
-                sub: 'Manage Passwords',
-              },
-              {
-                key: 'inboxAlerts' as const,
-                label: `📬 Login & Payment Inbox (${supportInquiries.length})`,
-                sub: 'Live Alerts Log',
-              },
-            ].map((item) => {
-              const isOpen = openTables[item.key];
+        {/* MULTI-PAGE ADMIN NAVIGATION BAR */}
+        <div className="bg-plum-950/70 border-t border-white/10">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex items-center gap-2 overflow-x-auto no-scrollbar">
+            {adminPages.map((page) => {
+              const isActive = activeAdminPage === page.id;
               return (
                 <button
-                  key={item.key}
+                  key={page.id}
                   type="button"
-                  onClick={() => toggleTableSection(item.key)}
-                  className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
-                    isOpen
-                      ? 'bg-plum-900 text-white border-gold-500 shadow-xs'
-                      : 'bg-cream/70 hover:bg-lavender-50 text-slate-900 border-slate-200'
+                  onClick={() => setActiveAdminPage(page.id)}
+                  className={`px-3.5 py-2 rounded-xl font-extrabold text-xs whitespace-nowrap flex items-center gap-2 transition-all cursor-pointer shrink-0 ${
+                    isActive
+                      ? 'bg-gold-500 text-plum-900 shadow-md scale-[1.01]'
+                      : 'bg-white/10 hover:bg-white/20 text-white border border-white/15'
                   }`}
                 >
-                  <div className="min-w-0">
-                    <div className="font-extrabold text-xs truncate">{item.label}</div>
-                    <div
-                      className={`text-[10px] truncate mt-0.5 ${
-                        isOpen ? 'text-gold-400 font-semibold' : 'text-slate-500'
+                  <span>{page.label}</span>
+                  {page.badge !== undefined && (
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-extrabold ${
+                        isActive
+                          ? 'bg-plum-900 text-gold-400'
+                          : 'bg-black/30 text-gold-300'
                       }`}
                     >
-                      {item.sub}
-                    </div>
-                  </div>
-                  {isOpen ? (
-                    <ChevronUp className="w-4 h-4 text-gold-400 shrink-0" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                      {page.badge}
+                    </span>
                   )}
                 </button>
               );
             })}
           </div>
-        </section>
-
-        {/* =================================================================== */}
-        {/* TABLE BUTTON 1: LIVE PEOPLE LOGGING IN & REAL-TIME SIGN-IN FEED     */}
-        {/* =================================================================== */}
-        <section className="bg-white rounded-3xl border-2 border-emerald-300 shadow-xs overflow-hidden">
-          <button
-            type="button"
-            onClick={() => toggleTableSection('liveLogins')}
-            className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 bg-emerald-50/60 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                <BellRing className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-                    🟢 Live People Logging In &amp; Sign-Up Feed ({recentLoginsList.length} People)
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300 text-[10px] font-extrabold">
-                    Click to {openTables.liveLogins ? 'Hide' : 'Open'} Table
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600">
-                  See everyone logging in and give 1 Month Free (Le 0) with 1 click.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white font-extrabold text-xs flex items-center gap-1">
-                <span>{openTables.liveLogins ? 'Hide Table' : 'Open Table'}</span>
-                {openTables.liveLogins ? (
-                  <ChevronUp className="w-4 h-4" />
-                ) : (
-                  <ChevronDown className="w-4 h-4" />
-                )}
-              </span>
-            </div>
-          </button>
-
-          {openTables.liveLogins && (
-            <div className="p-5 sm:p-6 border-t border-emerald-200 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-slate-600">
-                  Every person who creates an account or signs in from any phone or computer appears here immediately.
-                </p>
-                <div className="flex flex-wrap items-center gap-2">
-                  {onExtendUserFreeAccess && recentLoginsList.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => onExtendUserFreeAccess('ALL', 30)}
-                      className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-plum-900 font-extrabold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
-                      title="Give every logged-in person 1 Month (30 Days) Free without adding any money to Money Made"
-                    >
-                      <span>🎁 Give All People 1 Month Free (Le 0)</span>
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handleManualSyncClick}
-                    className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingEntries ? 'animate-spin' : ''}`} />
-                    <span>Refresh People Logging In</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleEmailAllLoginsToOwner}
-                    className="px-3.5 py-2 rounded-xl bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
-                  >
-                    <Mail className="w-3.5 h-3.5" />
-                    <span>Send Login Info to My Email</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleWhatsAppAllLoginsToOwner}
-                    className="px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                  >
-                    <MessageSquare className="w-3.5 h-3.5" />
-                    <span>WhatsApp Login List</span>
-                  </button>
-                </div>
-              </div>
-
-              {recentLoginsList.length === 0 ? (
-                <div className="rounded-2xl bg-cream p-5 text-center text-xs text-slate-600 border border-slate-200">
-                  No logins recorded yet. Click <strong>&ldquo;Refresh People Logging In&rdquo;</strong>.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {recentLoginsList.slice(0, 12).map((u, idx) => {
-                    const phoneUsed = resolveCustomerPhoneUsed(u) || 'Not entered';
-                    const lastLoginDate = u.lastSignInAt
-                      ? new Date(u.lastSignInAt).toLocaleString('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })
-                      : u.firstEntryAt || u.createdAt
-                      ? new Date(u.firstEntryAt || u.createdAt).toLocaleString('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: 'numeric',
-                          minute: '2-digit',
-                        })
-                      : 'Just now';
-                    const st = getTrialStatus(u);
-
-                    return (
-                      <div
-                        key={`recent-login-${u.email}-${idx}`}
-                        className="rounded-2xl bg-emerald-50/50 border border-emerald-200 p-3.5 flex flex-col justify-between gap-2.5"
-                      >
-                        <div>
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="px-2 py-0.5 rounded-md bg-plum-900 text-gold-400 font-mono font-extrabold text-[11px]">
-                              Customer #{u.customerNumber || idx + 1}
-                            </span>
-                            <span className="text-[11px] font-mono font-bold text-emerald-800">
-                              🕒 {lastLoginDate}
-                            </span>
-                          </div>
-                          <div className="font-display font-extrabold text-sm text-slate-900 mt-1.5">
-                            {u.name || 'Student'}{' '}
-                            <span className="text-xs font-mono font-bold text-slate-500">
-                              ({u.age ? `${u.age} yrs` : '21 yrs'})
-                            </span>
-                          </div>
-                          <div className="text-xs font-mono font-bold text-lavender-900 break-all">
-                            ✉️ {u.email}
-                          </div>
-                          <div className="text-xs font-mono font-bold text-sage-900 mt-0.5">
-                            📞 Phone Used: {phoneUsed}
-                          </div>
-                        </div>
-
-                        <div className="pt-2 border-t border-emerald-200/70 space-y-2">
-                          <div className="flex items-center justify-between text-[11px] text-slate-600">
-                            <span className="truncate max-w-[165px]">
-                              {u.deviceInfo || '📱/💻 WebApp'} • {u.signInCount || 1} login(s)
-                            </span>
-                            <span className="font-extrabold text-emerald-900">
-                              {st.daysLeft}d left (
-                              {st.status === 'free_password'
-                                ? 'Free 1M'
-                                : st.status === 'trial'
-                                ? 'Free 2W'
-                                : st.status}
-                              )
-                            </span>
-                          </div>
-
-                          {onExtendUserFreeAccess && (
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => onExtendUserFreeAccess(u.email, 30)}
-                                className="flex-1 py-1.5 px-2.5 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-400 font-extrabold text-[11px] flex items-center justify-center gap-1 shadow-2xs transition-all cursor-pointer"
-                                title="Give this logged-in person 1 Month (30 Days) Free without adding to Money Made (Le 0)"
-                              >
-                                <span>🎁 Give 1 Month Free (Le 0)</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => onExtendUserFreeAccess(u.email, 14)}
-                                className="py-1.5 px-2 rounded-xl bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-extrabold text-[10px] transition-all cursor-pointer"
-                                title="Extend +14 days free access (Le 0)"
-                              >
-                                +14d Free
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* =================================================================== */}
-        {/* TABLE BUTTONS 2 & 3: TWO ADMIN CALCULATORS (COLLAPSIBLE BUTTONS)    */}
-        {/* =================================================================== */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* CALCULATOR 1 BUTTON: APP EARNINGS & REVENUE CALCULATOR ("MONEY THE APP IS MAKING") */}
-          <section className="bg-white rounded-3xl border-2 border-amber-300 shadow-xs overflow-hidden self-start">
-            <button
-              type="button"
-              onClick={() => toggleTableSection('moneyCalc')}
-              className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 bg-amber-50/70 hover:bg-amber-50 transition-colors text-left cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-amber-500 text-plum-900 flex items-center justify-center shrink-0">
-                  <Calculator className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-900 block">
-                    💰 App Revenue &amp; Auto Money Reducer
-                  </span>
-                  <h2 className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-                    Money the App Is Making: Le {revenueSummary.grandTotalSle.toLocaleString()} ($
-                    {revenueSummary.grandTotalUsd.toFixed(2)})
-                  </h2>
-                </div>
-              </div>
-              <span className="px-3 py-1.5 rounded-xl bg-amber-600 text-white font-extrabold text-xs flex items-center gap-1 shrink-0">
-                <span>{openTables.moneyCalc ? 'Hide' : 'Open'}</span>
-                {openTables.moneyCalc ? (
-                  <ChevronUp className="w-4 h-4" />
-                ) : (
-                  <ChevronDown className="w-4 h-4" />
-                )}
-              </span>
-            </button>
-
-            {openTables.moneyCalc && (
-              <div className="p-5 sm:p-6 border-t border-amber-200 space-y-4">
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const summaryText =
-                        `💰 BloomCampus & Sidratu App Revenue Summary\n` +
-                        `• Price per 30-Day Pass: Le ${passPriceSle}\n` +
-                        `• Paid Verified Passes (${revenueSummary.activePaidPassesCount}): Le ${revenueSummary.confirmedPassRevenueSle.toLocaleString()}\n` +
-                        `• Pending Passes (${stats.pending}): Le ${revenueSummary.pendingPassRevenueSle.toLocaleString()}\n` +
-                        `• Custom Added Money (${customRevenueItems.length} items): Le ${revenueSummary.customItemsTotalSle.toLocaleString()}\n` +
-                        `• GRAND TOTAL MONEY MADE: Le ${revenueSummary.grandTotalSle.toLocaleString()} SLE (≈ $${revenueSummary.grandTotalUsd.toFixed(2)} USD / ${revenueSummary.grandTotalOldLeones.toLocaleString()} Old Leones)`;
-                      navigator.clipboard?.writeText(summaryText);
-                      showToast('📋 Copied App Money & Revenue Report to clipboard!', 'success');
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-xs flex items-center gap-1 cursor-pointer"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Copy Total Report</span>
-                  </button>
-                </div>
-
-                {/* Grand Total Display Banner */}
-                <div className="rounded-2xl bg-gradient-to-r from-plum-900 via-lavender-900 to-plum-900 text-white p-4 border border-gold-500/40 shadow-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-gold-400">
-                      Grand Total Money Made (Auto Subscriptions + Added Entries)
-                    </span>
-                    <label className="inline-flex items-center gap-1.5 text-[11px] font-bold text-white/90 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={includePendingInTotal}
-                        onChange={(e) => setIncludePendingInTotal(e.target.checked)}
-                        className="rounded border-white/30"
-                      />
-                      <span>Include Pending ({stats.pending})</span>
-                    </label>
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-baseline justify-between gap-3">
-                    <div className="font-display font-extrabold text-3xl sm:text-4xl text-gold-400 tabular-nums">
-                      Le {revenueSummary.grandTotalSle.toLocaleString()}{' '}
-                      <span className="text-xs font-mono text-white/80">SLE (New Leones)</span>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-mono font-extrabold text-lg text-emerald-300 tabular-nums">
-                        ≈ ${revenueSummary.grandTotalUsd.toFixed(2)} USD
-                      </div>
-                      <div className="font-mono text-[11px] text-white/75 tabular-nums">
-                        Old Leones: Le {revenueSummary.grandTotalOldLeones.toLocaleString()} SLL
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Automatic Subscription Breakdown Grid with Direct Reduce / Set Auto Money Controls */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
-                  <div className="rounded-xl bg-cream p-3 border border-slate-200">
-                    <span className="text-[10px] font-extrabold uppercase text-slate-500 block">
-                      Price Per 30-Day Pass (Le)
-                    </span>
-                    <div className="mt-1 flex items-center gap-1.5">
-                      <span className="font-bold text-slate-700">Le</span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
-                        value={passPriceSle}
-                        onChange={(e) => {
-                          const v = parseFloat(e.target.value);
-                          setPassPriceSle(!Number.isNaN(v) && v >= 0 ? v : 0);
-                        }}
-                        className="w-full px-2.5 py-1 rounded-lg border border-slate-300 bg-white font-mono font-extrabold text-sm text-slate-900"
-                      />
-                    </div>
-                    <span className="text-[10px] text-slate-500 mt-1 block">
-                      🎁 1-Month Free grants = Le 0
-                    </span>
-                  </div>
-
-                  <div className="rounded-xl bg-emerald-50/70 p-3 border border-emerald-200 space-y-1.5">
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="text-[10px] font-extrabold uppercase text-emerald-800">
-                        Auto Money Made ({revenueSummary.activePaidPassesCount} Paid)
-                      </span>
-                      {autoMoneyAdjustmentSle !== 0 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAutoMoneyAdjustmentSle(0);
-                            showToast('Reset Auto Money Made to default paid pass count.', 'info');
-                          }}
-                          className="text-[10px] font-extrabold text-emerald-800 underline cursor-pointer"
-                        >
-                          Reset
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-bold text-emerald-900 text-xs">Le</span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={revenueSummary.confirmedPassRevenueSle}
-                        onChange={(e) => {
-                          const val = parseFloat(e.target.value);
-                          handleSetExactAutoMoney(!Number.isNaN(val) && val >= 0 ? val : 0);
-                        }}
-                        className="w-full px-2 py-1 rounded-lg border border-emerald-300 bg-white font-mono font-extrabold text-sm text-emerald-900"
-                        title="Type any amount to directly set or reduce Auto Money Made"
-                      />
-                    </div>
-                    <div className="flex flex-wrap items-center gap-1 pt-0.5">
-                      <button
-                        type="button"
-                        onClick={() => handleAdjustAutoMoney(-(passPriceSle || 30))}
-                        className="px-2 py-0.5 rounded-md bg-rose-100 hover:bg-rose-200 text-rose-900 border border-rose-300 font-mono font-extrabold text-[10px] cursor-pointer"
-                        title="Reduce Auto Money Made by 1 pass"
-                      >
-                        −Le {passPriceSle || 30}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleAdjustAutoMoney(passPriceSle || 30)}
-                        className="px-2 py-0.5 rounded-md bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300 font-mono font-extrabold text-[10px] cursor-pointer"
-                        title="Add 1 pass to Auto Money Made"
-                      >
-                        +Le {passPriceSle || 30}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleSetExactAutoMoney(0);
-                          showToast('📉 Set Auto Money Made to Le 0!', 'info');
-                        }}
-                        className="px-2 py-0.5 rounded-md bg-white hover:bg-rose-50 text-rose-800 border border-rose-200 font-extrabold text-[10px] cursor-pointer"
-                        title="Set Auto Money Made to Le 0"
-                      >
-                        Set Le 0
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl bg-orange-50/70 p-3 border border-orange-200">
-                    <span className="text-[10px] font-extrabold uppercase text-orange-800 block">
-                      Pending Passes ({stats.pending})
-                    </span>
-                    <div className="font-display font-extrabold text-base text-orange-800 mt-1 tabular-nums">
-                      Le {revenueSummary.pendingPassRevenueSle.toLocaleString()}
-                    </div>
-                    <span className="text-[10px] text-orange-700">
-                      {includePendingInTotal ? 'Included in total' : 'Check box above to include'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Quick-Tap Money Adder & Reducer Buttons */}
-                <div className="space-y-2">
-                  <div className="space-y-1">
-                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600 block">
-                      Quick-Tap to Add Up Money (+Le):
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {[
-                        { amount: 30, label: '1 Subscription Pass (+Le 30)' },
-                        { amount: 60, label: '2 Subscription Passes (+Le 60)' },
-                        { amount: 150, label: '5 Subscription Passes (+Le 150)' },
-                        { amount: 300, label: '10 Subscription Passes (+Le 300)' },
-                        { amount: 500, label: 'Clinic / Custom (+Le 500)' },
-                        { amount: 1000, label: 'Clinic / Custom (+Le 1,000)' },
-                      ].map((btn) => (
-                        <button
-                          key={btn.label}
-                          type="button"
-                          onClick={() => handleQuickAddMoney(btn.amount, btn.label)}
-                          className="px-2.5 py-1.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-mono font-extrabold text-xs transition-all cursor-pointer"
-                        >
-                          +Le {btn.amount}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-800 block">
-                      Quick-Tap to Reduce / Subtract Money (−Le):
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {[
-                        { amount: 30, label: 'Reduce 1 Pass (−Le 30)' },
-                        { amount: 60, label: 'Reduce 2 Passes (−Le 60)' },
-                        { amount: 150, label: 'Reduce 5 Passes (−Le 150)' },
-                        { amount: 300, label: 'Reduce 10 Passes (−Le 300)' },
-                        { amount: 500, label: 'Reduce Custom (−Le 500)' },
-                      ].map((btn) => (
-                        <button
-                          key={btn.label}
-                          type="button"
-                          onClick={() => handleAdjustAutoMoney(-btn.amount)}
-                          className="px-2.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-900 border border-rose-300 font-mono font-extrabold text-xs transition-all cursor-pointer"
-                        >
-                          −Le {btn.amount}
-                        </button>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleSetExactAutoMoney(0);
-                          setCustomRevenueItems([]);
-                          setIncludePendingInTotal(false);
-                          showToast('📉 Reset Total App Money Made to Le 0!', 'info');
-                        }}
-                        className="px-2.5 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-extrabold text-xs transition-all cursor-pointer"
-                      >
-                        Reset All Money to Le 0
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Custom Revenue Item Form (Supports + Add and − Reduce) */}
-                <form
-                  onSubmit={(e) => handleAddCustomRevenueItem(e, 'add')}
-                  className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end bg-cream p-3 rounded-2xl border border-slate-200"
-                >
-                  <div className="sm:col-span-4">
-                    <label className="text-[10px] font-extrabold uppercase text-slate-600 block mb-1">
-                      Description / Note
-                    </label>
-                    <input
-                      type="text"
-                      value={newRevLabel}
-                      onChange={(e) => setNewRevLabel(e.target.value)}
-                      placeholder="e.g., Direct Orange Money / Expense"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-900"
-                    />
-                  </div>
-                  <div className="sm:col-span-3">
-                    <label className="text-[10px] font-extrabold uppercase text-slate-600 block mb-1">
-                      Amount *
-                    </label>
-                    <input
-                      type="number"
-                      step="any"
-                      min="0"
-                      value={newRevAmount}
-                      onChange={(e) => setNewRevAmount(e.target.value)}
-                      placeholder="e.g., 30"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono font-extrabold text-xs text-slate-900"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="text-[10px] font-extrabold uppercase text-slate-600 block mb-1">
-                      Currency
-                    </label>
-                    <select
-                      value={newRevCurrency}
-                      onChange={(e) => setNewRevCurrency(e.target.value as 'SLE' | 'USD')}
-                      className="w-full px-2 py-2 rounded-xl border border-slate-300 bg-white font-extrabold text-xs text-slate-900"
-                    >
-                      <option value="SLE">Le (SLE)</option>
-                      <option value="USD">$ (USD)</option>
-                    </select>
-                  </div>
-                  <div className="sm:col-span-3 flex items-center gap-1.5">
-                    <button
-                      type="submit"
-                      className="flex-1 py-2 px-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs flex items-center justify-center gap-1 cursor-pointer h-[34px]"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Add</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAddCustomRevenueItem(undefined, 'reduce')}
-                      className="flex-1 py-2 px-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs flex items-center justify-center gap-1 cursor-pointer h-[34px]"
-                    >
-                      <span>− Reduce</span>
-                    </button>
-                  </div>
-                </form>
-
-                {/* List of Added / Reduced Revenue Entries */}
-                {customRevenueItems.length > 0 && (
-                  <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
-                    <div className="flex items-center justify-between text-[11px] font-extrabold text-slate-600">
-                      <span>
-                        Custom Money Entries ({customRevenueItems.length}) — Net: Le{' '}
-                        {revenueSummary.customItemsTotalSle.toLocaleString()}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCustomRevenueItems([]);
-                          showToast('Cleared custom money entries.', 'info');
-                        }}
-                        className="text-rose-700 hover:underline cursor-pointer"
-                      >
-                        Clear All
-                      </button>
-                    </div>
-                    {customRevenueItems.map((item) => (
-                      <div
-                        key={item.id}
-                        className={`flex items-center justify-between gap-2 px-3 py-2 rounded-xl border text-xs ${
-                          item.amountSle < 0
-                            ? 'bg-rose-50/70 border-rose-200'
-                            : 'bg-amber-50/50 border-amber-200'
-                        }`}
-                      >
-                        <div className="truncate">
-                          <span className="font-bold text-slate-900">{item.label}</span>{' '}
-                          <span className="text-[10px] text-slate-500">({item.createdAt})</span>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span
-                            className={`font-mono font-extrabold ${
-                              item.amountSle < 0 ? 'text-rose-800' : 'text-amber-900'
-                            }`}
-                          >
-                            {item.amountSle < 0
-                              ? `−Le ${Math.abs(item.amountSle).toLocaleString()}`
-                              : `+Le ${item.amountSle.toLocaleString()}`}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setCustomRevenueItems((prev) => prev.filter((x) => x.id !== item.id))
-                            }
-                            className="text-slate-400 hover:text-rose-700 font-bold cursor-pointer"
-                            title="Remove item"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* CALCULATOR 2 BUTTON: USD ($) ⇄ SIERRA LEONEAN LEONES CONVERTER & QUICK CHECK CALCULATOR */}
-          <section className="bg-white rounded-3xl border-2 border-lavender-300 shadow-xs overflow-hidden self-start">
-            <button
-              type="button"
-              onClick={() => toggleTableSection('currencyCalc')}
-              className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 bg-lavender-50/70 hover:bg-lavender-50 transition-colors text-left cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-lavender-700 text-white flex items-center justify-center shrink-0">
-                  <DollarSign className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-lavender-800 block">
-                    💱 Currency &amp; Quick Check Calculator
-                  </span>
-                  <h2 className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-                    Convert $ (USD) ⇄ Leones ($1 = Le {usdToSleRate})
-                  </h2>
-                </div>
-              </div>
-              <span className="px-3 py-1.5 rounded-xl bg-lavender-700 text-white font-extrabold text-xs flex items-center gap-1 shrink-0">
-                <span>{openTables.currencyCalc ? 'Hide' : 'Open'}</span>
-                {openTables.currencyCalc ? (
-                  <ChevronUp className="w-4 h-4" />
-                ) : (
-                  <ChevronDown className="w-4 h-4" />
-                )}
-              </span>
-            </button>
-
-            {openTables.currencyCalc && (
-              <div className="p-5 sm:p-6 border-t border-lavender-200 space-y-4">
-                <div className="flex items-center justify-between gap-2 bg-cream px-3 py-2 rounded-xl border border-slate-200">
-                  <span className="text-xs font-extrabold text-slate-700">
-                    Exchange Rate (1 US Dollar in New Leones):
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-extrabold text-slate-600">$1 = Le</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      value={usdToSleRate}
-                      onChange={(e) => handleRateChange(e.target.value)}
-                      className="w-20 px-2 py-1 rounded-lg border border-slate-300 bg-white font-mono font-extrabold text-xs text-slate-900"
-                    />
-                  </div>
-                </div>
-
-                {/* Two-Way USD ($) <-> Leones (SLE) Converter Box */}
-                <div className="grid grid-cols-1 sm:grid-cols-11 gap-2.5 items-center bg-gradient-to-r from-lavender-50 via-white to-emerald-50 p-4 rounded-2xl border border-lavender-200">
-                  <div className="sm:col-span-5">
-                    <label className="text-[11px] font-extrabold uppercase tracking-wider text-lavender-900 block mb-1">
-                      🇺🇸 US Dollars ($ USD)
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 font-mono font-extrabold text-slate-500">
-                        $
-                      </span>
-                      <input
-                        type="number"
-                        step="any"
-                        min="0"
-                        value={usdInputStr}
-                        onChange={(e) => handleUsdInputChange(e.target.value)}
-                        placeholder="0.00"
-                        className="w-full pl-7 pr-3 py-2.5 rounded-xl border-2 border-lavender-300 bg-white font-mono font-extrabold text-base text-slate-900 outline-none focus:border-lavender-700"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="sm:col-span-1 flex justify-center">
-                    <div className="w-8 h-8 rounded-full bg-lavender-100 text-lavender-800 flex items-center justify-center">
-                      <ArrowRightLeft className="w-4 h-4" />
-                    </div>
-                  </div>
-
-                  <div className="sm:col-span-5">
-                    <label className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-900 block mb-1">
-                      🇸🇱 New Leones (Le / SLE)
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 font-mono font-extrabold text-slate-500 text-xs">
-                        Le
-                      </span>
-                      <input
-                        type="number"
-                        step="any"
-                        min="0"
-                        value={sleInputStr}
-                        onChange={(e) => handleSleInputChange(e.target.value)}
-                        placeholder="0.00"
-                        className="w-full pl-9 pr-3 py-2.5 rounded-xl border-2 border-emerald-300 bg-white font-mono font-extrabold text-base text-emerald-900 outline-none focus:border-emerald-700"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Instant Conversion Readout (New SLE + Old SLL + Subscription Pass Equivalent) */}
-                <div className="rounded-2xl bg-plum-900 text-white p-3.5 border border-gold-500/40 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                  <div>
-                    <span className="text-[10px] font-bold uppercase text-gold-400 block">
-                      New Leones (SLE)
-                    </span>
-                    <span className="font-mono font-extrabold text-base text-white tabular-nums">
-                      Le {(parseFloat(sleInputStr) || 0).toLocaleString()}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-bold uppercase text-gold-400 block">
-                      Old Leones (SLL × 1,000)
-                    </span>
-                    <span className="font-mono font-extrabold text-base text-emerald-300 tabular-nums">
-                      Le {Math.round((parseFloat(sleInputStr) || 0) * 1000).toLocaleString()}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-bold uppercase text-gold-400 block">
-                      Equals Le {passPriceSle} Passes
-                    </span>
-                    <span className="font-mono font-extrabold text-base text-amber-300 tabular-nums">
-                      {passPriceSle > 0
-                        ? ((parseFloat(sleInputStr) || 0) / passPriceSle).toFixed(1)
-                        : '0'}{' '}
-                      passes
-                    </span>
-                  </div>
-                </div>
-
-                {/* Quick Preset USD ($) Buttons */}
-                <div className="space-y-1.5">
-                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600 block">
-                    Tap Dollar Amount to Check in Leones:
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {[1, 2, 5, 10, 20, 50, 100, 250, 500, 1000].map((amt) => (
-                      <button
-                        key={amt}
-                        type="button"
-                        onClick={() => handleUsdInputChange(String(amt))}
-                        className={`px-2.5 py-1.5 rounded-xl font-mono font-extrabold text-xs border transition-all cursor-pointer ${
-                          Number(usdInputStr) === amt
-                            ? 'bg-lavender-700 text-white border-lavender-700'
-                            : 'bg-lavender-50 hover:bg-lavender-100 text-lavender-900 border-lavender-200'
-                        }`}
-                      >
-                        ${amt}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Built-In Quick Check Math Calculator (+, -, ×, ÷) */}
-                <div className="rounded-2xl bg-cream p-3.5 border border-slate-200 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-700">
-                      🧮 Quick Math Check Pad (+, −, ×, ÷)
-                    </span>
-                    <select
-                      value={calcInputCurrency}
-                      onChange={(e) => setCalcInputCurrency(e.target.value as 'SLE' | 'USD')}
-                      className="px-2 py-1 rounded-lg border border-slate-300 bg-white font-extrabold text-[11px] text-slate-800"
-                    >
-                      <option value="SLE">Numbers in Le (SLE)</option>
-                      <option value="USD">Numbers in $ (USD)</option>
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-7 gap-2 items-center">
-                    <input
-                      type="number"
-                      step="any"
-                      value={calcNumA}
-                      onChange={(e) => setCalcNumA(e.target.value)}
-                      placeholder="First #"
-                      className="col-span-2 px-2.5 py-2 rounded-xl border border-slate-300 bg-white font-mono font-extrabold text-xs text-slate-900"
-                    />
-                    <div className="col-span-3 flex items-center justify-center gap-1">
-                      {(['+', '-', '×', '÷'] as const).map((op) => (
-                        <button
-                          key={op}
-                          type="button"
-                          onClick={() => setCalcOp(op)}
-                          className={`w-8 h-8 rounded-lg font-mono font-extrabold text-sm cursor-pointer transition-all ${
-                            calcOp === op
-                              ? 'bg-plum-900 text-gold-400 shadow-2xs'
-                              : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
-                          }`}
-                        >
-                          {op}
-                        </button>
-                      ))}
-                    </div>
-                    <input
-                      type="number"
-                      step="any"
-                      value={calcNumB}
-                      onChange={(e) => setCalcNumB(e.target.value)}
-                      placeholder="Second #"
-                      className="col-span-2 px-2.5 py-2 rounded-xl border border-slate-300 bg-white font-mono font-extrabold text-xs text-slate-900"
-                    />
-                  </div>
-
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200 text-xs">
-                    <div>
-                      <span className="text-slate-500 font-bold">Result: </span>
-                      <span className="font-mono font-extrabold text-sm text-slate-900">
-                        Le {quickCalcResult.resultSle.toLocaleString()} SLE
-                      </span>{' '}
-                      <span className="font-mono font-bold text-lavender-800">
-                        (≈ ${quickCalcResult.resultUsd.toFixed(2)} USD)
-                      </span>
-                    </div>
-                    {quickCalcResult.resultSle > 0 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          handleQuickAddMoney(
-                            quickCalcResult.resultSle,
-                            `Calc: ${calcNumA} ${calcOp} ${calcNumB} (${calcInputCurrency})`
-                          )
-                        }
-                        className="px-2.5 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-extrabold text-[11px] cursor-pointer"
-                      >
-                        + Add Result to App Money
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </section>
         </div>
+      </header>
 
+      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 space-y-6 flex-1">
         {/* =================================================================== */}
-        {/* TABLE BUTTON 4: MASTER CUSTOMER ENTRIES TABLE (COLLAPSIBLE BUTTON)  */}
+        {/* PAGE 1: DEDICATED CUSTOMER ENTRIES PAGE (WITH SEARCH & PAGINATION)  */}
         {/* =================================================================== */}
-        <section className="bg-white rounded-3xl border-2 border-lavender-200 shadow-xs overflow-hidden">
-          <button
-            type="button"
-            onClick={() => toggleTableSection('customerTable')}
-            className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 bg-lavender-50/60 hover:bg-lavender-50 transition-colors text-left cursor-pointer"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-plum-900 text-gold-400 flex items-center justify-center shrink-0">
-                <Users className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-                    📋 Customer Entries Directory Table — #1 to #{usersList.length} ({filteredUsers.length} Shown)
-                  </span>
-                  <span className="px-2.5 py-0.5 rounded-lg bg-plum-900 text-gold-400 text-xs font-extrabold">
-                    {stats.total} Total
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600">
-                  Compact table of Name, Email, Age, Phone &amp; 1-Click &ldquo;🎁 1 Month Free (Le 0)&rdquo;.
-                </p>
-              </div>
-            </div>
-            <span className="px-3 py-1.5 rounded-xl bg-plum-900 text-gold-400 font-extrabold text-xs flex items-center gap-1 shrink-0">
-              <span>{openTables.customerTable ? 'Hide Table' : 'Open Table'}</span>
-              {openTables.customerTable ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
-            </span>
-          </button>
-
-          {openTables.customerTable && (
-            <div className="p-5 sm:p-6 border-t border-lavender-200 space-y-4">
-              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="relative flex-1 sm:w-72">
-                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => {
-                        setSearchQuery(e.target.value);
-                        setPersonSearchInput(e.target.value);
-                      }}
-                      placeholder="Filter table by #1, name, email, phone..."
-                      className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-200 bg-cream text-xs font-medium outline-none focus:border-lavender-500"
-                    />
+        {activeAdminPage === 'entries' && (
+          <div className="space-y-5">
+            {/* Page Banner + Quick Actions */}
+            <div className="bg-white rounded-3xl border-2 border-plum-900/20 p-5 shadow-xs space-y-4">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-plum-900 text-gold-400 flex items-center justify-center shrink-0">
+                    <Users className="w-5 h-5" />
                   </div>
-
-                  <div className="flex flex-wrap gap-1 bg-cream p-1 rounded-xl border border-slate-200">
-                    {(
-                      [
-                        { id: 'all', label: `All (${stats.total})` },
-                        { id: 'pending', label: `Pending (${stats.pending})` },
-                        { id: 'active', label: `Active (${stats.active})` },
-                        { id: 'free_password', label: `30d Free (${stats.freePass})` },
-                        { id: 'expired', label: `Expired (${stats.expired})` },
-                      ] as const
-                    ).map((tab) => (
-                      <button
-                        key={tab.id}
-                        type="button"
-                        onClick={() => setFilterTab(tab.id)}
-                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                          filterTab === tab.id
-                            ? 'bg-lavender-700 text-white shadow-2xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        {tab.label}
-                      </button>
-                    ))}
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-md bg-plum-900 text-gold-400">
+                        Page 1 of 6 · Dedicated Customer Directory
+                      </span>
+                      <span className="text-xs font-extrabold text-emerald-800">
+                        {filteredUsers.length} Matching of {stats.total} Total People
+                      </span>
+                    </div>
+                    <h2 className="font-display font-extrabold text-lg sm:text-xl text-slate-900 mt-0.5">
+                      👥 Customer Entries Directory (Built for High Volume &amp; Instant Search)
+                    </h2>
+                    <p className="text-xs text-slate-600">
+                      Search by Name, Email, Phone Number, Age, or Entry #, filter by status, navigate pages, or delete individual/bulk entries permanently.
+                    </p>
                   </div>
                 </div>
 
@@ -2235,23 +1268,37 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                           setManualUserAge('21');
                           setManualUserEmail('');
                           setManualUserPhone('');
+                          setManualUserPassword('');
                           setManualSubStatus('active');
                           setManualSubDays('14');
                         } else {
                           setShowAddUserForm((prev) => !prev);
                         }
                       }}
-                      className="px-3.5 py-2 rounded-xl bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                      className="px-3.5 py-2.5 rounded-xl bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
                     >
                       <UserPlus className="w-3.5 h-3.5" />
-                      <span>{showAddUserForm ? 'Close Form' : '+ Register / Edit Customer'}</span>
+                      <span>
+                        {showAddUserForm ? 'Close Entry Form' : '+ Add / Edit Customer Entry'}
+                      </span>
+                    </button>
+                  )}
+
+                  {onExtendUserFreeAccess && usersList.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => onExtendUserFreeAccess('ALL', 30)}
+                      className="px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-plum-900 font-extrabold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                      title="Give every logged-in person 1 Month (30 Days) Free with Le 0 added to Money Made"
+                    >
+                      <span>🎁 Give All {usersList.length} People 1M Free (Le 0)</span>
                     </button>
                   )}
 
                   <button
                     type="button"
                     onClick={handleCopyAllCustomersText}
-                    className="px-3 py-2 rounded-xl bg-cream hover:bg-lavender-50 text-slate-800 border border-slate-200 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                    className="px-3 py-2.5 rounded-xl bg-cream hover:bg-lavender-50 text-slate-800 border border-slate-200 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
                   >
                     <Copy className="w-3.5 h-3.5 text-lavender-700" />
                     <span>Copy Report</span>
@@ -2260,7 +1307,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                   <button
                     type="button"
                     onClick={handleExportUsersCsv}
-                    className="px-3 py-2 rounded-xl bg-sage-50 hover:bg-sage-100 text-sage-900 border border-sage-300 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                    className="px-3 py-2.5 rounded-xl bg-sage-50 hover:bg-sage-100 text-sage-900 border border-sage-300 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5 text-sage-700" />
                     <span>Export CSV</span>
@@ -2268,7 +1315,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                 </div>
               </div>
 
-              {/* Manual Register / Edit Customer Entry Form (No User Password Field) */}
+              {/* Manual Register / Edit Customer Entry Form */}
               {showAddUserForm && onRegisterNewUserByAdmin && (
                 <form
                   onSubmit={handleManualUserSubmit}
@@ -2277,8 +1324,8 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-extrabold uppercase tracking-wider text-lavender-900">
                       {editingOriginalEmail
-                        ? `✏️ Editing Customer Entry (${editingOriginalEmail}) — Update Details & Subscription`
-                        : '➕ Register / Record Customer Entry (Name, Email, Age, Phone & Subscription)'}
+                        ? `✏️ Editing Customer Entry (${editingOriginalEmail})`
+                        : '➕ Register New Customer Entry'}
                     </span>
                     {editingOriginalEmail && (
                       <button
@@ -2289,6 +1336,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                           setManualUserAge('21');
                           setManualUserEmail('');
                           setManualUserPhone('');
+                          setManualUserPassword('');
                           setManualSubStatus('active');
                           setManualSubDays('14');
                         }}
@@ -2299,7 +1347,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
                     <div>
                       <label className="text-[11px] font-extrabold uppercase text-slate-700 block mb-1">
                         1. Customer Name *
@@ -2343,14 +1391,25 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                     </div>
                     <div>
                       <label className="text-[11px] font-extrabold uppercase text-slate-700 block mb-1">
-                        4. Number Used (Phone) *
+                        4. Number Used (Phone)
                       </label>
                       <input
                         type="tel"
-                        required
                         value={manualUserPhone}
                         onChange={(e) => setManualUserPhone(e.target.value)}
                         placeholder="076 123 456"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono font-bold text-slate-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-extrabold uppercase text-slate-700 block mb-1">
+                        5. Account Password
+                      </label>
+                      <input
+                        type="text"
+                        value={manualUserPassword}
+                        onChange={(e) => setManualUserPassword(e.target.value)}
+                        placeholder="Optional password"
                         className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono font-bold text-slate-900"
                       />
                     </div>
@@ -2359,7 +1418,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end pt-1">
                     <div>
                       <label className="text-[11px] font-extrabold uppercase text-slate-700 block mb-1">
-                        5. Subscription Status
+                        6. Subscription Status
                       </label>
                       <select
                         value={manualSubStatus}
@@ -2382,7 +1441,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                     </div>
                     <div>
                       <label className="text-[11px] font-extrabold uppercase text-slate-700 block mb-1">
-                        6. Remaining Access Days
+                        7. Remaining Access Days
                       </label>
                       <input
                         type="number"
@@ -2415,6 +1474,207 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                   </div>
                 </form>
               )}
+
+              {/* DEDICATED HIGH-VOLUME SEARCH BAR + SUBSCRIPTION STATUS DROPDOWN + SORT + PAGE SIZE */}
+              <div className="p-4 rounded-2xl bg-cream/90 border-2 border-lavender-200 space-y-3.5">
+                <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-2.5">
+                  {/* Search Bar by Name or Email */}
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-plum-900 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      id="entries-page-search-input"
+                      type="text"
+                      aria-label="Search users by name or email"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search users by Name or Email (or Phone / Entry #)..."
+                      className="w-full pl-10 pr-24 py-3 rounded-xl border-2 border-lavender-300 bg-white text-xs sm:text-sm font-semibold text-slate-900 outline-none focus:border-plum-900 shadow-2xs"
+                    />
+                    {searchQuery.trim() !== '' && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchQuery('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 font-extrabold text-[11px] cursor-pointer"
+                      >
+                        Clear ✕
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Subscription Status Filter Dropdown (Active, Expired, Pending) */}
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-2 bg-white px-3.5 py-2.5 rounded-xl border-2 border-lavender-300 shadow-2xs">
+                      <label
+                        htmlFor="user-subscription-status-filter"
+                        className="text-[11px] font-extrabold uppercase tracking-wider text-plum-900 whitespace-nowrap"
+                      >
+                        Status:
+                      </label>
+                      <select
+                        id="user-subscription-status-filter"
+                        aria-label="Filter users by subscription status"
+                        value={filterTab}
+                        onChange={(e) =>
+                          setFilterTab(
+                            e.target.value as
+                              | 'all'
+                              | 'active'
+                              | 'expired'
+                              | 'pending'
+                              | 'free_password'
+                          )
+                        }
+                        className="text-xs font-extrabold text-slate-900 bg-transparent outline-none cursor-pointer"
+                      >
+                        <option value="all">All Statuses ({stats.total})</option>
+                        <option value="active">Active ({stats.active})</option>
+                        <option value="expired">Expired ({stats.expired})</option>
+                        <option value="pending">Pending ({stats.pending})</option>
+                        <option value="free_password">30-Day Free Access ({stats.freePass})</option>
+                      </select>
+                    </div>
+
+                    {/* Sort Selector */}
+                    <div className="flex items-center gap-1.5 bg-white px-3 py-2.5 rounded-xl border border-slate-300">
+                      <ArrowUpDown className="w-3.5 h-3.5 text-lavender-700 shrink-0" />
+                      <span className="text-[11px] font-extrabold text-slate-600">Sort:</span>
+                      <select
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value as SortField)}
+                        className="text-xs font-extrabold text-slate-900 bg-transparent outline-none cursor-pointer"
+                      >
+                        <option value="entry_asc">Entry # (1st → Latest)</option>
+                        <option value="entry_desc">Entry # (Newest → 1st)</option>
+                        <option value="recent_login">Most Recent Login</option>
+                        <option value="name_asc">Name (A → Z)</option>
+                        <option value="days_desc">Access Days Remaining</option>
+                      </select>
+                    </div>
+
+                    {/* Page Size Selector to accommodate lots of people */}
+                    <div className="flex items-center gap-1.5 bg-white px-3 py-2.5 rounded-xl border border-slate-300">
+                      <span className="text-[11px] font-extrabold text-slate-600">Per Page:</span>
+                      <select
+                        value={pageSize}
+                        onChange={(e) => setPageSize(Number(e.target.value))}
+                        className="text-xs font-extrabold text-plum-900 bg-transparent outline-none cursor-pointer"
+                      >
+                        <option value={10}>10 / page</option>
+                        <option value={25}>25 / page</option>
+                        <option value={50}>50 / page</option>
+                        <option value={100}>100 / page</option>
+                        <option value={0}>Show All ({filteredUsers.length})</option>
+                      </select>
+                    </div>
+
+                    {(searchQuery.trim() !== '' || filterTab !== 'all') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSearchQuery('');
+                          setFilterTab('all');
+                        }}
+                        className="px-3 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-extrabold text-xs cursor-pointer"
+                      >
+                        Reset Filters
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Status Filter Tabs & View Layout Switcher */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <div className="flex flex-wrap gap-1 bg-white p-1 rounded-xl border border-slate-200">
+                    {(
+                      [
+                        { id: 'all', label: `All Entries (${stats.total})` },
+                        { id: 'pending', label: `Pending (${stats.pending})` },
+                        { id: 'active', label: `Active (${stats.active})` },
+                        { id: 'free_password', label: `30d Free (${stats.freePass})` },
+                        { id: 'expired', label: `Expired (${stats.expired})` },
+                      ] as const
+                    ).map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setFilterTab(tab.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                          filterTab === tab.id
+                            ? 'bg-plum-900 text-gold-400 shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Bulk Delete Toolbar when rows are selected */}
+                    {selectedEmails.length > 0 && (
+                      <div className="flex items-center gap-1.5 bg-rose-50 border border-rose-300 px-3 py-1.5 rounded-xl">
+                        <span className="text-xs font-extrabold text-rose-900">
+                          {selectedEmails.length} Selected
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleBulkDeleteSelected}
+                          className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs flex items-center gap-1 shadow-2xs cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Delete Selected ({selectedEmails.length})</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedEmails([])}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-600 font-bold text-[11px] border border-slate-200 cursor-pointer"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    )}
+
+                    {/* View Layout Switcher */}
+                    <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200">
+                      <button
+                        type="button"
+                        onClick={() => setEntriesViewLayout('table')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-extrabold flex items-center gap-1 cursor-pointer ${
+                          entriesViewLayout === 'table'
+                            ? 'bg-lavender-700 text-white'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <TableIcon className="w-3.5 h-3.5" />
+                        <span>Table</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEntriesViewLayout('cards')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-extrabold flex items-center gap-1 cursor-pointer ${
+                          entriesViewLayout === 'cards'
+                            ? 'bg-lavender-700 text-white'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        <LayoutGrid className="w-3.5 h-3.5" />
+                        <span>Cards</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEntriesViewLayout('both')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-extrabold cursor-pointer ${
+                          entriesViewLayout === 'both'
+                            ? 'bg-lavender-700 text-white'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Both
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               {/* Last Approved Confirmation Strip */}
               {lastApprovedUserEmail && usersMap[lastApprovedUserEmail] && (
@@ -2458,547 +1718,1555 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                 </div>
               )}
 
-              {filteredUsers.length === 0 ? (
-                <div className="rounded-2xl bg-cream p-6 text-center text-xs text-slate-500">
-                  No customer entries match the selected filter. Click &ldquo;Sync All Entries&rdquo; at the top right to refresh from Cloud Firestore.
+              {/* TOP PAGINATION STATUS BAR */}
+              <div className="flex flex-wrap items-center justify-between gap-3 px-1 text-xs">
+                <div className="font-bold text-slate-700">
+                  Showing{' '}
+                  <span className="font-extrabold text-plum-900">
+                    {pageStartItem}–{pageEndItem}
+                  </span>{' '}
+                  of{' '}
+                  <span className="font-extrabold text-plum-900">{filteredUsers.length}</span>{' '}
+                  customer entries
+                  {searchQuery.trim() ? ` matching "${searchQuery.trim()}"` : ''}
                 </div>
-              ) : (
-                <div className="overflow-x-auto rounded-2xl border-2 border-slate-200 shadow-2xs">
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="bg-plum-900 text-white font-extrabold uppercase tracking-wider text-[11px]">
-                        <th className="py-3 px-3"># (1st Entry)</th>
-                        <th className="py-3 px-3">1. Customer Name</th>
-                        <th className="py-3 px-3">2. Email Address</th>
-                        <th className="py-3 px-3">3. Age</th>
-                        <th className="py-3 px-3">4. Number Used (Phone)</th>
-                        <th className="py-3 px-3">Last Login &amp; Device</th>
-                        <th className="py-3 px-3">Access Status</th>
-                        <th className="py-3 px-3">Quick Subscription &amp; Edit</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200 bg-white">
-                      {filteredUsers.map((u, idx) => {
-                        const st = getTrialStatus(u);
-                        const custNum = u.customerNumber || idx + 1;
-                        const phoneUsed = resolveCustomerPhoneUsed(u);
-                        const lastLoginStr = u.lastSignInAt
-                          ? new Date(u.lastSignInAt).toLocaleString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                              year: 'numeric',
-                              hour: 'numeric',
-                              minute: '2-digit',
-                            })
-                          : u.firstEntryAt || u.createdAt
-                          ? new Date(u.firstEntryAt || u.createdAt).toLocaleString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                              year: 'numeric',
-                              hour: 'numeric',
-                              minute: '2-digit',
-                            })
-                          : 'Synced';
 
-                        return (
-                          <tr
-                            key={`row-${u.email}`}
-                            className="hover:bg-lavender-50/60 transition-colors"
-                          >
-                            <td className="py-3 px-3">
-                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-plum-900 text-gold-400 font-mono font-extrabold text-xs">
-                                #{custNum}
-                              </span>
-                            </td>
-                            <td className="py-3 px-3 font-extrabold text-slate-900">
-                              {u.name || 'Student'}
-                            </td>
-                            <td className="py-3 px-3 font-mono text-lavender-900 font-bold">
-                              {u.email}
-                            </td>
-                            <td className="py-3 px-3 font-mono font-bold text-slate-800">
-                              {u.age ? `${u.age} yrs` : '—'}
-                            </td>
-                            <td className="py-3 px-3 font-mono font-bold text-sage-900">
-                              {phoneUsed ? (
-                                <span className="px-2 py-0.5 rounded-md bg-sage-50 border border-sage-200">
-                                  {phoneUsed}
-                                </span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditCustomerEntry(u)}
-                                  className="text-[11px] font-bold text-amber-700 underline cursor-pointer"
-                                >
-                                  + Add Number
-                                </button>
-                              )}
-                            </td>
-                            <td className="py-3 px-3 text-slate-600 text-[11px]">
-                              <div className="font-mono font-semibold text-slate-800">
-                                {lastLoginStr}
-                              </div>
-                              <div className="text-[10px] text-slate-500">
-                                {u.deviceInfo || '📱/💻 WebApp Link'} • {u.signInCount || 1} login(s)
-                              </div>
-                            </td>
-                            <td className="py-3 px-3">
-                              <span
-                                className={`inline-block px-2 py-0.5 rounded-md font-extrabold text-[10px] ${
-                                  st.status === 'expired'
-                                    ? 'bg-rose-100 text-rose-800'
-                                    : st.status === 'pending_verification'
-                                    ? 'bg-orange-100 text-orange-800'
-                                    : 'bg-sage-100 text-sage-800'
+                {totalPages > 1 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={safeCurrentPage <= 1}
+                      onClick={() => setCurrentPage(1)}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 font-extrabold text-xs cursor-pointer"
+                    >
+                      First
+                    </button>
+                    <button
+                      type="button"
+                      disabled={safeCurrentPage <= 1}
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 font-extrabold text-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span>Prev</span>
+                    </button>
+                    <span className="px-3 py-1.5 rounded-lg bg-plum-900 text-gold-400 font-mono font-extrabold text-xs">
+                      Page {safeCurrentPage} of {totalPages}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={safeCurrentPage >= totalPages}
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 font-extrabold text-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>Next</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={safeCurrentPage >= totalPages}
+                      onClick={() => setCurrentPage(totalPages)}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 font-extrabold text-xs cursor-pointer"
+                    >
+                      Last
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* CUSTOMER ENTRIES TABLE VIEW */}
+              {(entriesViewLayout === 'table' || entriesViewLayout === 'both') && (
+                <>
+                  {paginatedUsers.length === 0 ? (
+                    <div className="rounded-2xl bg-cream p-8 text-center space-y-2 border border-slate-200">
+                      <p className="text-sm font-extrabold text-slate-700">
+                        No customer entries match your current search or filter.
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        Clear your search bar above or click &ldquo;Sync All Entries&rdquo; in the top header.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-2xl border-2 border-slate-200 shadow-2xs">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-plum-900 text-white font-extrabold uppercase tracking-wider text-[11px]">
+                            <th className="py-3 px-3 w-9">
+                              <button
+                                type="button"
+                                onClick={handleToggleSelectPage}
+                                className="flex items-center justify-center text-gold-400 hover:text-white cursor-pointer"
+                                title={
+                                  isAllCurrentPageSelected
+                                    ? 'Unselect all on this page'
+                                    : 'Select all on this page'
+                                }
+                              >
+                                {isAllCurrentPageSelected ? (
+                                  <CheckSquare className="w-4 h-4" />
+                                ) : (
+                                  <Square className="w-4 h-4" />
+                                )}
+                              </button>
+                            </th>
+                            <th className="py-3 px-3"># Entry</th>
+                            <th className="py-3 px-3">1. Customer Name</th>
+                            <th className="py-3 px-3">2. Email Address</th>
+                            <th className="py-3 px-3">3. Age</th>
+                            <th className="py-3 px-3">4. Number Used (Phone)</th>
+                            <th className="py-3 px-3">Last Login &amp; Device</th>
+                            <th className="py-3 px-3">Access Status</th>
+                            <th className="py-3 px-3">Actions &amp; Delete</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 bg-white">
+                          {paginatedUsers.map((u, idx) => {
+                            const st = getTrialStatus(u);
+                            const custNum = u.customerNumber || idx + 1;
+                            const phoneUsed = resolveCustomerPhoneUsed(u);
+                            const cleanEmail = u.email.toLowerCase().trim();
+                            const isSelected = selectedEmails.includes(cleanEmail);
+                            const lastLoginStr = u.lastSignInAt
+                              ? new Date(u.lastSignInAt).toLocaleString('en-US', {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  year: 'numeric',
+                                  hour: 'numeric',
+                                  minute: '2-digit',
+                                })
+                              : u.firstEntryAt || u.createdAt
+                              ? new Date(u.firstEntryAt || u.createdAt).toLocaleString('en-US', {
+                                  month: 'short',
+                                  day: 'numeric',
+                                  year: 'numeric',
+                                  hour: 'numeric',
+                                  minute: '2-digit',
+                                })
+                              : 'Synced';
+
+                            return (
+                              <tr
+                                key={`row-${u.email}`}
+                                className={`transition-colors ${
+                                  isSelected
+                                    ? 'bg-rose-50/70 hover:bg-rose-50'
+                                    : 'hover:bg-lavender-50/60'
                                 }`}
                               >
-                                {st.daysLeft}d left ({st.status === 'trial' ? '2-Wk Free' : st.status})
-                              </span>
-                            </td>
-                            <td className="py-3 px-3">
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                {onExtendUserFreeAccess && (
+                                <td className="py-3 px-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleSelectUser(u.email)}
+                                    className="flex items-center justify-center text-slate-600 hover:text-plum-900 cursor-pointer"
+                                    title="Select row"
+                                  >
+                                    {isSelected ? (
+                                      <CheckSquare className="w-4 h-4 text-rose-600" />
+                                    ) : (
+                                      <Square className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                </td>
+                                <td className="py-3 px-3">
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-plum-900 text-gold-400 font-mono font-extrabold text-xs">
+                                    #{custNum}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-3 font-extrabold text-slate-900">
+                                  {u.name || 'Student'}
+                                </td>
+                                <td className="py-3 px-3 font-mono text-lavender-900 font-bold">
+                                  {u.email}
+                                </td>
+                                <td className="py-3 px-3 font-mono font-bold text-slate-800">
+                                  {u.age ? `${u.age} yrs` : '—'}
+                                </td>
+                                <td className="py-3 px-3 font-mono font-bold text-sage-900">
+                                  {phoneUsed ? (
+                                    <span className="px-2 py-0.5 rounded-md bg-sage-50 border border-sage-200">
+                                      {phoneUsed}
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenEditCustomerEntry(u)}
+                                      className="text-[11px] font-bold text-amber-700 underline cursor-pointer"
+                                    >
+                                      + Add Number
+                                    </button>
+                                  )}
+                                </td>
+                                <td className="py-3 px-3 text-slate-600 text-[11px]">
+                                  <div className="font-mono font-semibold text-slate-800">
+                                    {lastLoginStr}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500">
+                                    {u.deviceInfo || '📱/💻 WebApp Link'} • {u.signInCount || 1}{' '}
+                                    login(s)
+                                  </div>
+                                </td>
+                                <td className="py-3 px-3">
+                                  <span
+                                    className={`inline-block px-2 py-0.5 rounded-md font-extrabold text-[10px] ${
+                                      st.status === 'expired'
+                                        ? 'bg-rose-100 text-rose-800'
+                                        : st.status === 'pending_verification'
+                                        ? 'bg-orange-100 text-orange-800'
+                                        : 'bg-sage-100 text-sage-800'
+                                    }`}
+                                  >
+                                    {st.daysLeft}d left (
+                                    {st.status === 'trial' ? '2-Wk Free' : st.status})
+                                  </span>
+                                </td>
+                                <td className="py-3 px-3">
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    {onExtendUserFreeAccess && (
+                                      <button
+                                        type="button"
+                                        onClick={() => onExtendUserFreeAccess(u.email, 30)}
+                                        className="px-2.5 py-1 rounded-lg bg-plum-900 hover:bg-lavender-900 text-gold-400 font-extrabold text-[10px] cursor-pointer"
+                                        title="Give 1 Month (30 Days) Free without adding money (Le 0)"
+                                      >
+                                        🎁 1M Free
+                                      </button>
+                                    )}
+                                    {onExtendUserFreeAccess && (
+                                      <button
+                                        type="button"
+                                        onClick={() => onExtendUserFreeAccess(u.email, 14)}
+                                        className="px-2 py-1 rounded-lg bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-[10px] cursor-pointer"
+                                        title="Extend +14 days free access (Le 0)"
+                                      >
+                                        +14d
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        onApproveUserPayment(u.email);
+                                        setLastApprovedUserEmail(u.email);
+                                      }}
+                                      className="px-2 py-1 rounded-lg bg-sage-600 hover:bg-sage-800 text-white font-extrabold text-[10px] cursor-pointer"
+                                      title="Verify Paid Pass (+30 days & adds Le 30 to Money Made)"
+                                    >
+                                      Paid +30d
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleOpenEditCustomerEntry(u)}
+                                      className="px-2.5 py-1 rounded-lg bg-lavender-100 hover:bg-lavender-200 text-lavender-900 font-extrabold text-[10px] inline-flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <Edit3 className="w-3 h-3" />
+                                      <span>Edit</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => onRejectOrExpireUser(u.email, 'expire')}
+                                      className="px-2 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-[10px] cursor-pointer"
+                                      title="Expire / Lock account"
+                                    >
+                                      Lock
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteSingleCustomer(u.email)}
+                                      className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] inline-flex items-center gap-1 shadow-2xs cursor-pointer"
+                                      title="Permanently delete this customer entry"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                      <span>Delete</span>
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* CUSTOMER ENTRIES DETAILED CARDS VIEW */}
+              {(entriesViewLayout === 'cards' || entriesViewLayout === 'both') &&
+                paginatedUsers.length > 0 && (
+                  <div className="space-y-3.5 pt-2">
+                    {entriesViewLayout === 'both' && (
+                      <h3 className="font-display font-extrabold text-sm uppercase tracking-wider text-slate-700">
+                        🪪 Detailed Customer Cards (Page {safeCurrentPage} of {totalPages})
+                      </h3>
+                    )}
+                    {paginatedUsers.map((u, idx) => {
+                      const st = getTrialStatus(u);
+                      const custNum = u.customerNumber || idx + 1;
+                      const phoneDisplay = resolveCustomerPhoneUsed(u) || 'Not entered yet';
+                      const hasPending =
+                        st.status === 'pending_verification' ||
+                        u.pendingPayment?.status === 'pending';
+                      const isRecentlyApproved = lastApprovedUserEmail === u.email;
+                      const periodsCount = Array.isArray(u.periods) ? u.periods.length : 0;
+                      const logsCount = u.dailyLogs ? Object.keys(u.dailyLogs).length : 0;
+                      const appointmentsCount = Array.isArray(u.appointments)
+                        ? u.appointments.length
+                        : 0;
+                      const skincareLogsCount = Array.isArray(u.therapyLogs)
+                        ? u.therapyLogs.length
+                        : 0;
+                      const isAdminRole =
+                        u.role === 'admin' ||
+                        u.email.toLowerCase() === OWNER_ADMIN_EMAIL.toLowerCase() ||
+                        additionalAdmins.some(
+                          (a) => a.email.trim().toLowerCase() === u.email.toLowerCase()
+                        );
+
+                      return (
+                        <div
+                          key={`card-${u.email}`}
+                          className={`relative rounded-2xl p-4 border transition-all ${
+                            hasPending
+                              ? 'bg-orange-50/70 border-2 border-orange-400 shadow-xs'
+                              : isRecentlyApproved
+                              ? 'bg-sage-50/80 border-2 border-sage-500'
+                              : 'bg-cream/60 border-slate-200'
+                          }`}
+                        >
+                          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                            <div className="space-y-2 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="px-2.5 py-1 rounded-lg bg-plum-900 text-gold-400 font-mono text-xs font-extrabold">
+                                  Customer #{custNum}
+                                </span>
+                                <span className="font-display font-extrabold text-base text-slate-900">
+                                  {u.name || 'Student'}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold ${
+                                    isAdminRole
+                                      ? 'bg-plum-900 text-gold-400 border border-gold-500/50'
+                                      : 'bg-lavender-100 text-lavender-900 border border-lavender-300'
+                                  }`}
+                                >
+                                  {isAdminRole ? '🛡️ Admin' : '🌸 Client'}
+                                </span>
+                                <span
+                                  className={`px-2.5 py-1 rounded-lg text-xs font-extrabold ${
+                                    st.status === 'expired'
+                                      ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                      : st.status === 'pending_verification'
+                                      ? 'bg-orange-100 text-orange-800 border border-orange-300'
+                                      : 'bg-sage-100 text-sage-800'
+                                  }`}
+                                >
+                                  {st.label} ({st.daysLeft}d left)
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 bg-white p-3 rounded-xl border border-slate-200 text-xs">
+                                <div>
+                                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                                    1. Customer Name
+                                  </span>
+                                  <span className="font-extrabold text-slate-900">
+                                    {u.name || 'Student'}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                                    2. Email Address
+                                  </span>
+                                  <span className="font-mono font-bold text-lavender-900 break-all">
+                                    {u.email}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                                    3. Age
+                                  </span>
+                                  <span className="font-mono font-bold text-slate-800">
+                                    {u.age ? `${u.age} years` : 'Not set'}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
+                                    4. Number Used (Phone)
+                                  </span>
+                                  <span className="font-mono font-bold text-sage-900">
+                                    {phoneDisplay}
+                                  </span>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
+                                <span className="inline-flex items-center gap-1 font-mono">
+                                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>
+                                    1st Entry:{' '}
+                                    <strong>
+                                      {u.firstEntryAt || u.createdAt
+                                        ? new Date(
+                                            u.firstEntryAt || u.createdAt
+                                          ).toLocaleString('en-US', {
+                                            month: 'short',
+                                            day: 'numeric',
+                                            year: 'numeric',
+                                          })
+                                        : 'Recorded'}
+                                    </strong>
+                                  </span>
+                                </span>
+                                <span className="inline-flex items-center gap-1 font-mono">
+                                  <Smartphone className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>
+                                    {u.deviceInfo || '📱/💻 WebApp Link'} ({u.signInCount || 1}{' '}
+                                    logins)
+                                  </span>
+                                </span>
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 font-semibold">
+                                  <Activity className="w-3 h-3 text-rose-600" />
+                                  <span>
+                                    {periodsCount} Period(s) • {logsCount} Mood/Symptom Log(s) •{' '}
+                                    {appointmentsCount} Appt(s) • {skincareLogsCount} Skincare Log(s)
+                                  </span>
+                                </span>
+                              </div>
+
+                              {u.pendingPayment && (
+                                <div className="relative mt-2 p-3 pr-9 rounded-xl bg-white border border-orange-200 text-xs space-y-1">
+                                  {onClearPendingVerification && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onClearPendingVerification(u.email)}
+                                      title="Remove Pending Owner Verification"
+                                      className="absolute top-2 right-2 w-6 h-6 rounded-full bg-orange-100 hover:bg-rose-100 text-orange-900 hover:text-rose-700 border border-orange-300 font-extrabold text-[11px] flex items-center justify-center cursor-pointer"
+                                    >
+                                      ✕
+                                    </button>
+                                  )}
+                                  <div className="font-extrabold text-orange-900 uppercase tracking-wider text-[10px]">
+                                    🟧 Submitted Orange Money Transaction ({u.pendingPayment.amount})
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-4 font-mono text-slate-800">
+                                    <span>
+                                      Sender Phone: <strong>{u.pendingPayment.senderPhone}</strong>
+                                    </span>
+                                    <span>
+                                      SMS Tx ID: <strong>{u.pendingPayment.transactionId}</strong>
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditCustomerEntry(u)}
+                                className="px-3 py-2 rounded-xl bg-lavender-100 hover:bg-lavender-200 text-lavender-900 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                                <span>Edit</span>
+                              </button>
+
+                              {onExtendUserFreeAccess && (
+                                <>
                                   <button
                                     type="button"
                                     onClick={() => onExtendUserFreeAccess(u.email, 30)}
-                                    className="px-2.5 py-1 rounded-lg bg-plum-900 hover:bg-lavender-900 text-gold-400 font-extrabold text-[10px] cursor-pointer"
-                                    title="Give 1 Month (30 Days) Free without adding money (Le 0)"
+                                    className="px-3.5 py-2 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-400 font-extrabold text-xs cursor-pointer"
                                   >
                                     🎁 1 Month Free (Le 0)
                                   </button>
-                                )}
-                                {onExtendUserFreeAccess && (
                                   <button
                                     type="button"
                                     onClick={() => onExtendUserFreeAccess(u.email, 14)}
-                                    className="px-2 py-1 rounded-lg bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-[10px] cursor-pointer"
-                                    title="Extend +14 days free access (Le 0)"
+                                    className="px-3 py-2 rounded-xl bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-xs cursor-pointer"
                                   >
                                     +14d Free
                                   </button>
-                                )}
+                                </>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onApproveUserPayment(u.email);
+                                  setLastApprovedUserEmail(u.email);
+                                }}
+                                className="px-3.5 py-2 rounded-xl bg-sage-600 hover:bg-sage-800 text-white font-extrabold text-xs flex items-center gap-1 cursor-pointer"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>Approve Paid (+Le {passPriceSle})</span>
+                              </button>
+
+                              {hasPending ? (
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    onApproveUserPayment(u.email);
-                                    setLastApprovedUserEmail(u.email);
-                                  }}
-                                  className="px-2 py-1 rounded-lg bg-sage-600 hover:bg-sage-800 text-white font-extrabold text-[10px] cursor-pointer"
-                                  title="Verify Paid Pass (+30 days & adds Le 30 to Money Made)"
+                                  onClick={() => onRejectOrExpireUser(u.email, 'reject')}
+                                  className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-800 text-white font-extrabold text-xs flex items-center gap-1 cursor-pointer"
                                 >
-                                  Paid +30d (Le {passPriceSle})
+                                  <XCircle className="w-3.5 h-3.5" />
+                                  <span>Reject</span>
                                 </button>
+                              ) : (
                                 <button
                                   type="button"
-                                  onClick={() => handleOpenEditCustomerEntry(u)}
-                                  className="px-2.5 py-1 rounded-lg bg-lavender-100 hover:bg-lavender-200 text-lavender-900 font-extrabold text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                                  onClick={() => onRejectOrExpireUser(u.email, 'expire')}
+                                  className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs flex items-center gap-1 cursor-pointer"
                                 >
-                                  <Edit3 className="w-3 h-3" />
-                                  <span>Edit</span>
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* =================================================================== */}
-        {/* TABLE BUTTON 5: DETAILED INDIVIDUAL CUSTOMER CARDS (COLLAPSIBLE)    */}
-        {/* =================================================================== */}
-        <section className="bg-white rounded-3xl border-2 border-slate-200 shadow-xs overflow-hidden">
-          <button
-            type="button"
-            onClick={() => toggleTableSection('customerCards')}
-            className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 bg-cream/70 hover:bg-cream transition-colors text-left cursor-pointer"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-lavender-100 text-lavender-900 flex items-center justify-center shrink-0">
-                <Activity className="w-5 h-5" />
-              </div>
-              <div>
-                <span className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-                  🪪 Detailed Individual Customer Cards ({filteredUsers.length} People)
-                </span>
-                <p className="text-xs text-slate-600">
-                  Full cards with Period/Log counts, Orange Money SMS details, WhatsApp/SMS links &amp; Delete controls.
-                </p>
-              </div>
-            </div>
-            <span className="px-3 py-1.5 rounded-xl bg-lavender-700 text-white font-extrabold text-xs flex items-center gap-1 shrink-0">
-              <span>{openTables.customerCards ? 'Hide Cards' : 'Open Cards'}</span>
-              {openTables.customerCards ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
-            </span>
-          </button>
-
-          {openTables.customerCards && (
-            <div className="p-5 sm:p-6 border-t border-slate-200 space-y-3.5">
-              {filteredUsers.length === 0 ? (
-                <div className="rounded-2xl bg-cream p-6 text-center text-xs text-slate-500">
-                  No customer entries match the selected filter.
-                </div>
-              ) : (
-                filteredUsers.map((u, idx) => {
-                  const st = getTrialStatus(u);
-                  const custNum = u.customerNumber || idx + 1;
-                  const phoneDisplay = resolveCustomerPhoneUsed(u) || 'Not entered yet';
-                  const hasPending =
-                    st.status === 'pending_verification' || u.pendingPayment?.status === 'pending';
-                  const isRecentlyApproved = lastApprovedUserEmail === u.email;
-                  const periodsCount = Array.isArray(u.periods) ? u.periods.length : 0;
-                  const logsCount = u.dailyLogs ? Object.keys(u.dailyLogs).length : 0;
-                  const appointmentsCount = Array.isArray(u.appointments) ? u.appointments.length : 0;
-
-                  let statusBadge = (
-                    <span className="px-2.5 py-1 rounded-lg bg-sage-100 text-sage-800 text-xs font-extrabold">
-                      🎁 Active 2-Week Free Access ({st.daysLeft}d left)
-                    </span>
-                  );
-                  if (st.status === 'subscribed') {
-                    statusBadge = (
-                      <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-extrabold">
-                        ✅ Orange Money Verified ({st.daysLeft}d left)
-                      </span>
-                    );
-                  } else if (st.status === 'free_password') {
-                    statusBadge = (
-                      <span className="px-2.5 py-1 rounded-lg bg-amber-100 text-amber-900 border border-amber-300 text-xs font-extrabold">
-                        🎁 Free 1-Month Pass ({st.daysLeft}d left)
-                      </span>
-                    );
-                  } else if (st.status === 'pending_verification') {
-                    statusBadge = (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-orange-100 text-orange-800 border border-orange-300 text-xs font-extrabold">
-                        <span>⏳ Pending Verification</span>
-                        {onClearPendingVerification && (
-                          <button
-                            type="button"
-                            onClick={() => onClearPendingVerification(u.email)}
-                            title="Remove Pending Owner Verification"
-                            className="w-4 h-4 rounded-full bg-white hover:bg-rose-100 text-orange-900 hover:text-rose-700 border border-orange-300 flex items-center justify-center text-[10px] font-extrabold cursor-pointer"
-                          >
-                            ✕
-                          </button>
-                        )}
-                      </span>
-                    );
-                  } else if (st.status === 'expired') {
-                    statusBadge = (
-                      <span className="px-2.5 py-1 rounded-lg bg-rose-100 text-rose-800 border border-rose-300 text-xs font-extrabold">
-                        🔒 Expired (0d left)
-                      </span>
-                    );
-                  }
-
-                  return (
-                    <div
-                      key={u.email}
-                      className={`relative rounded-2xl p-4 border transition-all ${
-                        hasPending
-                          ? 'bg-orange-50/70 border-2 border-orange-400 shadow-xs'
-                          : isRecentlyApproved
-                          ? 'bg-sage-50/80 border-2 border-sage-500'
-                          : 'bg-cream/60 border-slate-200'
-                      }`}
-                    >
-                      {hasPending && onClearPendingVerification && (
-                        <button
-                          type="button"
-                          onClick={() => onClearPendingVerification(u.email)}
-                          title="Remove Pending Owner Verification"
-                          aria-label="Remove Pending Owner Verification"
-                          className="absolute top-3 right-3 w-7 h-7 rounded-full bg-white hover:bg-rose-100 text-orange-900 hover:text-rose-700 border border-orange-300 font-extrabold text-xs flex items-center justify-center shadow-2xs transition-all cursor-pointer z-10"
-                        >
-                          ✕
-                        </button>
-                      )}
-                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                        <div className="space-y-2 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="px-2.5 py-1 rounded-lg bg-plum-900 text-gold-400 font-mono text-xs font-extrabold">
-                              Customer #{custNum} (First Entry)
-                            </span>
-                            <span className="font-display font-extrabold text-base text-slate-900">
-                              {u.name || 'Student'}
-                            </span>
-                            {statusBadge}
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 bg-white p-3 rounded-xl border border-slate-200 text-xs">
-                            <div>
-                              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
-                                1. Customer Name
-                              </span>
-                              <span className="font-extrabold text-slate-900">
-                                {u.name || 'Student'}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
-                                2. Email Address
-                              </span>
-                              <span className="font-mono font-bold text-lavender-900 break-all">
-                                {u.email}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
-                                3. Age
-                              </span>
-                              <span className="font-mono font-bold text-slate-800">
-                                {u.age ? `${u.age} years` : 'Not set'}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">
-                                4. Number Used (Phone)
-                              </span>
-                              <span className="font-mono font-bold text-sage-900">
-                                {phoneDisplay}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
-                            <span className="inline-flex items-center gap-1 font-mono">
-                              <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                              <span>
-                                1st Entry:{' '}
-                                <strong>
-                                  {u.firstEntryAt || u.createdAt
-                                    ? new Date(u.firstEntryAt || u.createdAt).toLocaleString('en-US', {
-                                        month: 'short',
-                                        day: 'numeric',
-                                        year: 'numeric',
-                                        hour: 'numeric',
-                                        minute: '2-digit',
-                                      })
-                                    : 'Recorded'}
-                                </strong>
-                              </span>
-                            </span>
-                            <span className="inline-flex items-center gap-1 font-mono">
-                              <Smartphone className="w-3.5 h-3.5 text-slate-400" />
-                              <span>
-                                {u.deviceInfo || '📱/💻 WebApp Link'} ({u.signInCount || 1} logins)
-                              </span>
-                            </span>
-                            <span className="inline-flex items-center gap-1 font-mono">
-                              <Clock className="w-3.5 h-3.5 text-slate-400" />
-                              <span>
-                                Remaining: <strong>{st.daysLeft} days</strong>
-                              </span>
-                            </span>
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700 font-semibold">
-                              <Activity className="w-3 h-3 text-rose-600" />
-                              <span>
-                                {periodsCount} Period(s) • {logsCount} Log(s)
-                              </span>
-                            </span>
-                            {appointmentsCount > 0 && (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white border border-slate-200 text-plum-900 font-semibold">
-                                <span>✨ {appointmentsCount} Booking(s)</span>
-                              </span>
-                            )}
-                          </div>
-
-                          {u.pendingPayment && (
-                            <div className="relative mt-2 p-3 pr-9 rounded-xl bg-white border border-orange-200 text-xs space-y-1">
-                              {onClearPendingVerification && (
-                                <button
-                                  type="button"
-                                  onClick={() => onClearPendingVerification(u.email)}
-                                  title="Remove Pending Owner Verification"
-                                  aria-label="Remove Pending Owner Verification"
-                                  className="absolute top-2 right-2 w-6 h-6 rounded-full bg-orange-100 hover:bg-rose-100 text-orange-900 hover:text-rose-700 border border-orange-300 font-extrabold text-[11px] flex items-center justify-center cursor-pointer transition-all"
-                                >
-                                  ✕
+                                  <Lock className="w-3.5 h-3.5" />
+                                  <span>Lock</span>
                                 </button>
                               )}
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <span className="font-extrabold text-orange-900 uppercase tracking-wider text-[10px]">
-                                  🟧 Submitted Orange Money Transaction ({u.pendingPayment.amount})
-                                </span>
-                                <span className="font-mono text-[10px] text-slate-500">
-                                  Submitted:{' '}
-                                  {new Date(u.pendingPayment.submittedAt).toLocaleString()}
-                                </span>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-4 font-mono text-slate-800">
-                                <span>
-                                  Sender Phone: <strong>{u.pendingPayment.senderPhone}</strong>
-                                </span>
-                                <span>
-                                  SMS Tx ID: <strong>{u.pendingPayment.transactionId}</strong>
-                                </span>
-                                <span>
-                                  Status:{' '}
-                                  <strong className="uppercase">{u.pendingPayment.status}</strong>
-                                </span>
-                              </div>
+
+                              <a
+                                href={buildWhatsAppHref(u)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1"
+                              >
+                                <MessageSquare className="w-3.5 h-3.5" />
+                                <span>WhatsApp</span>
+                              </a>
+
+                              <a
+                                href={buildSmsHref(u)}
+                                className="px-3 py-2 rounded-xl bg-lavender-100 hover:bg-lavender-200 text-lavender-900 font-bold text-xs flex items-center gap-1"
+                              >
+                                <Phone className="w-3.5 h-3.5" />
+                                <span>SMS</span>
+                              </a>
+
+                              <a
+                                href={buildApprovalEmailHref(u)}
+                                className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold text-xs flex items-center gap-1"
+                              >
+                                <Mail className="w-3.5 h-3.5" />
+                                <span>Email</span>
+                              </a>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSingleCustomer(u.email)}
+                                className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                                title="Permanently delete this customer entry"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Delete</span>
+                              </button>
                             </div>
-                          )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+              {/* BOTTOM MULTI-PAGE PAGINATION CONTROLS */}
+              {totalPages > 1 && (
+                <div className="pt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-xs font-bold text-slate-600">
+                    Page <strong>{safeCurrentPage}</strong> of <strong>{totalPages}</strong> (
+                    {filteredUsers.length} total people)
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={safeCurrentPage <= 1}
+                      onClick={() => setCurrentPage(1)}
+                      className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 font-extrabold text-xs cursor-pointer"
+                    >
+                      First
+                    </button>
+                    <button
+                      type="button"
+                      disabled={safeCurrentPage <= 1}
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 font-extrabold text-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span>Prev</span>
+                    </button>
+
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter(
+                        (p) =>
+                          p === 1 ||
+                          p === totalPages ||
+                          Math.abs(p - safeCurrentPage) <= 2
+                      )
+                      .map((pageNum, idx, arr) => {
+                        const prev = arr[idx - 1];
+                        const showEllipsis = prev !== undefined && pageNum - prev > 1;
+                        return (
+                          <React.Fragment key={`pg-btn-${pageNum}`}>
+                            {showEllipsis && (
+                              <span className="px-1.5 text-xs font-bold text-slate-400">…</span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setCurrentPage(pageNum)}
+                              className={`w-8 h-8 rounded-xl font-mono font-extrabold text-xs transition-all cursor-pointer ${
+                                pageNum === safeCurrentPage
+                                  ? 'bg-plum-900 text-gold-400 shadow-xs'
+                                  : 'bg-white hover:bg-lavender-50 text-slate-700 border border-slate-200'
+                              }`}
+                            >
+                              {pageNum}
+                            </button>
+                          </React.Fragment>
+                        );
+                      })}
+
+                    <button
+                      type="button"
+                      disabled={safeCurrentPage >= totalPages}
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 font-extrabold text-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>Next</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={safeCurrentPage >= totalPages}
+                      onClick={() => setCurrentPage(totalPages)}
+                      className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 font-extrabold text-xs cursor-pointer"
+                    >
+                      Last
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* =================================================================== */}
+        {/* PAGE 2: OVERVIEW & LIVE PEOPLE LOGGING IN PAGE                      */}
+        {/* =================================================================== */}
+        {activeAdminPage === 'overview' && (
+          <div className="space-y-6">
+            {/* TOP KPI SUMMARY CARDS */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+              <div
+                onClick={() => setActiveAdminPage('entries')}
+                className="bg-gradient-to-br from-plum-900 to-lavender-900 text-white rounded-2xl p-4 border-2 border-gold-500/50 shadow-sm cursor-pointer hover:scale-[1.01] transition-all"
+              >
+                <div className="flex items-center justify-between text-gold-400 text-xs font-extrabold uppercase">
+                  <span>People in App</span>
+                  <Users className="w-4 h-4 text-gold-400" />
+                </div>
+                <div className="font-display font-extrabold text-3xl text-white mt-1 tabular-nums">
+                  {stats.total}
+                </div>
+                <p className="text-[11px] text-gold-300 mt-0.5 underline">
+                  Open Entries Page →
+                </p>
+              </div>
+
+              <div
+                onClick={() => setActiveAdminPage('revenue')}
+                className="bg-gradient-to-br from-emerald-900 to-sage-900 text-white rounded-2xl p-4 border-2 border-emerald-400/50 shadow-sm cursor-pointer hover:scale-[1.01] transition-all"
+              >
+                <div className="flex items-center justify-between text-emerald-300 text-xs font-extrabold uppercase">
+                  <span>Money Made</span>
+                  <TrendingUp className="w-4 h-4 text-emerald-300" />
+                </div>
+                <div className="font-display font-extrabold text-2xl sm:text-3xl text-white mt-1 tabular-nums">
+                  Le {revenueSummary.grandTotalSle.toLocaleString()}
+                </div>
+                <p className="text-[11px] text-emerald-200 mt-0.5 font-mono">
+                  ≈ ${revenueSummary.grandTotalUsd.toFixed(2)} USD
+                </p>
+              </div>
+
+              <div
+                onClick={() => {
+                  setFilterTab('pending');
+                  setActiveAdminPage('entries');
+                }}
+                className="bg-white rounded-2xl p-4 border-2 border-orange-300 shadow-xs cursor-pointer hover:bg-orange-50/40 transition-all"
+              >
+                <div className="flex items-center justify-between text-orange-800 text-xs font-extrabold">
+                  <span>Pending Orange Money</span>
+                  <Clock className="w-4 h-4 text-orange-600" />
+                </div>
+                <div className="font-display font-extrabold text-3xl text-orange-600 mt-1 tabular-nums">
+                  {stats.pending}
+                </div>
+                <p className="text-[11px] text-orange-800 mt-0.5">
+                  Le {(stats.pending * passPriceSle).toLocaleString()} awaiting approval
+                </p>
+              </div>
+
+              <div
+                onClick={() => {
+                  setFilterTab('active');
+                  setActiveAdminPage('entries');
+                }}
+                className="bg-white rounded-2xl p-4 border border-sage-200 shadow-xs cursor-pointer hover:bg-sage-50/50 transition-all"
+              >
+                <div className="flex items-center justify-between text-sage-800 text-xs font-bold">
+                  <span>2-Week Free Users</span>
+                  <CheckCircle2 className="w-4 h-4 text-sage-600" />
+                </div>
+                <div className="font-display font-extrabold text-3xl text-sage-800 mt-1 tabular-nums">
+                  {stats.trial}
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">Active 14-day free access</p>
+              </div>
+
+              <div
+                onClick={() => {
+                  setFilterTab('free_password');
+                  setActiveAdminPage('entries');
+                }}
+                className="bg-white rounded-2xl p-4 border border-lavender-200 shadow-xs cursor-pointer hover:bg-lavender-50/50 transition-all"
+              >
+                <div className="flex items-center justify-between text-lavender-900 text-xs font-bold">
+                  <span>Paid + 30d Pass</span>
+                  <KeyRound className="w-4 h-4 text-lavender-700" />
+                </div>
+                <div className="font-display font-extrabold text-3xl text-lavender-900 mt-1 tabular-nums">
+                  {stats.subscribed + stats.freePass}
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {stats.subscribed} Paid · {stats.freePass} Free Code
+                </p>
+              </div>
+
+              <div
+                onClick={() => {
+                  setFilterTab('expired');
+                  setActiveAdminPage('entries');
+                }}
+                className="bg-white rounded-2xl p-4 border border-rose-200 shadow-xs cursor-pointer hover:bg-rose-50/50 transition-all"
+              >
+                <div className="flex items-center justify-between text-rose-800 text-xs font-bold">
+                  <span>Expired / Locked</span>
+                  <Lock className="w-4 h-4 text-rose-600" />
+                </div>
+                <div className="font-display font-extrabold text-3xl text-rose-700 mt-1 tabular-nums">
+                  {stats.expired}
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">Requires renewal</p>
+              </div>
+            </div>
+
+            {/* LIVE PEOPLE LOGGING IN & SIGN-UP FEED */}
+            <section className="bg-white rounded-3xl border-2 border-emerald-300 p-5 sm:p-6 shadow-xs space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                    <BellRing className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="font-display font-extrabold text-lg sm:text-xl text-slate-900">
+                      🟢 Live People Logging In &amp; Sign-Up Feed ({recentLoginsList.length}{' '}
+                      People)
+                    </h2>
+                    <p className="text-xs text-slate-600">
+                      Every person who creates an account or logs in appears here in real time. Every card has working Free Pass, Edit, and Delete buttons.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveAdminPage('entries')}
+                    className="px-3.5 py-2 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-400 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Search className="w-3.5 h-3.5" />
+                    <span>Open Full Searchable Entries Page</span>
+                  </button>
+                  {onExtendUserFreeAccess && recentLoginsList.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => onExtendUserFreeAccess('ALL', 30)}
+                      className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-plum-900 font-extrabold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                    >
+                      <span>🎁 Give All People 1 Month Free (Le 0)</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleManualSyncClick}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingEntries ? 'animate-spin' : ''}`} />
+                    <span>Refresh</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleWhatsAppAllLoginsToOwner}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span>WhatsApp List</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Bar & Subscription Status Filter Dropdown on Overview User Feed */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 p-3.5 rounded-2xl bg-cream border border-emerald-200">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-emerald-800 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    aria-label="Search users by name or email in overview"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search users by Name or Email..."
+                    className="w-full pl-10 pr-20 py-2.5 rounded-xl border border-emerald-300 bg-white text-xs font-semibold text-slate-900 outline-none focus:border-emerald-700"
+                  />
+                  {searchQuery.trim() !== '' && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded-md bg-rose-100 hover:bg-rose-200 text-rose-800 font-extrabold text-[11px] cursor-pointer"
+                    >
+                      Clear ✕
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 bg-white px-3.5 py-2.5 rounded-xl border border-emerald-300 shrink-0">
+                  <label
+                    htmlFor="overview-subscription-status-filter"
+                    className="text-[11px] font-extrabold uppercase tracking-wider text-emerald-900 whitespace-nowrap"
+                  >
+                    Subscription Status:
+                  </label>
+                  <select
+                    id="overview-subscription-status-filter"
+                    aria-label="Filter overview users by subscription status"
+                    value={filterTab}
+                    onChange={(e) =>
+                      setFilterTab(
+                        e.target.value as
+                          | 'all'
+                          | 'active'
+                          | 'expired'
+                          | 'pending'
+                          | 'free_password'
+                      )
+                    }
+                    className="text-xs font-extrabold text-slate-900 bg-transparent outline-none cursor-pointer"
+                  >
+                    <option value="all">All Statuses ({stats.total})</option>
+                    <option value="active">Active ({stats.active})</option>
+                    <option value="expired">Expired ({stats.expired})</option>
+                    <option value="pending">Pending ({stats.pending})</option>
+                    <option value="free_password">30-Day Free Access ({stats.freePass})</option>
+                  </select>
+                </div>
+              </div>
+
+              {recentLoginsList.length === 0 ? (
+                <div className="rounded-2xl bg-cream p-6 text-center text-xs text-slate-600 border border-slate-200">
+                  No users match your current search or subscription status filter.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                  {recentLoginsList.slice(0, 18).map((u, idx) => {
+                    const phoneUsed = resolveCustomerPhoneUsed(u) || 'Not entered';
+                    const lastLoginDate = u.lastSignInAt
+                      ? new Date(u.lastSignInAt).toLocaleString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                        })
+                      : u.firstEntryAt || u.createdAt
+                      ? new Date(u.firstEntryAt || u.createdAt).toLocaleString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                        })
+                      : 'Just now';
+                    const st = getTrialStatus(u);
+
+                    return (
+                      <div
+                        key={`recent-login-${u.email}-${idx}`}
+                        className="rounded-2xl bg-emerald-50/50 border border-emerald-200 p-4 flex flex-col justify-between gap-3"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="px-2 py-0.5 rounded-md bg-plum-900 text-gold-400 font-mono font-extrabold text-[11px]">
+                              Customer #{u.customerNumber || idx + 1}
+                            </span>
+                            <span className="text-[11px] font-mono font-bold text-emerald-800">
+                              🕒 {lastLoginDate}
+                            </span>
+                          </div>
+                          <div className="font-display font-extrabold text-sm text-slate-900 mt-1.5">
+                            {u.name || 'Student'}{' '}
+                            <span className="text-xs font-mono font-bold text-slate-500">
+                              ({u.age ? `${u.age} yrs` : '21 yrs'})
+                            </span>
+                          </div>
+                          <div className="text-xs font-mono font-bold text-lavender-900 break-all">
+                            ✉️ {u.email}
+                          </div>
+                          <div className="text-xs font-mono font-bold text-sage-900 mt-0.5">
+                            📞 Phone Used: {phoneUsed}
+                          </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setOpenTables((prev) => ({ ...prev, customerTable: true }));
-                              handleOpenEditCustomerEntry(u);
-                            }}
-                            className="px-3 py-2.5 rounded-xl bg-lavender-100 hover:bg-lavender-200 text-lavender-900 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                            <span>Edit Entry</span>
-                          </button>
+                        <div className="pt-2 border-t border-emerald-200/70 space-y-2">
+                          <div className="flex items-center justify-between text-[11px] text-slate-600">
+                            <span className="truncate max-w-[165px]">
+                              {u.deviceInfo || '📱/💻 WebApp'} • {u.signInCount || 1} login(s)
+                            </span>
+                            <span className="font-extrabold text-emerald-900">
+                              {st.daysLeft}d left
+                            </span>
+                          </div>
 
-                          {onExtendUserFreeAccess && (
-                            <>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {onExtendUserFreeAccess && (
                               <button
                                 type="button"
                                 onClick={() => onExtendUserFreeAccess(u.email, 30)}
-                                className="px-4 py-2.5 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-400 border border-gold-500/40 font-extrabold text-xs flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-                                title="Give 1 Month (30 Days) Free without adding to Money Made (Le 0)"
+                                className="flex-1 py-1.5 px-2.5 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-400 font-extrabold text-[11px] flex items-center justify-center gap-1 shadow-2xs transition-all cursor-pointer"
                               >
-                                <span>🎁 1 Month Free (Le 0)</span>
+                                <span>🎁 1M Free (Le 0)</span>
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => onExtendUserFreeAccess(u.email, 14)}
-                                className="px-3.5 py-2.5 rounded-xl bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-                                title="Grant or extend 2 weeks (14 days) of free access (Le 0)"
-                              >
-                                <span>+14d Free (Le 0)</span>
-                              </button>
-                            </>
-                          )}
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onApproveUserPayment(u.email);
-                              setLastApprovedUserEmail(u.email);
-                            }}
-                            className="px-4 py-2.5 rounded-xl bg-sage-600 hover:bg-sage-800 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-                            title="Approve Paid Orange Money Pass (+30 Days & adds Le 30 to Money Made)"
-                          >
-                            <CheckCircle2 className="w-4 h-4" />
-                            <span>Approve Paid (+Le {passPriceSle})</span>
-                          </button>
-
-                          {hasPending ? (
+                            )}
                             <button
                               type="button"
-                              onClick={() => onRejectOrExpireUser(u.email, 'reject')}
-                              className="px-3.5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-800 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
+                              onClick={() => handleOpenEditCustomerEntry(u)}
+                              className="py-1.5 px-2.5 rounded-xl bg-white hover:bg-lavender-50 text-lavender-900 border border-lavender-300 font-extrabold text-[11px] cursor-pointer"
                             >
-                              <XCircle className="w-4 h-4" />
-                              <span>Reject</span>
+                              Edit
                             </button>
-                          ) : (
                             <button
                               type="button"
-                              onClick={() => onRejectOrExpireUser(u.email, 'expire')}
-                              className="px-3 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-bold text-xs flex items-center gap-1 transition-all cursor-pointer"
+                              onClick={() => handleDeleteSingleCustomer(u.email)}
+                              className="py-1.5 px-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[11px] flex items-center gap-1 cursor-pointer"
+                              title="Delete this customer entry"
                             >
-                              <Lock className="w-3.5 h-3.5" />
-                              <span>Expire / Lock</span>
+                              <Trash2 className="w-3 h-3" />
+                              <span>Delete</span>
                             </button>
-                          )}
-
-                          <a
-                            href={buildWhatsAppHref(u)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-3 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all"
-                          >
-                            <MessageSquare className="w-3.5 h-3.5" />
-                            <span>WhatsApp</span>
-                          </a>
-
-                          <a
-                            href={buildSmsHref(u)}
-                            className="px-3 py-2.5 rounded-xl bg-lavender-100 hover:bg-lavender-200 text-lavender-900 font-bold text-xs flex items-center gap-1.5 transition-all"
-                          >
-                            <Phone className="w-3.5 h-3.5" />
-                            <span>SMS</span>
-                          </a>
-
-                          <a
-                            href={buildApprovalEmailHref(u)}
-                            className="px-3 py-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold text-xs flex items-center gap-1 transition-all"
-                          >
-                            <Mail className="w-3.5 h-3.5" />
-                            <span>Email</span>
-                          </a>
-
-                          {onDeleteUser && (
-                            <button
-                              type="button"
-                              onClick={() => onDeleteUser(u.email)}
-                              className="p-2.5 rounded-xl bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-700 border border-slate-200 transition-all cursor-pointer"
-                              title="Remove user account"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* =================================================================== */}
-        {/* TABLE BUTTON 6: GRANT ADMIN ACCESS TO TEAM MEMBERS (COLLAPSIBLE)    */}
-        {/* =================================================================== */}
-        <section className="bg-white rounded-3xl border-2 border-sage-200 shadow-xs overflow-hidden">
-          <button
-            type="button"
-            onClick={() => toggleTableSection('teamAdmins')}
-            className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 bg-sage-50/60 hover:bg-sage-50 transition-colors text-left cursor-pointer"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-sage-700 text-white flex items-center justify-center shrink-0">
-                <UserPlus className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-                    🛡️ Team Admin Accounts Table ({1 + additionalAdmins.length} Authorized Admins)
-                  </span>
+                    );
+                  })}
                 </div>
-                <p className="text-xs text-slate-600">
-                  Add or manage Co-Admins who can view customer sign-ups and approve accounts.
-                </p>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* =================================================================== */}
+        {/* PAGE 3: MONEY & REVENUE CALCULATOR PAGE                             */}
+        {/* =================================================================== */}
+        {activeAdminPage === 'revenue' && (
+          <section className="bg-white rounded-3xl border-2 border-amber-300 p-5 sm:p-6 shadow-xs space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-amber-500 text-plum-900 flex items-center justify-center shrink-0">
+                  <Calculator className="w-6 h-6" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-amber-900 block">
+                    Page 3 of 6 · App Revenue &amp; Auto Money Reducer
+                  </span>
+                  <h2 className="font-display font-extrabold text-lg sm:text-xl text-slate-900">
+                    💰 Money the App Is Making: Le {revenueSummary.grandTotalSle.toLocaleString()}{' '}
+                    (${revenueSummary.grandTotalUsd.toFixed(2)})
+                  </h2>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const summaryText =
+                    `💰 BloomCampus & Sidratu App Revenue Summary\n` +
+                    `• Price per 30-Day Pass: Le ${passPriceSle}\n` +
+                    `• Paid Verified Passes (${revenueSummary.activePaidPassesCount}): Le ${revenueSummary.confirmedPassRevenueSle.toLocaleString()}\n` +
+                    `• Pending Passes (${stats.pending}): Le ${revenueSummary.pendingPassRevenueSle.toLocaleString()}\n` +
+                    `• Custom Added Money (${customRevenueItems.length} items): Le ${revenueSummary.customItemsTotalSle.toLocaleString()}\n` +
+                    `• GRAND TOTAL MONEY MADE: Le ${revenueSummary.grandTotalSle.toLocaleString()} SLE (≈ $${revenueSummary.grandTotalUsd.toFixed(2)} USD / ${revenueSummary.grandTotalOldLeones.toLocaleString()} Old Leones)`;
+                  navigator.clipboard?.writeText(summaryText);
+                  showToast('📋 Copied App Money & Revenue Report to clipboard!', 'success');
+                }}
+                className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>Copy Total Revenue Report</span>
+              </button>
+            </div>
+
+            {/* Grand Total Display Banner */}
+            <div className="rounded-2xl bg-gradient-to-r from-plum-900 via-lavender-900 to-plum-900 text-white p-5 border border-gold-500/40 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-gold-400">
+                  Grand Total Money Made (Auto Subscriptions + Added Entries)
+                </span>
+                <label className="inline-flex items-center gap-1.5 text-xs font-bold text-white/90 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={includePendingInTotal}
+                    onChange={(e) => setIncludePendingInTotal(e.target.checked)}
+                    className="rounded border-white/30"
+                  />
+                  <span>Include Pending ({stats.pending})</span>
+                </label>
+              </div>
+              <div className="mt-2 flex flex-wrap items-baseline justify-between gap-3">
+                <div className="font-display font-extrabold text-3xl sm:text-4xl text-gold-400 tabular-nums">
+                  Le {revenueSummary.grandTotalSle.toLocaleString()}{' '}
+                  <span className="text-xs font-mono text-white/80">SLE (New Leones)</span>
+                </div>
+                <div className="text-right">
+                  <div className="font-mono font-extrabold text-lg text-emerald-300 tabular-nums">
+                    ≈ ${revenueSummary.grandTotalUsd.toFixed(2)} USD
+                  </div>
+                  <div className="font-mono text-xs text-white/75 tabular-nums">
+                    Old Leones: Le {revenueSummary.grandTotalOldLeones.toLocaleString()} SLL
+                  </div>
+                </div>
               </div>
             </div>
-            <span className="px-3 py-1.5 rounded-xl bg-sage-700 text-white font-extrabold text-xs flex items-center gap-1 shrink-0">
-              <span>{openTables.teamAdmins ? 'Hide Table' : 'Open Table'}</span>
-              {openTables.teamAdmins ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
-            </span>
-          </button>
 
-          {openTables.teamAdmins && (
-            <div className="p-5 sm:p-6 border-t border-sage-200 space-y-4">
+            {/* Automatic Subscription Breakdown Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div className="rounded-xl bg-cream p-3.5 border border-slate-200">
+                <span className="text-[10px] font-extrabold uppercase text-slate-500 block">
+                  Price Per 30-Day Pass (Le)
+                </span>
+                <div className="mt-1 flex items-center gap-1.5">
+                  <span className="font-bold text-slate-700">Le</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={passPriceSle}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setPassPriceSle(!Number.isNaN(v) && v >= 0 ? v : 0);
+                    }}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-mono font-extrabold text-sm text-slate-900"
+                  />
+                </div>
+                <span className="text-[10px] text-slate-500 mt-1 block">
+                  🎁 1-Month Free grants = Le 0
+                </span>
+              </div>
+
+              <div className="rounded-xl bg-emerald-50/70 p-3.5 border border-emerald-200 space-y-1.5">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[10px] font-extrabold uppercase text-emerald-800">
+                    Auto Money Made ({revenueSummary.activePaidPassesCount} Paid)
+                  </span>
+                  {autoMoneyAdjustmentSle !== 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAutoMoneyAdjustmentSle(0);
+                        showToast('Reset Auto Money Made to default paid pass count.', 'info');
+                      }}
+                      className="text-[10px] font-extrabold text-emerald-800 underline cursor-pointer"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-emerald-900 text-xs">Le</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={revenueSummary.confirmedPassRevenueSle}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      handleSetExactAutoMoney(!Number.isNaN(val) && val >= 0 ? val : 0);
+                    }}
+                    className="w-full px-2 py-1.5 rounded-lg border border-emerald-300 bg-white font-mono font-extrabold text-sm text-emerald-900"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => handleAdjustAutoMoney(-(passPriceSle || 30))}
+                    className="px-2 py-0.5 rounded-md bg-rose-100 hover:bg-rose-200 text-rose-900 border border-rose-300 font-mono font-extrabold text-[10px] cursor-pointer"
+                  >
+                    −Le {passPriceSle || 30}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAdjustAutoMoney(passPriceSle || 30)}
+                    className="px-2 py-0.5 rounded-md bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300 font-mono font-extrabold text-[10px] cursor-pointer"
+                  >
+                    +Le {passPriceSle || 30}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleSetExactAutoMoney(0);
+                      showToast('📉 Set Auto Money Made to Le 0!', 'info');
+                    }}
+                    className="px-2 py-0.5 rounded-md bg-white hover:bg-rose-50 text-rose-800 border border-rose-200 font-extrabold text-[10px] cursor-pointer"
+                  >
+                    Set Le 0
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-orange-50/70 p-3.5 border border-orange-200">
+                <span className="text-[10px] font-extrabold uppercase text-orange-800 block">
+                  Pending Passes ({stats.pending})
+                </span>
+                <div className="font-display font-extrabold text-base text-orange-800 mt-1 tabular-nums">
+                  Le {revenueSummary.pendingPassRevenueSle.toLocaleString()}
+                </div>
+                <span className="text-[10px] text-orange-700">
+                  {includePendingInTotal ? 'Included in total' : 'Check box above to include'}
+                </span>
+              </div>
+            </div>
+
+            {/* Quick-Tap Money Adder & Reducer Buttons */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="p-3.5 rounded-2xl bg-amber-50/50 border border-amber-200 space-y-2">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-900 block">
+                  Quick-Tap to Add Up Money (+Le):
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { amount: 30, label: '1 Subscription Pass (+Le 30)' },
+                    { amount: 60, label: '2 Subscription Passes (+Le 60)' },
+                    { amount: 150, label: '5 Subscription Passes (+Le 150)' },
+                    { amount: 300, label: '10 Subscription Passes (+Le 300)' },
+                    { amount: 500, label: 'Clinic / Custom (+Le 500)' },
+                    { amount: 1000, label: 'Clinic / Custom (+Le 1,000)' },
+                  ].map((btn) => (
+                    <button
+                      key={btn.label}
+                      type="button"
+                      onClick={() => handleQuickAddMoney(btn.amount, btn.label)}
+                      className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 font-mono font-extrabold text-xs transition-all cursor-pointer"
+                    >
+                      +Le {btn.amount}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-2xl bg-rose-50/50 border border-rose-200 space-y-2">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-900 block">
+                  Quick-Tap to Reduce / Subtract Money (−Le):
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { amount: 30, label: 'Reduce 1 Pass (−Le 30)' },
+                    { amount: 60, label: 'Reduce 2 Passes (−Le 60)' },
+                    { amount: 150, label: 'Reduce 5 Passes (−Le 150)' },
+                    { amount: 300, label: 'Reduce 10 Passes (−Le 300)' },
+                    { amount: 500, label: 'Reduce Custom (−Le 500)' },
+                  ].map((btn) => (
+                    <button
+                      key={btn.label}
+                      type="button"
+                      onClick={() => handleAdjustAutoMoney(-btn.amount)}
+                      className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-rose-100 text-rose-900 border border-rose-300 font-mono font-extrabold text-xs transition-all cursor-pointer"
+                    >
+                      −Le {btn.amount}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleSetExactAutoMoney(0);
+                      setCustomRevenueItems([]);
+                      setIncludePendingInTotal(false);
+                      showToast('📉 Reset Total App Money Made to Le 0!', 'info');
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-800 text-white font-extrabold text-xs transition-all cursor-pointer"
+                  >
+                    Reset All Money to Le 0
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Custom Revenue Item Form */}
+            <form
+              onSubmit={(e) => handleAddCustomRevenueItem(e, 'add')}
+              className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end bg-cream p-4 rounded-2xl border border-slate-200"
+            >
+              <div className="sm:col-span-5">
+                <label className="text-[10px] font-extrabold uppercase text-slate-600 block mb-1">
+                  Description / Note
+                </label>
+                <input
+                  type="text"
+                  value={newRevLabel}
+                  onChange={(e) => setNewRevLabel(e.target.value)}
+                  placeholder="e.g., Direct Orange Money / Clinic Session / Expense"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-900"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-[10px] font-extrabold uppercase text-slate-600 block mb-1">
+                  Amount *
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={newRevAmount}
+                  onChange={(e) => setNewRevAmount(e.target.value)}
+                  placeholder="30"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono font-extrabold text-xs text-slate-900"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-[10px] font-extrabold uppercase text-slate-600 block mb-1">
+                  Currency
+                </label>
+                <select
+                  value={newRevCurrency}
+                  onChange={(e) => setNewRevCurrency(e.target.value as 'SLE' | 'USD')}
+                  className="w-full px-2 py-2 rounded-xl border border-slate-300 bg-white font-extrabold text-xs text-slate-900"
+                >
+                  <option value="SLE">Le (SLE)</option>
+                  <option value="USD">$ (USD)</option>
+                </select>
+              </div>
+              <div className="sm:col-span-3 flex items-center gap-1.5">
+                <button
+                  type="submit"
+                  className="flex-1 py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-xs flex items-center justify-center gap-1 cursor-pointer h-[36px]"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAddCustomRevenueItem(undefined, 'reduce')}
+                  className="flex-1 py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs flex items-center justify-center gap-1 cursor-pointer h-[36px]"
+                >
+                  <span>− Reduce</span>
+                </button>
+              </div>
+            </form>
+
+            {/* Custom Revenue Ledger with Delete Buttons */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-extrabold text-slate-700">
+                <span>
+                  Custom Money Ledger ({customRevenueItems.length} entries) — Net: Le{' '}
+                  {revenueSummary.customItemsTotalSle.toLocaleString()}
+                </span>
+                {customRevenueItems.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCustomRevenueItems([]);
+                      showToast('🗑️ Cleared all custom money entries.', 'info');
+                    }}
+                    className="px-3 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-extrabold text-xs flex items-center gap-1 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Clear All Entries</span>
+                  </button>
+                )}
+              </div>
+
+              {customRevenueItems.length === 0 ? (
+                <p className="text-xs text-slate-500 italic bg-cream p-4 rounded-2xl border border-slate-200">
+                  No custom money entries added yet. Use the form or quick-tap buttons above to record custom earnings or expenses.
+                </p>
+              ) : (
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {customRevenueItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl border text-xs ${
+                        item.amountSle < 0
+                          ? 'bg-rose-50/70 border-rose-200'
+                          : 'bg-amber-50/50 border-amber-200'
+                      }`}
+                    >
+                      <div className="truncate">
+                        <span className="font-bold text-slate-900">{item.label}</span>{' '}
+                        <span className="text-[10px] text-slate-500">({item.createdAt})</span>
+                      </div>
+                      <div className="flex items-center gap-2.5 shrink-0">
+                        <span
+                          className={`font-mono font-extrabold ${
+                            item.amountSle < 0 ? 'text-rose-800' : 'text-amber-900'
+                          }`}
+                        >
+                          {item.amountSle < 0
+                            ? `−Le ${Math.abs(item.amountSle).toLocaleString()}`
+                            : `+Le ${item.amountSle.toLocaleString()}`}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomRevenueItems((prev) => prev.filter((x) => x.id !== item.id));
+                            showToast(`🗑️ Deleted "${item.label}" from money ledger.`, 'info');
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] flex items-center gap-1 cursor-pointer"
+                          title="Delete this revenue entry"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>Delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* =================================================================== */}
+        {/* PAGE 4: USD ($) ⇄ SIERRA LEONEAN LEONES CONVERTER & CALCULATOR PAGE */}
+        {/* =================================================================== */}
+        {activeAdminPage === 'converter' && (
+          <section className="bg-white rounded-3xl border-2 border-emerald-300 p-5 sm:p-6 shadow-xs space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                  <ArrowRightLeft className="w-6 h-6" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-800 block">
+                    Page 4 of 6 · Currency Converter &amp; Check Calculator
+                  </span>
+                  <h2 className="font-display font-extrabold text-lg sm:text-xl text-slate-900">
+                    💱 USD ($) ⇄ Sierra Leonean Leones (SLE) Calculator ($1 = Le {usdToSleRate})
+                  </h2>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 bg-emerald-50 px-3 py-2 rounded-xl border border-emerald-200">
+                <span className="text-xs font-extrabold text-emerald-900">$1 USD = Le</span>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  value={usdToSleRate}
+                  onChange={(e) => handleRateChange(e.target.value)}
+                  className="w-20 px-2 py-1 rounded-lg border border-emerald-300 bg-white font-mono font-extrabold text-xs text-slate-900"
+                />
+              </div>
+            </div>
+
+            {/* Two-Way Live Converter Box */}
+            <div className="rounded-2xl bg-emerald-50/70 border border-emerald-200 p-4 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+                <div className="bg-white p-3.5 rounded-xl border border-emerald-300 shadow-2xs">
+                  <label className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                    <span>🇺🇸 US Dollars ($ USD)</span>
+                    <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={usdInputStr}
+                    onChange={(e) => handleUsdInputChange(e.target.value)}
+                    placeholder="0.00"
+                    className="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 bg-cream/60 font-mono font-extrabold text-lg text-slate-900 outline-none focus:border-emerald-600"
+                  />
+                </div>
+
+                <div className="bg-white p-3.5 rounded-xl border border-emerald-300 shadow-2xs">
+                  <label className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                    <span>🇸🇱 Sierra Leonean Leones (Le / SLE)</span>
+                    <span className="font-mono text-emerald-700 font-bold">Le</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={sleInputStr}
+                    onChange={(e) => handleSleInputChange(e.target.value)}
+                    placeholder="0.00"
+                    className="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 bg-cream/60 font-mono font-extrabold text-lg text-emerald-900 outline-none focus:border-emerald-600"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-emerald-950 bg-white/90 px-3.5 py-2.5 rounded-xl border border-emerald-200 font-mono">
+                <span>
+                  <strong>${Number(usdInputStr || 0).toLocaleString()} USD</strong> ={' '}
+                  <strong>Le {Number(sleInputStr || 0).toLocaleString()} SLE</strong> (New Leones)
+                </span>
+                <span className="text-slate-600">
+                  Old Leones:{' '}
+                  <strong>
+                    Le {(Number(sleInputStr || 0) * 1000).toLocaleString()} SLL
+                  </strong>
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                {[1, 5, 10, 20, 50, 100].map((usdPreset) => (
+                  <button
+                    key={usdPreset}
+                    type="button"
+                    onClick={() => handleUsdInputChange(String(usdPreset))}
+                    className="px-2.5 py-1 rounded-lg bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 font-mono font-extrabold text-[11px] cursor-pointer"
+                  >
+                    ${usdPreset} = Le {(usdPreset * usdToSleRate).toFixed(1)}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => handleSleInputChange(String(passPriceSle))}
+                  className="px-2.5 py-1 rounded-lg bg-plum-900 text-gold-400 font-mono font-extrabold text-[11px] cursor-pointer"
+                >
+                  Pass Le {passPriceSle} = $
+                  {usdToSleRate > 0 ? (passPriceSle / usdToSleRate).toFixed(2) : '0.00'}
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Check Arithmetic Calculator */}
+            <div className="rounded-2xl bg-cream p-4 border border-slate-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-700">
+                  🧮 Quick Check Calculator (Add, Subtract, Multiply, Divide)
+                </span>
+                <div className="inline-flex rounded-lg bg-white border border-slate-300 p-0.5 text-[11px] font-extrabold">
+                  <button
+                    type="button"
+                    onClick={() => setCalcInputCurrency('SLE')}
+                    className={`px-2 py-0.5 rounded-md cursor-pointer ${
+                      calcInputCurrency === 'SLE'
+                        ? 'bg-plum-900 text-gold-400'
+                        : 'text-slate-600'
+                    }`}
+                  >
+                    Input in Le (SLE)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCalcInputCurrency('USD')}
+                    className={`px-2 py-0.5 rounded-md cursor-pointer ${
+                      calcInputCurrency === 'USD'
+                        ? 'bg-emerald-700 text-white'
+                        : 'text-slate-600'
+                    }`}
+                  >
+                    Input in $ (USD)
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-12 gap-2 items-center">
+                <input
+                  type="number"
+                  step="any"
+                  value={calcNumA}
+                  onChange={(e) => setCalcNumA(e.target.value)}
+                  className="col-span-4 px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono font-extrabold text-sm text-slate-900"
+                  placeholder="First #"
+                />
+                <div className="col-span-4 grid grid-cols-4 gap-1">
+                  {(['+', '-', '×', '÷'] as const).map((op) => (
+                    <button
+                      key={op}
+                      type="button"
+                      onClick={() => setCalcOp(op)}
+                      className={`py-2 rounded-xl font-mono font-extrabold text-sm cursor-pointer ${
+                        calcOp === op
+                          ? 'bg-plum-900 text-gold-400 shadow-2xs'
+                          : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300'
+                      }`}
+                    >
+                      {op}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="number"
+                  step="any"
+                  value={calcNumB}
+                  onChange={(e) => setCalcNumB(e.target.value)}
+                  className="col-span-4 px-3 py-2 rounded-xl border border-slate-300 bg-white font-mono font-extrabold text-sm text-slate-900"
+                  placeholder="Second #"
+                />
+              </div>
+
+              {quickCalcResult.valid && (
+                <div className="rounded-xl bg-white p-3.5 border border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-[10px] font-extrabold uppercase text-slate-400">
+                      Calculation Result ({calcNumA} {calcOp} {calcNumB})
+                    </div>
+                    <div className="font-mono font-extrabold text-base text-slate-900">
+                      Le {quickCalcResult.resultSle.toLocaleString()} SLE{' '}
+                      <span className="text-emerald-700">
+                        (≈ ${quickCalcResult.resultUsd.toFixed(2)} USD)
+                      </span>
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-500">
+                      Old Leones: Le {quickCalcResult.resultOldSll.toLocaleString()} SLL
+                    </div>
+                  </div>
+
+                  {quickCalcResult.resultSle > 0 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleQuickAddMoney(
+                          quickCalcResult.resultSle,
+                          `Calc (${calcNumA} ${calcOp} ${calcNumB})`
+                        )
+                      }
+                      className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-plum-900 font-extrabold text-xs flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Le {quickCalcResult.resultSle} to App Money</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* =================================================================== */}
+        {/* PAGE 5: TEAM ADMINS & PASSWORDS PAGE                                */}
+        {/* =================================================================== */}
+        {activeAdminPage === 'security' && (
+          <div className="space-y-6">
+            {/* TEAM ADMIN ACCOUNTS SECTION */}
+            <section className="bg-white rounded-3xl border-2 border-sage-200 p-5 sm:p-6 shadow-xs space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-sage-700 text-white flex items-center justify-center shrink-0">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-sage-800 block">
+                    Page 5 of 6 · Team Admin Access &amp; Security Codes
+                  </span>
+                  <h2 className="font-display font-extrabold text-lg sm:text-xl text-slate-900">
+                    🛡️ Team Admin Accounts ({1 + additionalAdmins.length} Authorized Admins)
+                  </h2>
+                  <p className="text-xs text-slate-600">
+                    Add or remove Co-Admins who can view customer entries and approve accounts.
+                  </p>
+                </div>
+              </div>
+
               <form
                 onSubmit={handleAddAdminAccount}
                 className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 items-end bg-sage-50/60 p-4 rounded-2xl border border-sage-200"
@@ -3087,7 +3355,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                 </div>
 
                 {additionalAdmins.map((adm) => {
-                  const shareText = `Hello ${adm.name || 'Admin'}! You have been granted Admin Dashboard access on BloomCampus & Sidratu Clinic to view all user sign-ups and total people in the app.\n• Admin Login Email: ${adm.email}\n• Admin Password: ${adm.password}\nClick "Owner / Admin Login" to sign in.`;
+                  const shareText = `Hello ${adm.name || 'Admin'}! You have been granted Admin Dashboard access on BloomCampus & Sidratu Clinic.\n• Admin Login Email: ${adm.email}\n• Admin Password: ${adm.password}`;
                   const mailHref = `mailto:${encodeURIComponent(
                     adm.email
                   )}?subject=${encodeURIComponent(
@@ -3114,9 +3382,6 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                         <span className="font-mono text-xs text-sage-900 bg-sage-50 px-2.5 py-1 rounded-lg border border-sage-200">
                           Password: <strong>{adm.password}</strong>
                         </span>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          Added {new Date(adm.addedAt).toLocaleDateString()}
-                        </span>
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2 shrink-0">
@@ -3125,7 +3390,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                           onClick={() => {
                             navigator.clipboard?.writeText(shareText);
                             showToast(
-                              `Copied login credentials for ${adm.email} to share with them!`,
+                              `Copied login credentials for ${adm.email}!`,
                               'success'
                             );
                           }}
@@ -3146,55 +3411,35 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                         <button
                           type="button"
                           onClick={() => handleRemoveAdminAccount(adm.email)}
-                          className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs flex items-center gap-1 cursor-pointer"
+                          className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1 cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                          <span>Remove</span>
+                          <span>Delete Admin</span>
                         </button>
                       </div>
                     </div>
                   );
                 })}
               </div>
-            </div>
-          )}
-        </section>
+            </section>
 
-        {/* =================================================================== */}
-        {/* TABLE BUTTON 7: MANAGE OWNER ADMIN & FREE 30-DAY UNLOCK CODE        */}
-        {/* =================================================================== */}
-        <section className="bg-white rounded-3xl border-2 border-lavender-200 shadow-xs overflow-hidden">
-          <button
-            type="button"
-            onClick={() => toggleTableSection('adminCodes')}
-            className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 bg-cream/60 hover:bg-cream transition-colors text-left cursor-pointer"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-lavender-100 text-lavender-800 flex items-center justify-center shrink-0">
-                <KeyRound className="w-5 h-5" />
-              </div>
-              <div>
-                <span className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-                  🔑 Manage Owner Admin Console &amp; Free 30-Day Unlock Code
-                </span>
-                <p className="text-xs text-slate-600">
-                  Update your Owner Admin password or student Free 30-Day Unlock Code.
-                </p>
-              </div>
-            </div>
-            <span className="px-3 py-1.5 rounded-xl bg-lavender-700 text-white font-extrabold text-xs flex items-center gap-1 shrink-0">
-              <span>{openTables.adminCodes ? 'Hide' : 'Open'}</span>
-              {openTables.adminCodes ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
-            </span>
-          </button>
+            {/* MANAGE OWNER ADMIN & FREE 30-DAY UNLOCK CODE */}
+            <section className="bg-white rounded-3xl border-2 border-lavender-200 p-5 sm:p-6 shadow-xs space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-lavender-100 text-lavender-800 flex items-center justify-center shrink-0">
+                    <KeyRound className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-display font-extrabold text-base sm:text-lg text-slate-900">
+                      🔑 Manage Owner Admin Console &amp; Free 30-Day Unlock Code
+                    </h3>
+                    <p className="text-xs text-slate-600">
+                      Update your Owner Admin password or student Free 30-Day Unlock Code.
+                    </p>
+                  </div>
+                </div>
 
-          {openTables.adminCodes && (
-            <div className="p-5 sm:p-6 border-t border-lavender-200 space-y-4">
-              <div className="flex justify-end">
                 <button
                   type="button"
                   onClick={handleResetDefaultPasswords}
@@ -3219,9 +3464,6 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                     onChange={(e) => setAdminPassInput(e.target.value)}
                     className="w-full px-3.5 py-2 rounded-xl border border-slate-300 bg-white font-mono font-extrabold text-sm text-slate-900 outline-none focus:border-lavender-700"
                   />
-                  <span className="text-[10px] text-slate-500 mt-1 block">
-                    Primary Owner Admin Console Password
-                  </span>
                 </div>
 
                 <div className="bg-cream rounded-2xl p-3.5 border border-slate-200">
@@ -3234,9 +3476,6 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                     onChange={(e) => setFreePassInput(e.target.value)}
                     className="w-full px-3.5 py-2 rounded-xl border border-slate-300 bg-white font-mono font-extrabold text-sm text-emerald-800 outline-none focus:border-lavender-700"
                   />
-                  <span className="text-[10px] text-slate-500 mt-1 block">
-                    Unlocks 30 days when entered in the Renewal / Unlock modal
-                  </span>
                 </div>
 
                 <button
@@ -3246,114 +3485,205 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                   💾 Save &amp; Sync Admin Codes
                 </button>
               </form>
-            </div>
-          )}
-        </section>
+            </section>
+          </div>
+        )}
 
         {/* =================================================================== */}
-        {/* TABLE BUTTON 8: LIVE LOGIN ALERTS, PAYMENTS & SUPPORT INBOX         */}
+        {/* PAGE 6: ALERTS & SUPPORT INBOX PAGE (WITH SEARCH & DELETE)          */}
         {/* =================================================================== */}
-        <section className="bg-white rounded-3xl border-2 border-lavender-200 shadow-xs overflow-hidden">
-          <button
-            type="button"
-            onClick={() => toggleTableSection('inboxAlerts')}
-            className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 bg-lavender-50/40 hover:bg-lavender-50 transition-colors text-left cursor-pointer"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-lavender-100 text-lavender-700 flex items-center justify-center shrink-0">
-                <Sparkles className="w-5 h-5" />
+        {activeAdminPage === 'inbox' && (
+          <section className="bg-white rounded-3xl border-2 border-lavender-200 p-5 sm:p-6 shadow-xs space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-lavender-100 text-lavender-700 flex items-center justify-center shrink-0">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-lavender-800 block">
+                    Page 6 of 6 · Live Activity &amp; Support Inbox
+                  </span>
+                  <h2 className="font-display font-extrabold text-lg sm:text-xl text-slate-900">
+                    📬 Live Login Alerts, Payments &amp; Support Inbox ({filteredInquiries.length})
+                  </h2>
+                </div>
               </div>
-              <div>
-                <span className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-                  📬 Live Login Alerts, Payments &amp; Support Inbox ({supportInquiries.length})
-                </span>
-                <p className="text-xs text-slate-600">
-                  Every account sign-up, login, payment alert, and support inquiry for {OWNER_ADMIN_EMAIL}.
-                </p>
-              </div>
-            </div>
-            <span className="px-3 py-1.5 rounded-xl bg-lavender-700 text-white font-extrabold text-xs flex items-center gap-1 shrink-0">
-              <span>{openTables.inboxAlerts ? 'Hide Inbox' : 'Open Inbox'}</span>
-              {openTables.inboxAlerts ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
-            </span>
-          </button>
 
-          {openTables.inboxAlerts && (
-            <div className="p-5 sm:p-6 border-t border-lavender-200 space-y-4">
-              <div className="flex justify-end">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={handleEmailAllLoginsToOwner}
-                  className="px-3 py-1.5 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-900 border border-lavender-200 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer"
+                  className="px-3.5 py-2 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-900 border border-lavender-200 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer"
                 >
                   <Mail className="w-3.5 h-3.5" />
                   <span>Email All Logins to {OWNER_ADMIN_EMAIL}</span>
                 </button>
+
+                {onDeleteSupportInquiry && supportInquiries.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => onDeleteSupportInquiry(undefined, true)}
+                    className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Clear All Alerts ({supportInquiries.length})</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Inbox Search Bar & Filter Tabs */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-cream p-3.5 rounded-2xl border border-slate-200">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={inboxSearchQuery}
+                  onChange={(e) => {
+                    setInboxSearchQuery(e.target.value);
+                    setInboxPage(1);
+                  }}
+                  placeholder="Search inbox alerts by name, email, phone, or message..."
+                  className="w-full pl-9 pr-4 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-900 outline-none focus:border-lavender-700"
+                />
               </div>
 
-              {supportInquiries.length === 0 ? (
-                <p className="text-xs text-slate-500 italic bg-cream rounded-2xl p-4 border border-slate-200">
-                  No login, payment, or support notifications logged yet. Whenever a student signs up, logs in, or submits an Orange Money payment, it appears here automatically.
-                </p>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {supportInquiries.slice(0, 20).map((inq) => {
-                    const isPayment = inq.type === 'payment';
-                    const isLogin = inq.type === 'login' || inq.type === 'signup';
-                    return (
-                      <div
-                        key={inq.id}
-                        className={`rounded-2xl p-3.5 border space-y-1 text-xs ${
-                          isPayment
-                            ? 'bg-orange-50/70 border-orange-200'
-                            : isLogin
-                            ? 'bg-emerald-50/70 border-emerald-200'
-                            : 'bg-cream border-slate-200'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span
-                            className={`px-2 py-0.5 rounded-md font-extrabold uppercase text-[10px] ${
-                              isPayment
-                                ? 'bg-orange-100 text-orange-800'
-                                : isLogin
-                                ? 'bg-emerald-100 text-emerald-900'
-                                : 'bg-lavender-100 text-lavender-800'
-                            }`}
-                          >
-                            {isPayment
-                              ? '🟧 Payment Alert'
-                              : inq.type === 'signup'
-                              ? '🆕 New Account Sign-Up'
+              <div className="flex flex-wrap gap-1 bg-white p-1 rounded-xl border border-slate-200">
+                {(
+                  [
+                    { id: 'all', label: 'All Alerts' },
+                    { id: 'login', label: 'Logins & Sign-Ups' },
+                    { id: 'payment', label: 'Payments' },
+                    { id: 'support', label: 'Support' },
+                  ] as const
+                ).map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      setInboxFilterType(t.id);
+                      setInboxPage(1);
+                    }}
+                    className={`px-2.5 py-1.5 rounded-lg text-xs font-extrabold cursor-pointer ${
+                      inboxFilterType === t.id
+                        ? 'bg-plum-900 text-gold-400'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {paginatedInquiries.length === 0 ? (
+              <p className="text-xs text-slate-500 italic bg-cream rounded-2xl p-6 text-center border border-slate-200">
+                No alerts match your current inbox filter.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {paginatedInquiries.map((inq) => {
+                  const isPayment = inq.type === 'payment' || inq.type === 'appreciation';
+                  const isLogin =
+                    inq.type === 'login' || inq.type === 'signup' || inq.type === 'welcome';
+                  return (
+                    <div
+                      key={inq.id}
+                      className={`rounded-2xl p-4 border space-y-2 text-xs ${
+                        inq.type === 'appreciation'
+                          ? 'bg-rose-50/70 border-rose-300'
+                          : isPayment
+                          ? 'bg-orange-50/70 border-orange-200'
+                          : isLogin
+                          ? 'bg-emerald-50/70 border-emerald-200'
+                          : 'bg-cream border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          className={`px-2 py-0.5 rounded-md font-extrabold uppercase text-[10px] ${
+                            inq.type === 'appreciation'
+                              ? 'bg-rose-100 text-rose-900'
+                              : isPayment
+                              ? 'bg-orange-100 text-orange-800'
+                              : inq.type === 'welcome'
+                              ? 'bg-lavender-100 text-lavender-900'
                               : isLogin
-                              ? '🔑 User Sign-In'
-                              : '💬 Support Inquiry'}
-                          </span>
+                              ? 'bg-emerald-100 text-emerald-900'
+                              : 'bg-lavender-100 text-lavender-800'
+                          }`}
+                        >
+                          {inq.type === 'appreciation'
+                            ? '💖 Payment Appreciation Sent'
+                            : isPayment
+                            ? '🟧 Payment Alert'
+                            : inq.type === 'welcome'
+                            ? '🌸 Welcome & Thank-You Sent'
+                            : inq.type === 'signup'
+                            ? '🆕 New Account Sign-Up'
+                            : isLogin
+                            ? '🔑 User Sign-In'
+                            : '💬 Support Inquiry'}
+                        </span>
+                        <div className="flex items-center gap-2">
                           <span className="font-mono text-[10px] text-slate-500">
                             {new Date(inq.createdAt).toLocaleString()}
                           </span>
+                          {onDeleteSupportInquiry && (
+                            <button
+                              type="button"
+                              onClick={() => onDeleteSupportInquiry(inq.id, false)}
+                              className="px-2 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[10px] flex items-center gap-1 cursor-pointer"
+                              title="Delete this alert"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Delete</span>
+                            </button>
+                          )}
                         </div>
-                        <div className="font-bold text-slate-900">{inq.subject}</div>
-                        <div className="text-slate-600">
-                          From: <strong>{inq.userName}</strong> ({inq.userEmail}
-                          {inq.userAge ? ` · Age ${inq.userAge}` : ''}
-                          {inq.userPhone ? ` · 📞 ${inq.userPhone}` : ''})
-                        </div>
-                        <p className="text-slate-700 bg-white p-2.5 rounded-xl border border-slate-100 whitespace-pre-line">
-                          {inq.message}
-                        </p>
                       </div>
-                    );
-                  })}
+                      <div className="font-bold text-slate-900">{inq.subject}</div>
+                      <div className="text-slate-600">
+                        From: <strong>{inq.userName}</strong> ({inq.userEmail}
+                        {inq.userAge ? ` · Age ${inq.userAge}` : ''}
+                        {inq.userPhone ? ` · 📞 ${inq.userPhone}` : ''})
+                      </div>
+                      <p className="text-slate-700 bg-white p-2.5 rounded-xl border border-slate-100 whitespace-pre-line">
+                        {inq.message}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {totalInboxPages > 1 && (
+              <div className="pt-3 border-t border-slate-200 flex items-center justify-between text-xs">
+                <span className="font-bold text-slate-600">
+                  Inbox Page {safeInboxPage} of {totalInboxPages}
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={safeInboxPage <= 1}
+                    onClick={() => setInboxPage((p) => Math.max(1, p - 1))}
+                    className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 font-extrabold cursor-pointer"
+                  >
+                    Prev
+                  </button>
+                  <button
+                    type="button"
+                    disabled={safeInboxPage >= totalInboxPages}
+                    onClick={() => setInboxPage((p) => Math.min(totalInboxPages, p + 1))}
+                    className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 font-extrabold cursor-pointer"
+                  >
+                    Next
+                  </button>
                 </div>
-              )}
-            </div>
-          )}
-        </section>
+              </div>
+            )}
+          </section>
+        )}
       </main>
 
       {/* Admin Footer with Creator Branding */}
