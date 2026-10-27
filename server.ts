@@ -1355,9 +1355,15 @@ Provide a brief, empathetic, and medically grounded "Cycle Health Insight" JSON 
         middlewareMode: true,
         hmr: false,
         ws: false,
-        watch: null,
       },
       appType: 'spa',
+    });
+    app.use((req, res, next) => {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      if (req.url && (req.url.includes('/src/') || req.url === '/')) {
+        vite.moduleGraph.invalidateAll();
+      }
+      next();
     });
     app.use(vite.middlewares);
   } else {

@@ -585,11 +585,25 @@ export default function App() {
 
   // Paywall / Lock Screen Form State
   const [paymentTab, setPaymentTab] = useState<'orange' | 'free_password'>('orange');
+  const [orangeSenderNameInput, setOrangeSenderNameInput] = useState<string>('');
   const [orangePhoneInput, setOrangePhoneInput] = useState<string>('');
   const [orangeTxIdInput, setOrangeTxIdInput] = useState<string>('');
   const [vipSecretCodeInput, setVipSecretCodeInput] = useState<string>('');
   const [paymentReceiptText, setPaymentReceiptText] = useState<string>('');
   const [latestPaymentReceiptMessage, setLatestPaymentReceiptMessage] = useState<string>('');
+
+  // Keep Orange Money sender name & phone pre-populated from the logged-in user so the person is immediately identified
+  useEffect(() => {
+    if (!userData) return;
+    setOrangeSenderNameInput((prev) =>
+      prev.trim() ? prev : userData.pendingPayment?.senderName || userData.name || ''
+    );
+    setOrangePhoneInput((prev) =>
+      prev.trim()
+        ? prev
+        : userData.pendingPayment?.senderPhone || resolveCustomerPhoneUsed(userData) || ''
+    );
+  }, [userData?.email, userData?.name, userData?.phone, showPaywallModal]);
 
   // Load saved session on mount & sync with persistent server memory
   useEffect(() => {
@@ -3240,31 +3254,35 @@ export default function App() {
     e.preventDefault();
     if (!userData) return;
 
+    const senderName = (orangeSenderNameInput.trim() || userData.name || '').trim();
     const senderPhone = orangePhoneInput.trim() || userData.phone || '';
     const txId = orangeTxIdInput.trim();
-    if (!senderPhone || !txId) {
+    if (!senderName || !senderPhone || !txId) {
       showToast(
-        'Please enter both your Orange Money sender number and SMS Transaction ID.',
+        'Please enter your User Name / Orange Money Registered Name, Sender Number, and SMS Transaction ID to identify your payment.',
         'warning'
       );
       return;
     }
 
-    const paymentDetailSummary = `🟧 Orange Money (To 073604401) | Sender Phone: ${senderPhone} | SMS Ref/ID: ${txId}`;
+    const paymentDetailSummary = `🟧 Orange Money (To 073604401 · ${CREATOR_NAME}) | Payer Name: ${senderName} | Sender Phone: ${senderPhone} | SMS Ref/ID: ${txId}`;
     const nowIso = new Date().toISOString();
 
     updateUserData((prev) => ({
       ...prev,
+      name: senderName || prev.name,
       phone: senderPhone,
       usedFreeAccessPassword: false,
       subscriptionStatus: 'pending_verification',
       subscriptionUntil: null,
-      paymentMethod: 'Orange Money (Pending Verification)',
+      paymentMethod: `Orange Money — ${senderName} (Pending Verification)`,
       paymentAppreciationPending: true,
       lastPaymentAppreciationAt: nowIso,
       lastPaymentAppreciationAmount: 'Le 30',
       pendingPayment: {
         id: `pay-${Date.now()}`,
+        senderName,
+        userEmail: prev.email,
         senderPhone,
         transactionId: txId,
         amount: 'Le 30',
@@ -3278,6 +3296,8 @@ export default function App() {
           amount: 'Le 30',
           details: paymentDetailSummary,
           status: 'pending',
+          senderName,
+          userEmail: prev.email,
           senderPhone,
           transactionId: txId,
         },
@@ -3286,16 +3306,17 @@ export default function App() {
     }));
 
     triggerPaymentAppreciationMessage(
-      { ...userData, phone: senderPhone },
+      { ...userData, name: senderName, phone: senderPhone },
       'Le 30',
-      `Orange Money Payment (Ref: ${txId})`
+      `Orange Money Payment by ${senderName} (Ref: ${txId})`
     );
 
-    const emailSubject = `🟧 Orange Money Payment Verification Request — ${userData.name}`;
+    const emailSubject = `🟧 Orange Money Payment Verification Request — ${senderName} (${userData.email})`;
     const emailBody =
       `Hello ${CREATOR_NAME} (${OWNER_ADMIN_EMAIL}),\n\n` +
       `A user has submitted an Orange Money payment of Le 30 for a 30-day subscription pass:\n\n` +
-      `• User Name: ${userData.name}\n` +
+      `• Payer / User Name on Orange Money: ${senderName}\n` +
+      `• Account User Name: ${userData.name}\n` +
       `• User Email: ${userData.email}\n` +
       `• Orange Money Sender Number: ${senderPhone}\n` +
       `• SMS Transaction ID: ${txId}\n` +
@@ -3303,7 +3324,7 @@ export default function App() {
       `Please log into the Owner Admin Dashboard to review and click Approve (+30 Days) or Reject.`;
 
     triggerOwnerEmailAndServerAlert({
-      userName: userData.name,
+      userName: senderName,
       userEmail: userData.email,
       userPhone: senderPhone,
       subject: emailSubject,
@@ -3314,12 +3335,12 @@ export default function App() {
 
     setLatestPaymentReceiptMessage(emailBody);
     setPaymentReceiptText(
-      `💖 Thank you for supporting BloomCampus and helping it grow one step further! Your Orange Money payment (Sender: ${senderPhone}, Tx ID: ${txId}) has been submitted.`
+      `💖 Thank you, ${senderName}, for supporting BloomCampus and helping it grow one step further! Your Orange Money payment (Payer Name: ${senderName}, Sender: ${senderPhone}, Tx ID: ${txId}) has been submitted.`
     );
     setIsPaywallPreview(false);
     setShowPaywallModal(true);
     showToast(
-      '💖 Thank you for your payment & for helping BloomCampus grow one step further! Payment submitted for verification.',
+      `💖 Thank you, ${senderName}! Your Orange Money payment has been submitted with your name for verification.`,
       'success'
     );
   };
@@ -4377,13 +4398,104 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Menu Only Controls: Profile & Sync, Light / Dark Mode, and Admin Console */}
-              <div className="rounded-2xl bg-cream border border-lavender-200 p-3.5 space-y-2.5">
-                <div className="text-[10px] font-extrabold uppercase tracking-wider text-lavender-900">
-                  Menu Controls — Profile, Theme &amp; Admin
+              {/* Menu Controls: Push Alerts, Badges, Clinic Report, Profile & Sync, Discreet Mode, Light / Dark Mode, Install App, and Admin Console */}
+              <div className="rounded-2xl bg-cream border border-lavender-200 p-3.5 space-y-2">
+                <div className="flex items-center justify-between gap-2 pb-1">
+                  <div className="text-[10px] font-extrabold uppercase tracking-wider text-lavender-900">
+                    Quick Tools &amp; Menu Controls
+                  </div>
+                  <span
+                    className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border whitespace-nowrap ${
+                      resolveUserRole(userData.email, adminConfig, userData.role) === 'admin'
+                        ? 'bg-plum-900 text-gold-500 border-gold-500/60'
+                        : 'bg-lavender-100 text-lavender-900 border-lavender-300'
+                    }`}
+                  >
+                    {resolveUserRole(userData.email, adminConfig, userData.role) === 'admin'
+                      ? '🛡️ Admin'
+                      : '🌸 Client'}
+                  </span>
                 </div>
 
-                {/* 1. Profile & Sync Button (Inside Menu Only) */}
+                {/* 1. Push Alerts Button (Moved from Top Bar to Menu) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSidebarDrawer(false);
+                    setShowPushNotificationsModal(true);
+                  }}
+                  className="w-full py-2.5 px-3.5 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-900 border border-lavender-300 font-extrabold text-xs flex items-center justify-between gap-2 shadow-2xs transition-all cursor-pointer"
+                >
+                  <span className="flex items-center gap-2">
+                    <span>🔔</span>
+                    <span>Push Alerts &amp; Mobile Reminders</span>
+                  </span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white text-lavender-800 border border-lavender-200">
+                    Open →
+                  </span>
+                </button>
+
+                {/* 2. Badges & Milestones Button (Moved from Top Bar to Menu) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSidebarDrawer(false);
+                    setShowBadgesModal(true);
+                  }}
+                  className="w-full py-2.5 px-3.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-xs flex items-center justify-between gap-2 shadow-2xs transition-all cursor-pointer"
+                >
+                  <span className="flex items-center gap-2">
+                    <span>🏅</span>
+                    <span>Badges &amp; Milestones</span>
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md bg-amber-200/80 text-amber-950 text-[10px] font-extrabold tabular-nums">
+                    {badgeEvaluation.unlockedCount}/{badgeEvaluation.totalCount}
+                  </span>
+                </button>
+
+                {/* 3. Clinic & Doctor Summary Report Button (Moved from Top Bar to Menu) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSidebarDrawer(false);
+                    setShowClinicSummaryModal(true);
+                  }}
+                  className="w-full py-2.5 px-3.5 rounded-xl bg-sage-50 hover:bg-sage-100 text-sage-800 border border-sage-300 font-extrabold text-xs flex items-center justify-between gap-2 shadow-2xs transition-all cursor-pointer"
+                >
+                  <span className="flex items-center gap-2">
+                    <span>🩺</span>
+                    <span>Clinic &amp; Doctor Summary</span>
+                  </span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white text-sage-800 border border-sage-200">
+                    Open →
+                  </span>
+                </button>
+
+                {/* 4. Discreet Mode / Privacy Blur Toggle (Moved from Top Bar to Menu) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !privacyBlurEnabled;
+                    setPrivacyBlurEnabled(next);
+                    if (next) {
+                      showToast(
+                        '🙈 Discreet Mode ON: Sensitive sections are blurred.',
+                        'info'
+                      );
+                    }
+                  }}
+                  className="w-full py-2.5 px-3.5 rounded-xl bg-white hover:bg-slate-50 text-slate-800 border border-slate-200 font-extrabold text-xs flex items-center justify-between gap-2 shadow-2xs transition-all cursor-pointer"
+                >
+                  <span className="flex items-center gap-2">
+                    <span>{privacyBlurEnabled ? '🙈' : '👁️'}</span>
+                    <span>Discreet Privacy Blur</span>
+                  </span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-700">
+                    {privacyBlurEnabled ? 'Active (ON)' : 'Off'}
+                  </span>
+                </button>
+
+                {/* 5. Profile & Sync Button */}
                 <button
                   type="button"
                   onClick={() => {
@@ -4401,7 +4513,7 @@ export default function App() {
                   </span>
                 </button>
 
-                {/* 2. Light / Dark Mode Toggle (Inside Menu Only) */}
+                {/* 6. Light / Dark Mode Toggle */}
                 <button
                   type="button"
                   role="switch"
@@ -4428,7 +4540,7 @@ export default function App() {
                   </span>
                 </button>
 
-                {/* 3. Admin Button (Inside Menu Only) */}
+                {/* 7. Admin Button */}
                 <button
                   type="button"
                   onClick={async () => {
@@ -4459,11 +4571,29 @@ export default function App() {
                   </span>
                 </button>
 
+                {/* 8. Install App to Phone Button (Moved from Top Bar to Menu) */}
+                <div className="pt-1">
+                  <PWAInstallButton />
+                </div>
+
                 {/* Access Pass / Renewal */}
                 <div className="pt-2 border-t border-lavender-200/70 flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-bold text-slate-700 truncate">
-                    {trialInfo.label}
-                  </span>
+                  <div className="flex items-center gap-1 min-w-0">
+                    <span className="text-[11px] font-bold text-slate-700 truncate">
+                      {trialInfo.label}
+                    </span>
+                    {trialInfo.status === 'pending_verification' && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemovePendingVerification()}
+                        title="Remove Pending Owner Verification"
+                        aria-label="Remove Pending Owner Verification"
+                        className="w-5 h-5 rounded-full bg-orange-200 hover:bg-orange-300 text-orange-950 font-extrabold text-[11px] flex items-center justify-center border border-orange-400 cursor-pointer transition-all shrink-0"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
@@ -4615,144 +4745,31 @@ export default function App() {
         </div>
       )}
 
-      {/* STICKY HEADER — CLEAN & EASY ON THE EYES FOR BOTH MOBILE PHONES AND COMPUTERS */}
+      {/* STICKY HEADER — MINIMAL TOP BAR WITH MENU BUTTON ONLY (ALL ICONS MOVED TO MENU) */}
       <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-lavender-100 shadow-2xs">
-        <div className="max-w-6xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between gap-2 sm:gap-4">
-          {/* Zone 1: Menu Button (Holds Profile & Sync, Light/Dark, and Admin) + Greeting */}
-          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setShowSidebarDrawer(true)}
-              className="px-3 py-2 rounded-xl bg-lavender-600 hover:bg-lavender-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-2xs transition-all shrink-0 cursor-pointer"
-              title="Open Menu for Profile & Sync, Light/Dark Theme, and Admin"
+              className="px-3.5 py-2 rounded-xl bg-lavender-600 hover:bg-lavender-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-2xs transition-all shrink-0 cursor-pointer"
+              title="Open Menu for Push Alerts, Badges, Clinic Report, Profile & Sync, Theme, and Admin"
             >
               <span>☰</span>
               <span>Menu</span>
             </button>
-            <div className="hidden xs:flex w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-tr from-lavender-500 to-rose-500 items-center justify-center text-white text-lg sm:text-xl shadow-2xs shrink-0">
-              🌸
-            </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                <span className="font-display font-bold text-sm sm:text-base text-slate-900 truncate max-w-[140px] sm:max-w-none">
-                  Hi, {userData.name}
-                  {userData.age ? ` (${userData.age})` : ''}!
-                </span>
-                <span
-                  className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border whitespace-nowrap ${
-                    resolveUserRole(userData.email, adminConfig, userData.role) === 'admin'
-                      ? 'bg-plum-900 text-gold-500 border-gold-500/60'
-                      : 'bg-lavender-100 text-lavender-900 border-lavender-300'
-                  }`}
-                  title="Role-Based Access Permission"
-                >
-                  {resolveUserRole(userData.email, adminConfig, userData.role) === 'admin'
-                    ? '🛡️ Admin'
-                    : '🌸 Client'}
-                </span>
-                <div className="inline-flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsPaywallPreview(true);
-                      setShowPaywallModal(true);
-                    }}
-                    className={`text-[11px] font-bold px-2 py-0.5 rounded-lg border transition-all whitespace-nowrap ${
-                      trialInfo.status === 'subscribed' || trialInfo.status === 'free_password'
-                        ? 'bg-sage-50 text-sage-800 border-sage-200 hover:bg-sage-100'
-                        : trialInfo.status === 'pending_verification'
-                        ? 'bg-orange-100 text-orange-800 border-orange-300'
-                        : trialInfo.status === 'expired'
-                        ? 'bg-rose-100 text-rose-800 border-rose-300'
-                        : 'bg-lavender-50 text-lavender-700 border-lavender-200 hover:bg-lavender-100'
-                    }`}
-                  >
-                    {trialInfo.label}
-                  </button>
-                  {trialInfo.status === 'pending_verification' && (
-                    <button
-                      type="button"
-                      onClick={() => handleRemovePendingVerification()}
-                      title="Remove Pending Owner Verification"
-                      aria-label="Remove Pending Owner Verification"
-                      className="w-5 h-5 rounded-full bg-orange-200 hover:bg-orange-300 text-orange-950 font-extrabold text-[11px] flex items-center justify-center border border-orange-400 cursor-pointer transition-all"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
+              <div className="font-display font-bold text-sm sm:text-base text-slate-900 truncate">
+                Hi, {userData.name}
+                {userData.age ? ` (${userData.age})` : ''}!
               </div>
               <p className="text-[11px] sm:text-xs text-slate-500 font-medium truncate">
-                {stageInfo.emoji} {stageInfo.shortName} · Day {todayMetrics.cycleDay}
+                {stageInfo.shortName} · Day {todayMetrics.cycleDay}
                 {selectedDateStr !== todayStr
                   ? ` · Viewing ${formatShortMonthDay(selectedDateStr)} (Day ${metrics.cycleDay})`
                   : ''}
               </p>
             </div>
-          </div>
-
-          {/* Zone 2: Clean Compact Quick Actions */}
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <PWAInstallButton />
-
-            <button
-              type="button"
-              onClick={() => setShowPushNotificationsModal(true)}
-              className="px-2.5 sm:px-3 py-2 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-900 text-xs font-extrabold flex items-center gap-1 border border-lavender-300 transition-all whitespace-nowrap shrink-0 cursor-pointer"
-              title="Configure Mobile Push Notifications & Reminders"
-            >
-              <span>🔔</span>
-              <span className="hidden md:inline">Push Alerts</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowBadgesModal(true)}
-              className="px-2.5 sm:px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-extrabold flex items-center gap-1 border border-amber-300 transition-all whitespace-nowrap shrink-0 cursor-pointer"
-              title="View Virtual Milestones & Cycle Master Badges"
-            >
-              <span>🏅</span>
-              <span className="hidden md:inline">Badges</span>
-              <span className="px-1.5 py-0.2 rounded-md bg-amber-200/80 text-amber-950 text-[10px] font-extrabold tabular-nums">
-                {badgeEvaluation.unlockedCount}/{badgeEvaluation.totalCount}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowClinicSummaryModal(true)}
-              className="px-2.5 sm:px-3 py-2 rounded-xl bg-sage-100 hover:bg-sage-200 text-sage-800 text-xs font-bold flex items-center gap-1 border border-sage-200 transition-all whitespace-nowrap shrink-0 cursor-pointer"
-              title="Open Doctor & Clinic Summary Report"
-            >
-              <span>🩺</span>
-              <span className="hidden md:inline">Clinic</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                const next = !privacyBlurEnabled;
-                setPrivacyBlurEnabled(next);
-                if (next) {
-                  showToast(
-                    '🙈 Discreet Mode ON: Sensitive sections are blurred.',
-                    'info'
-                  );
-                }
-              }}
-              className="px-2.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1 transition-all whitespace-nowrap shrink-0 cursor-pointer"
-              title="Blur sensitive text around friends in class or dorm"
-            >
-              <span>{privacyBlurEnabled ? '🙈' : '👁️'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="px-2.5 sm:px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold border border-rose-200 transition-all whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              Log Out
-            </button>
           </div>
         </div>
       </header>
@@ -8122,7 +8139,7 @@ export default function App() {
             {/* IF PENDING OWNER VERIFICATION */}
             {trialInfo.status === 'pending_verification' ? (
               <div className="space-y-4">
-                <div className="relative rounded-2xl bg-orange-50 border-2 border-orange-400 p-4 pr-10 space-y-2">
+                <div className="relative rounded-2xl bg-orange-50 border-2 border-orange-400 p-4 pr-10 space-y-2.5">
                   <button
                     type="button"
                     onClick={() => handleRemovePendingVerification()}
@@ -8137,11 +8154,28 @@ export default function App() {
                     <span>Orange Money Payment Pending Approval</span>
                   </div>
                   <p className="text-xs text-orange-900 leading-relaxed">
-                    Your Orange Money payment details have been submitted to the owner (
+                    Your Orange Money payment details and user name have been submitted to the owner (
                     <strong>{CREATOR_NAME}</strong> · <strong>{OWNER_ADMIN_EMAIL}</strong>). As soon as the owner clicks <strong>Approve</strong> on the Admin Dashboard, your account will unlock!
                   </p>
                   {userData.pendingPayment && (
-                    <div className="bg-white rounded-xl p-3 border border-orange-200 text-xs font-mono space-y-1 text-slate-800">
+                    <div className="bg-white rounded-xl p-3 border border-orange-200 text-xs font-mono space-y-1.5 text-slate-800">
+                      <div className="flex items-center justify-between gap-2 pb-1 border-b border-orange-100">
+                        <span className="text-[10px] font-sans font-extrabold uppercase tracking-wider text-orange-800">
+                          🪪 Identified Payer on Orange Money
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-orange-100 text-orange-900 font-sans font-extrabold text-[10px]">
+                          Customer #{userData.customerNumber || 1}
+                        </span>
+                      </div>
+                      <div>
+                        • User / Payer Name:{' '}
+                        <strong className="text-slate-950">
+                          {userData.pendingPayment.senderName || userData.name}
+                        </strong>
+                      </div>
+                      <div>
+                        • Account Email: <strong>{userData.email}</strong>
+                      </div>
                       <div>
                         • Sender Number: <strong>{userData.pendingPayment.senderPhone}</strong>
                       </div>
@@ -8157,9 +8191,13 @@ export default function App() {
                   )}
                   <a
                     href={`mailto:${OWNER_ADMIN_EMAIL}?subject=${encodeURIComponent(
-                      `Orange Money Verification — ${userData.name}`
+                      `Orange Money Verification — ${
+                        userData.pendingPayment?.senderName || userData.name
+                      }`
                     )}&body=${encodeURIComponent(
-                      `Hello ${CREATOR_NAME},\nPlease verify my Orange Money payment (Sender: ${
+                      `Hello ${CREATOR_NAME},\nPlease verify my Orange Money payment (Payer Name: ${
+                        userData.pendingPayment?.senderName || userData.name
+                      }, Sender Number: ${
                         userData.pendingPayment?.senderPhone || ''
                       }, SMS Tx ID: ${userData.pendingPayment?.transactionId || ''}) for ${
                         userData.email
@@ -8248,20 +8286,42 @@ export default function App() {
                     <div className="rounded-2xl bg-orange-50 border border-orange-200 p-4 space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-extrabold uppercase tracking-wider text-orange-800">
-                          Orange Money Renewal
+                          🟧 Orange Money Platform
                         </span>
                         <span className="font-display font-extrabold text-base text-orange-600 tabular-nums">
                           Le 30 / Pass
                         </span>
                       </div>
 
+                      {/* Identified Person Banner on Orange Money Platform */}
+                      <div className="bg-white rounded-xl p-3 border border-orange-300 flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="block text-[10px] font-extrabold uppercase tracking-wider text-orange-800">
+                            🪪 Identified Account User (Payer):
+                          </span>
+                          <div className="font-display font-extrabold text-sm text-slate-900 truncate">
+                            {orangeSenderNameInput.trim() || userData.name || 'BloomCampus User'}
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-600 truncate">
+                            {userData.email} · Customer #{userData.customerNumber || 1}
+                          </div>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-lg bg-orange-100 text-orange-900 font-extrabold text-[10px] shrink-0">
+                          Verified ID
+                        </span>
+                      </div>
+
+                      {/* Step 1: Recipient Orange Money Number & Account Name */}
                       <div className="bg-white rounded-xl p-3 border-2 border-orange-300 flex items-center justify-between gap-2">
                         <div>
                           <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
                             Step 1 — Send Le 30 To Orange Money:
                           </span>
-                          <span className="font-display font-extrabold text-lg text-slate-900 tracking-wide font-mono tabular-nums">
+                          <span className="font-display font-extrabold text-lg text-slate-900 tracking-wide font-mono tabular-nums block">
                             073604401
+                          </span>
+                          <span className="block text-[11px] font-extrabold text-orange-900 mt-0.5">
+                            Account Name: {CREATOR_NAME}
                           </span>
                         </div>
                         <button
@@ -8269,20 +8329,47 @@ export default function App() {
                           onClick={() =>
                             copyTextToClipboard(
                               '073604401',
-                              '🟧 Orange Money number 073604401 copied!'
+                              `🟧 Orange Money number 073604401 (${CREATOR_NAME}) copied!`
                             )
                           }
-                          className="px-3 py-1.5 rounded-lg bg-orange-100 hover:bg-orange-200 text-orange-900 font-bold text-xs transition-all shrink-0"
+                          className="px-3 py-1.5 rounded-lg bg-orange-100 hover:bg-orange-200 text-orange-900 font-bold text-xs transition-all shrink-0 cursor-pointer"
                         >
                           📋 Copy
                         </button>
                       </div>
 
+                      {/* Step 2: User Name / Orange Money Registered Name to Identify the Person */}
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Step 2 — Your Orange Money Sender Number *
+                        <label
+                          htmlFor="orangeSenderNameInput"
+                          className="block text-xs font-bold text-slate-700 mb-1"
+                        >
+                          Step 2 — Your User Name / Name on Orange Money (To Identify You) *
                         </label>
                         <input
+                          id="orangeSenderNameInput"
+                          type="text"
+                          required
+                          value={orangeSenderNameInput}
+                          onChange={(e) => setOrangeSenderNameInput(e.target.value)}
+                          placeholder="e.g., Kumba Hannah Kaingbanja"
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-orange-300 focus:border-orange-500 outline-none text-xs sm:text-sm font-bold text-slate-900 bg-white"
+                        />
+                        <span className="block text-[10px] text-slate-500 mt-1">
+                          Confirm your full name or the name registered on your Orange Money account so the Owner Admin can identify you immediately.
+                        </span>
+                      </div>
+
+                      {/* Step 3: Orange Money Sender Number */}
+                      <div>
+                        <label
+                          htmlFor="orangePhoneInput"
+                          className="block text-xs font-bold text-slate-700 mb-1"
+                        >
+                          Step 3 — Your Orange Money Sender Number *
+                        </label>
+                        <input
+                          id="orangePhoneInput"
                           type="tel"
                           required
                           value={orangePhoneInput}
@@ -8292,11 +8379,16 @@ export default function App() {
                         />
                       </div>
 
+                      {/* Step 4: Orange Money SMS Transaction ID */}
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Step 3 — Orange Money SMS Transaction ID *
+                        <label
+                          htmlFor="orangeTxIdInput"
+                          className="block text-xs font-bold text-slate-700 mb-1"
+                        >
+                          Step 4 — Orange Money SMS Transaction ID *
                         </label>
                         <input
+                          id="orangeTxIdInput"
                           type="text"
                           required
                           value={orangeTxIdInput}
@@ -8307,8 +8399,7 @@ export default function App() {
                       </div>
 
                       <p className="text-[11px] text-orange-900">
-                        ⏳ Submitting shows a <strong>Pending Approval</strong> screen and notifies{' '}
-                        <strong>{OWNER_ADMIN_EMAIL}</strong> to verify and unlock your pass.
+                        ⏳ Submitting sends your <strong>User Name ({orangeSenderNameInput.trim() || userData.name})</strong>, <strong>Sender Number</strong>, and <strong>Transaction ID</strong> to <strong>{OWNER_ADMIN_EMAIL}</strong> to verify and unlock your pass.
                       </p>
                     </div>
 

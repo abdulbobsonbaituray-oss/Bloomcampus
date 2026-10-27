@@ -15,11 +15,16 @@ export const PWAInstallButton: React.FC = () => {
       <button
         type="button"
         onClick={install}
-        className="px-3 py-2 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-700 text-xs font-bold flex items-center gap-1.5 border border-lavender-200 transition-all whitespace-nowrap shrink-0"
+        className="w-full py-2.5 px-3.5 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-900 text-xs font-extrabold flex items-center justify-between gap-2 border border-lavender-300 transition-all cursor-pointer"
         title="Install BloomCampus to your phone or laptop home screen"
       >
-        <Download className="w-3.5 h-3.5" />
-        <span className="hidden md:inline">Install App</span>
+        <span className="flex items-center gap-2">
+          <Download className="w-3.5 h-3.5" />
+          <span>Install App to Phone</span>
+        </span>
+        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white text-lavender-800 border border-lavender-200">
+          Install →
+        </span>
       </button>
     );
   }
@@ -29,11 +34,16 @@ export const PWAInstallButton: React.FC = () => {
       <button
         type="button"
         onClick={() => setShowModal(true)}
-        className="px-3 py-2 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-700 text-xs font-bold flex items-center gap-1.5 border border-lavender-200 transition-all whitespace-nowrap shrink-0"
+        className="w-full py-2.5 px-3.5 rounded-xl bg-lavender-50 hover:bg-lavender-100 text-lavender-900 text-xs font-extrabold flex items-center justify-between gap-2 border border-lavender-300 transition-all cursor-pointer"
         title="Add BloomCampus to your phone Home Screen"
       >
-        <Smartphone className="w-3.5 h-3.5" />
-        <span className="hidden md:inline">{isIOS ? 'Install on iOS' : 'Add to Phone'}</span>
+        <span className="flex items-center gap-2">
+          <Smartphone className="w-3.5 h-3.5" />
+          <span>{isIOS ? 'Install App on iOS' : 'Add App to Phone'}</span>
+        </span>
+        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white text-lavender-800 border border-lavender-200">
+          Guide →
+        </span>
       </button>
 
       {showModal && (

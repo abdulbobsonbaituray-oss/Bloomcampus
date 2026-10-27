@@ -66,12 +66,16 @@ export interface PaymentHistoryItem {
   amount: string;
   details: string;
   status?: 'pending' | 'approved' | 'rejected';
+  senderName?: string;
+  userEmail?: string;
   senderPhone?: string;
   transactionId?: string;
 }
 
 export interface PendingPaymentSubmission {
   id: string;
+  senderName?: string;
+  userEmail?: string;
   senderPhone: string;
   transactionId: string;
   amount: string;

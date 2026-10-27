@@ -399,5 +399,43 @@ html.dark ::-webkit-scrollbar-thumb {
   }
 }
 
+/* ============================================================================
+   3D FLIP CARD ANIMATION (Myth Buster Quiz Component)
+   ============================================================================ */
+.myth-flip-scene {
+  perspective: 1200px;
+  -webkit-perspective: 1200px;
+}
 
+.myth-flip-card-inner {
+  position: relative;
+  width: 100%;
+  transform-style: preserve-3d;
+  -webkit-transform-style: preserve-3d;
+  transition: transform 0.65s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s ease;
+  will-change: transform;
+}
 
+.myth-flip-card-inner.is-flipped {
+  transform: rotateY(180deg);
+}
+
+.myth-flip-card-face {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: rotateY(0deg) translateZ(1px);
+}
+
+.myth-flip-card-back {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: rotateY(180deg) translateZ(1px);
+}

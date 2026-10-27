@@ -327,6 +327,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
         const matchesSearch =
           !q ||
           (u.name || '').toLowerCase().includes(q) ||
+          (u.pendingPayment?.senderName || '').toLowerCase().includes(q) ||
           (u.email || '').toLowerCase().includes(q) ||
           phoneUsed.toLowerCase().includes(q);
         if (!matchesSearch) return false;
@@ -559,6 +560,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
       const matchesSearch =
         !q ||
         (u.name || '').toLowerCase().includes(q) ||
+        (u.pendingPayment?.senderName || '').toLowerCase().includes(q) ||
         (u.email || '').toLowerCase().includes(q) ||
         (u.age || '').toLowerCase().includes(q) ||
         phoneUsed.toLowerCase().includes(q) ||
@@ -1066,53 +1068,67 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     safeInboxPage * INBOX_PAGE_SIZE
   );
 
-  // Admin Pages Config
+  // Admin Pages Config (Rendered in the Bottom Icon Navigation Bar)
   const adminPages: Array<{
     id: AdminPageId;
     label: string;
+    shortLabel: string;
+    Icon: React.ComponentType<{ className?: string }>;
     badge?: string;
     description: string;
   }> = [
     {
       id: 'entries',
-      label: '👥 Customer Entries Page',
+      label: 'Customer Entries',
+      shortLabel: 'Entries',
+      Icon: Users,
       badge: `${stats.total}`,
       description: 'Dedicated directory with Search Bar, Pagination & Bulk Delete for lots of people',
     },
     {
       id: 'overview',
-      label: '📊 Overview & Live Logins',
+      label: 'Overview & Logins',
+      shortLabel: 'Overview',
+      Icon: Activity,
       badge: `${recentLoginsList.length}`,
       description: 'KPI summary cards, real-time sign-ins & quick actions',
     },
     {
       id: 'revenue',
-      label: '💰 Money & Revenue Page',
+      label: 'Money & Revenue',
+      shortLabel: 'Revenue',
+      Icon: DollarSign,
       badge: `Le ${revenueSummary.grandTotalSle.toLocaleString()}`,
       description: 'App earnings calculator, auto-money reducer & custom ledger',
     },
     {
       id: 'converter',
-      label: '💱 USD ⇄ Leones Page',
-      badge: `$1 = Le ${usdToSleRate}`,
+      label: 'USD ⇄ Leones',
+      shortLabel: 'USD ⇄ Le',
+      Icon: ArrowRightLeft,
+      badge: `$1=Le ${usdToSleRate}`,
       description: 'Live currency converter & arithmetic check calculator',
     },
     {
       id: 'security',
-      label: '🛡️ Team Admins & Codes',
+      label: 'Admins & Codes',
+      shortLabel: 'Admins',
+      Icon: KeyRound,
       badge: `${1 + additionalAdmins.length}`,
       description: 'Manage co-admins, owner password & 30-day free code',
     },
     {
       id: 'inbox',
-      label: '📬 Alerts & Support Inbox',
+      label: 'Alerts & Inbox',
+      shortLabel: 'Inbox',
+      Icon: BellRing,
       badge: `${supportInquiries.length}`,
       description: 'Searchable login, payment & support notifications',
     },
   ];
 
   return (
-    <div className="min-h-screen bg-cream text-slate-800 flex flex-col">
+    <div className="min-h-screen bg-cream text-slate-800 flex flex-col pb-24">
       {/* Top Owner Admin Header */}
       <header className="bg-gradient-to-r from-plum-900 via-lavender-900 to-plum-900 text-white shadow-lg border-b border-gold-500/30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -1138,7 +1154,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                 BloomCampus &amp; Sidratu Multi-Page Admin Portal
               </h1>
               <p className="text-xs text-white/80 mt-0.5">
-                Created by <strong>{CREATOR_NAME}</strong> · Switch between 6 dedicated Admin Pages below
+                Created by <strong>{CREATOR_NAME}</strong> · Use the bottom icon navigation bar to switch between all 6 Admin Pages
               </p>
             </div>
           </div>
@@ -1188,40 +1204,6 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
               <ArrowLeft className="w-4 h-4" />
               <span>Switch to User Phase</span>
             </button>
-          </div>
-        </div>
-
-        {/* MULTI-PAGE ADMIN NAVIGATION BAR */}
-        <div className="bg-plum-950/70 border-t border-white/10">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex items-center gap-2 overflow-x-auto no-scrollbar">
-            {adminPages.map((page) => {
-              const isActive = activeAdminPage === page.id;
-              return (
-                <button
-                  key={page.id}
-                  type="button"
-                  onClick={() => setActiveAdminPage(page.id)}
-                  className={`px-3.5 py-2 rounded-xl font-extrabold text-xs whitespace-nowrap flex items-center gap-2 transition-all cursor-pointer shrink-0 ${
-                    isActive
-                      ? 'bg-gold-500 text-plum-900 shadow-md scale-[1.01]'
-                      : 'bg-white/10 hover:bg-white/20 text-white border border-white/15'
-                  }`}
-                >
-                  <span>{page.label}</span>
-                  {page.badge !== undefined && (
-                    <span
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-extrabold ${
-                        isActive
-                          ? 'bg-plum-900 text-gold-400'
-                          : 'bg-black/30 text-gold-300'
-                      }`}
-                    >
-                      {page.badge}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
           </div>
         </div>
       </header>
@@ -1873,7 +1855,15 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                                   </span>
                                 </td>
                                 <td className="py-3 px-3 font-extrabold text-slate-900">
-                                  {u.name || 'Student'}
+                                  <div>{u.name || 'Student'}</div>
+                                  {u.pendingPayment && (
+                                    <div className="mt-0.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-orange-100 text-orange-900 border border-orange-300 text-[10px] font-mono font-bold">
+                                      <span>
+                                        🟧 OM Name: {u.pendingPayment.senderName || u.name} ·{' '}
+                                        {u.pendingPayment.senderPhone}
+                                      </span>
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="py-3 px-3 font-mono text-lavender-900 font-bold">
                                   {u.email}
@@ -2148,6 +2138,12 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                                     🟧 Submitted Orange Money Transaction ({u.pendingPayment.amount})
                                   </div>
                                   <div className="flex flex-wrap items-center gap-4 font-mono text-slate-800">
+                                    <span>
+                                      User / Payer Name:{' '}
+                                      <strong className="text-slate-950">
+                                        {u.pendingPayment.senderName || u.name}
+                                      </strong>
+                                    </span>
                                     <span>
                                       Sender Phone: <strong>{u.pendingPayment.senderPhone}</strong>
                                     </span>
@@ -2616,6 +2612,18 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                           <div className="text-xs font-mono font-bold text-sage-900 mt-0.5">
                             📞 Phone Used: {phoneUsed}
                           </div>
+                          {u.pendingPayment && (
+                            <div className="mt-1.5 p-2 rounded-xl bg-orange-50 border border-orange-300 text-[11px] font-mono text-orange-950 space-y-0.5">
+                              <div>
+                                🟧 OM Payer Name:{' '}
+                                <strong>{u.pendingPayment.senderName || u.name}</strong>
+                              </div>
+                              <div>
+                                📞 Sender: <strong>{u.pendingPayment.senderPhone}</strong> · Ref:{' '}
+                                <strong>{u.pendingPayment.transactionId}</strong>
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         <div className="pt-2 border-t border-emerald-200/70 space-y-2">
@@ -3687,7 +3695,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
       </main>
 
       {/* Admin Footer with Creator Branding */}
-      <footer className="bg-white border-t border-slate-200 py-4 px-6 text-center text-xs text-slate-600">
+      <footer className="bg-white border-t border-slate-200 py-4 px-6 text-center text-xs text-slate-600 mb-4">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <span className="font-extrabold text-slate-900">Created by {CREATOR_NAME}</span>
           <a
@@ -3698,6 +3706,62 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
           </a>
         </div>
       </footer>
+
+      {/* =================================================================== */}
+      {/* FIXED BOTTOM MULTI-PAGE ADMIN NAVIGATION BAR WITH ICONS             */}
+      {/* =================================================================== */}
+      <nav
+        aria-label="Admin Pages Bottom Navigation"
+        className="fixed bottom-0 left-0 right-0 z-40 bg-gradient-to-r from-plum-950 via-plum-900 to-plum-950 text-white border-t-2 border-gold-500/60 shadow-2xl"
+      >
+        <div className="max-w-7xl mx-auto px-2 sm:px-4 py-2 grid grid-cols-6 gap-1 sm:gap-2">
+          {adminPages.map((page) => {
+            const isActive = activeAdminPage === page.id;
+            const PageIcon = page.Icon;
+            return (
+              <button
+                key={page.id}
+                type="button"
+                title={`${page.label} — ${page.description}`}
+                onClick={() => {
+                  setActiveAdminPage(page.id);
+                  if (typeof window !== 'undefined') {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }
+                }}
+                className={`relative py-2 px-1 sm:px-2.5 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                  isActive
+                    ? 'bg-gold-500 text-plum-900 shadow-lg scale-[1.02]'
+                    : 'bg-white/10 hover:bg-white/20 text-white/90 hover:text-white border border-white/10'
+                }`}
+              >
+                <div className="relative flex items-center justify-center">
+                  <PageIcon
+                    className={`w-4 h-4 sm:w-5 sm:h-5 ${
+                      isActive ? 'text-plum-900' : 'text-gold-400'
+                    }`}
+                  />
+                  {page.badge !== undefined && (
+                    <span
+                      className={`ml-1 px-1.5 py-0.2 rounded-full text-[9px] sm:text-[10px] font-mono font-extrabold leading-tight ${
+                        isActive
+                          ? 'bg-plum-900 text-gold-400'
+                          : 'bg-black/40 text-gold-300 border border-gold-400/30'
+                      }`}
+                    >
+                      {page.badge}
+                    </span>
+                  )}
+                </div>
+                <span className="font-extrabold text-[10px] sm:text-xs leading-tight truncate max-w-full">
+                  <span className="sm:hidden">{page.shortLabel}</span>
+                  <span className="hidden sm:inline">{page.label}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 };

@@ -237,17 +237,12 @@ export const MythBusterQuizSection: React.FC<MythBusterQuizSectionProps> = ({
     return (
       <div
         key={item.id}
-        className="w-full"
-        style={{ perspective: '1200px' }}
+        className="w-full myth-flip-scene"
       >
         <div
-          className={`relative w-full transition-transform duration-500 ease-out ${
+          className={`myth-flip-card-inner ${isFlipped ? 'is-flipped' : ''} ${
             compact ? 'min-h-[300px]' : 'min-h-[310px] sm:min-h-[290px]'
           }`}
-          style={{
-            transformStyle: 'preserve-3d',
-            transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)',
-          }}
         >
           {/* ================= FRONT FACE (MYTH / STATEMENT TO BUST) ================= */}
           <div
@@ -265,8 +260,7 @@ export const MythBusterQuizSection: React.FC<MythBusterQuizSectionProps> = ({
                 handleGuessOrTapReveal(item, 'tap_reveal');
               }
             }}
-            style={{ backfaceVisibility: 'hidden' }}
-            className={`absolute inset-0 rounded-3xl p-5 sm:p-6 border-2 flex flex-col justify-between gap-4 cursor-pointer transition-shadow hover:shadow-lg ${
+            className={`myth-flip-card-face rounded-3xl p-5 sm:p-6 border-2 flex flex-col justify-between gap-4 cursor-pointer transition-shadow hover:shadow-lg ${
               isMastered
                 ? 'bg-gradient-to-br from-white via-lavender-50/70 to-emerald-50/60 border-emerald-300 shadow-xs'
                 : 'bg-gradient-to-br from-white via-lavender-50/80 to-rose-50/60 border-lavender-300 shadow-xs'
@@ -349,11 +343,7 @@ export const MythBusterQuizSection: React.FC<MythBusterQuizSectionProps> = ({
                 setFlippedMap((prev) => ({ ...prev, [item.id]: false }));
               }
             }}
-            style={{
-              backfaceVisibility: 'hidden',
-              transform: 'rotateY(180deg)',
-            }}
-            className="absolute inset-0 rounded-3xl p-5 sm:p-6 bg-gradient-to-br from-plum-900 via-lavender-900 to-slate-900 text-white border-2 border-gold-500 shadow-xl flex flex-col justify-between gap-3 cursor-pointer overflow-y-auto"
+            className="myth-flip-card-back rounded-3xl p-5 sm:p-6 bg-gradient-to-br from-plum-900 via-lavender-900 to-slate-900 text-white border-2 border-gold-500 shadow-xl flex flex-col justify-between gap-3 cursor-pointer overflow-y-auto"
           >
             <div className="space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
