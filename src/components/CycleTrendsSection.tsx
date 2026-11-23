@@ -33,8 +33,8 @@ interface CycleTrendsSectionProps {
 interface SixMonthPoint {
   monthKey: string;
   monthLabel: string;
-  cycleLength: number;
-  periodDuration: number;
+  cycleLength: number | null;
+  periodDuration: number | null;
   isLogged: boolean;
   startDateLabel: string;
   deviationFromAvg: number;
@@ -75,14 +75,14 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
       startDate: string;
       monthKey: string;
       monthShort: string;
-      cycleLength: number;
-      periodDuration: number;
+      cycleLength: number | null;
+      periodDuration: number | null;
     }> = sorted.map((p, idx) => {
       const d = parseDateISO(p.startDate);
       const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       const monthShort = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
 
-      let duration = avgPeriodDuration;
+      let duration: number | null = avgPeriodDuration > 0 ? avgPeriodDuration : null;
       if (p.endDate && p.endDate >= p.startDate) {
         const rawDur = diffDays(p.startDate, p.endDate) + 1;
         if (rawDur >= 1 && rawDur <= 16) {
@@ -90,7 +90,7 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
         }
       }
 
-      let cLen = avgCycleLength;
+      let cLen: number | null = null;
       if (idx + 1 < sorted.length) {
         const gap = diffDays(p.startDate, sorted[idx + 1].startDate);
         if (gap >= 15 && gap <= 65) {
@@ -101,6 +101,9 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
         if (prevGap >= 15 && prevGap <= 65) {
           cLen = prevGap;
         }
+      }
+      if (cLen === null && avgCycleLength > 0) {
+        cLen = avgCycleLength;
       }
 
       return {
@@ -133,36 +136,47 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
             month: 'short',
             day: 'numeric',
           }),
-          deviationFromAvg: match.cycleLength - avgCycleLength,
+          deviationFromAvg:
+            match.cycleLength !== null && avgCycleLength > 0
+              ? match.cycleLength - avgCycleLength
+              : 0,
         });
       } else {
         sixMonths.push({
           monthKey: mKey,
           monthLabel: mLabel,
-          cycleLength: avgCycleLength,
-          periodDuration: avgPeriodDuration,
+          cycleLength: null,
+          periodDuration: null,
           isLogged: false,
-          startDateLabel: 'Baseline avg',
+          startDateLabel: 'Not logged',
           deviationFromAvg: 0,
         });
       }
     }
 
-    const cycleValues = sixMonths.map((d) => d.cycleLength);
-    const durationValues = sixMonths.map((d) => d.periodDuration);
-    const minCycle = Math.min(...cycleValues);
-    const maxCycle = Math.max(...cycleValues);
-    const cycleVariation = maxCycle - minCycle;
-    const stdDev = Math.round((d3.deviation(cycleValues) || 0) * 10) / 10;
-    const minDuration = Math.min(...durationValues);
-    const maxDuration = Math.max(...durationValues);
+    const cycleValues = sixMonths
+      .filter((d) => d.isLogged && d.cycleLength !== null && d.cycleLength > 0)
+      .map((d) => d.cycleLength as number);
+    const durationValues = sixMonths
+      .filter((d) => d.isLogged && d.periodDuration !== null && d.periodDuration > 0)
+      .map((d) => d.periodDuration as number);
+
+    const minCycle = cycleValues.length > 0 ? Math.min(...cycleValues) : 0;
+    const maxCycle = cycleValues.length > 0 ? Math.max(...cycleValues) : 0;
+    const cycleVariation = cycleValues.length > 1 ? maxCycle - minCycle : 0;
+    const stdDev =
+      cycleValues.length > 1 ? Math.round((d3.deviation(cycleValues) || 0) * 10) / 10 : 0;
+    const minDuration = durationValues.length > 0 ? Math.min(...durationValues) : 0;
+    const maxDuration = durationValues.length > 0 ? Math.max(...durationValues) : 0;
     const loggedMonthsCount = sixMonths.filter((d) => d.isLogged).length;
     const isRegular =
+      loggedMonthsCount >= 2 &&
+      cycleValues.length >= 2 &&
       cycleVariation <= 7 &&
       avgCycleLength >= 25 &&
       avgCycleLength <= 35 &&
       maxDuration <= 7 &&
-      minDuration >= 2;
+      (minDuration === 0 || minDuration >= 2);
 
     return {
       chartData: sixMonths,
@@ -190,8 +204,8 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
     const phaseRingInnerR = 124;
     const phaseRingOuterR = 138;
 
-    const rMinVal = Math.min(18, stats.minCycle - 3);
-    const rMaxVal = Math.max(40, stats.maxCycle + 3);
+    const rMinVal = stats.minCycle > 0 ? Math.min(18, stats.minCycle - 3) : 18;
+    const rMaxVal = stats.maxCycle > 0 ? Math.max(40, stats.maxCycle + 3) : 40;
 
     const rScale = d3
       .scaleLinear()
@@ -264,12 +278,11 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
     // 6-Month Radial Nodes positioned evenly around the 360° wheel
     const count = Math.max(1, chartData.length);
     const wheelNodes = chartData.map((pt, idx) => {
-      // D3 radial angle where 0 is 12 o'clock
       const d3Angle = (idx / count) * Math.PI * 2;
-      // Standard trig angle where -PI/2 is 12 o'clock
       const trigAngle = d3Angle - Math.PI / 2;
-      const r = rScale(pt.cycleLength);
-      const meanR = rScale(avgCycleLength);
+      const hasValue = pt.isLogged && pt.cycleLength !== null && pt.cycleLength > 0;
+      const r = hasValue ? rScale(pt.cycleLength as number) : innerHubR + 10;
+      const meanR = avgCycleLength > 0 ? rScale(avgCycleLength) : innerHubR + 10;
       const x = cx + r * Math.cos(trigAngle);
       const y = cy + r * Math.sin(trigAngle);
       const meanX = cx + meanR * Math.cos(trigAngle);
@@ -282,6 +295,7 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
 
       return {
         ...pt,
+        hasValue,
         idx,
         d3Angle,
         trigAngle,
@@ -297,22 +311,23 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
       };
     });
 
-    // Closed D3 radial curve connecting all 6 months in a smooth wheel loop
+    const loggedNodes = wheelNodes.filter((n) => n.hasValue);
+
     const radialLineGen = d3
       .lineRadial<{ d3Angle: number; r: number }>()
       .angle((d) => d.d3Angle)
       .radius((d) => d.r)
-      .curve(d3.curveCardinalClosed.tension(0.55));
+      .curve(loggedNodes.length >= 3 ? d3.curveCardinalClosed.tension(0.55) : d3.curveLinear);
 
     const radialAreaGen = d3
       .areaRadial<{ d3Angle: number; r: number }>()
       .angle((d) => d.d3Angle)
       .innerRadius(innerHubR)
       .outerRadius((d) => d.r)
-      .curve(d3.curveCardinalClosed.tension(0.55));
+      .curve(loggedNodes.length >= 3 ? d3.curveCardinalClosed.tension(0.55) : d3.curveLinear);
 
-    const radialCurvePath = radialLineGen(wheelNodes) || '';
-    const radialAreaPath = radialAreaGen(wheelNodes) || '';
+    const radialCurvePath = loggedNodes.length >= 2 ? radialLineGen(loggedNodes) || '' : '';
+    const radialAreaPath = loggedNodes.length >= 3 ? radialAreaGen(loggedNodes) || '' : '';
 
     return {
       cx,
@@ -321,7 +336,7 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
       maxDataR,
       phaseRingInnerR,
       phaseRingOuterR,
-      avgR: rScale(avgCycleLength),
+      avgR: avgCycleLength > 0 ? rScale(avgCycleLength) : innerHubR + 10,
       normalInnerR,
       normalOuterR,
       normalRingPath,
@@ -333,14 +348,41 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
   }, [chartData, stats.minCycle, stats.maxCycle, avgCycleLength, avgPeriodDuration]);
 
   const buildLocalFallbackInsight = useCallback((): CycleHealthInsight => {
+    if (stats.loggedMonthsCount === 0) {
+      return {
+        headline: 'Log Your Real Period Dates to Unlock 6-Month Trends',
+        insightMessage:
+          'No period records have been logged across the last 6 months yet. BloomCampus will never fill in fake cycle averages—once you record your real period start and end dates, your wheel and variability metrics will appear here.',
+        irregularityFlag: false,
+        actionTip:
+          'Tap any date on your calendar or use the Period Tracker above to record your real start and end dates.',
+      };
+    }
+
+    if (stats.loggedMonthsCount < 2) {
+      return {
+        headline: 'First Month Logged — Add Next Month to Measure Variation',
+        insightMessage: `You have ${stats.loggedMonthsCount} month directly logged so far${
+          stats.minDuration > 0 ? ` (${stats.minDuration}d bleed duration)` : ''
+        }. Log your next period start date when it arrives to measure your real interval length and variability.`,
+        irregularityFlag: false,
+        actionTip: 'Record your next period start and end dates to calculate your exact cycle rhythm.',
+      };
+    }
+
     const irregularMonths = chartData.filter(
-      (d) => d.cycleLength < 25 || d.cycleLength > 35 || d.periodDuration > 7 || d.periodDuration < 2
+      (d) =>
+        d.isLogged &&
+        ((d.cycleLength !== null && (d.cycleLength < 25 || d.cycleLength > 35)) ||
+          (d.periodDuration !== null && (d.periodDuration > 7 || d.periodDuration < 2)))
     );
     if (!stats.isRegular || irregularMonths.length > 0) {
       const flaggedLabels = irregularMonths.map((m) => m.monthLabel).join(', ');
       return {
         headline: 'Irregular Cycle Variation Detected',
-        insightMessage: `Over the last 6 months, your cycle ranged from ${stats.minCycle} to ${stats.maxCycle} days (±${stats.cycleVariation}d variation) with bleeding lasting ${stats.minDuration}–${stats.maxDuration} days${
+        insightMessage: `Over the last 6 months, your logged cycles ranged from ${stats.minCycle} to ${stats.maxCycle} days (±${stats.cycleVariation}d variation)${
+          stats.minDuration > 0 ? ` with bleeding lasting ${stats.minDuration}–${stats.maxDuration} days` : ''
+        }${
           flaggedLabels ? ` (notably in ${flaggedLabels})` : ''
         }. Shifts larger than 7 days or outside the 25–35 day window can be triggered by college exam stress, sleep changes, emergency contraception, or hormonal imbalances.`,
         irregularityFlag: true,
@@ -351,7 +393,9 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
 
     return {
       headline: `Consistent ${avgCycleLength}-Day Cycle Rhythm`,
-      insightMessage: `Your 6-month history shows a steady cycle between ${stats.minCycle} and ${stats.maxCycle} days (±${stats.cycleVariation}d variation) and a healthy ${avgPeriodDuration}-day average period duration. Both your cycle length and bleeding duration fall well within normal clinical guidelines (25–35d cycle, 3–7d bleed).`,
+      insightMessage: `Your 6-month history shows a steady cycle between ${stats.minCycle} and ${stats.maxCycle} days (±${stats.cycleVariation}d variation)${
+        avgPeriodDuration > 0 ? ` and a healthy ${avgPeriodDuration}-day average period duration` : ''
+      }. Your logged measurements fall well within normal clinical guidelines (25–35d cycle, 3–7d bleed).`,
       irregularityFlag: false,
       actionTip:
         'Keep logging your period start and end dates each month to maintain accurate ovulation and exam-sync predictions.',
@@ -360,12 +404,19 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
 
   const analyzeCycleTrendsWithGemini = useCallback(
     async (forceRefresh = false) => {
+      const loggedPoints = chartData.filter((pt) => pt.isLogged);
+      if (loggedPoints.length < 2) {
+        const fallback = buildLocalFallbackInsight();
+        insightCacheRef.current[periodsSignature] = fallback;
+        setInsight(fallback);
+        return;
+      }
+
       if (!forceRefresh && insightCacheRef.current[periodsSignature]) {
         setInsight(insightCacheRef.current[periodsSignature]);
         return;
       }
 
-      // Immediately show local clinical insight while loading or if offline
       const fallback = buildLocalFallbackInsight();
       if (!insight) {
         setInsight(fallback);
@@ -377,7 +428,7 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            sixMonthData: chartData,
+            sixMonthData: loggedPoints,
             avgCycleLength,
             avgPeriodDuration,
             cycleVariation: stats.cycleVariation,
@@ -489,12 +540,18 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
               6-Mo Cycle Range
             </span>
             <span className="font-display font-extrabold text-lg sm:text-xl text-lavender-900 mt-0.5 block tabular-nums">
-              {stats.minCycle === stats.maxCycle
+              {stats.minCycle === 0
+                ? 'Not Logged Yet'
+                : stats.minCycle === stats.maxCycle
                 ? `${stats.minCycle} Days`
                 : `${stats.minCycle}–${stats.maxCycle} Days`}
             </span>
             <span className="text-[11px] text-lavender-700 font-medium block tabular-nums">
-              Variability: ±{stats.cycleVariation}d (SD {stats.stdDev}d) · Avg {avgCycleLength}d
+              {stats.minCycle > 0
+                ? `Variability: ±${stats.cycleVariation}d (SD ${stats.stdDev}d)${
+                    avgCycleLength > 0 ? ` · Avg ${avgCycleLength}d` : ''
+                  }`
+                : 'Log 2+ period dates to measure cycle length'}
             </span>
           </div>
           <CalendarRange className="w-5 h-5 text-lavender-500 shrink-0 mt-1" />
@@ -506,12 +563,16 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
               6-Mo Bleed Duration
             </span>
             <span className="font-display font-extrabold text-lg sm:text-xl text-rose-700 mt-0.5 block tabular-nums">
-              {stats.minDuration === stats.maxDuration
+              {stats.minDuration === 0
+                ? 'Not Logged Yet'
+                : stats.minDuration === stats.maxDuration
                 ? `${stats.minDuration} Days`
                 : `${stats.minDuration}–${stats.maxDuration} Days`}
             </span>
             <span className="text-[11px] text-rose-600 font-medium block tabular-nums">
-              Avg Period: {avgPeriodDuration} days
+              {avgPeriodDuration > 0
+                ? `Avg Period: ${avgPeriodDuration} days`
+                : 'Log end dates to measure duration'}
             </span>
           </div>
           <Activity className="w-5 h-5 text-rose-500 shrink-0 mt-1" />
@@ -519,7 +580,9 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
 
         <div
           className={`rounded-2xl p-3.5 border flex items-start justify-between gap-3 ${
-            stats.isRegular
+            stats.loggedMonthsCount < 2
+              ? 'bg-slate-50 border-slate-200'
+              : stats.isRegular
               ? 'bg-sage-50/80 border-sage-200'
               : 'bg-peach-50/80 border-peach-200'
           }`}
@@ -530,10 +593,18 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
             </span>
             <span
               className={`font-display font-extrabold text-base sm:text-lg mt-0.5 block ${
-                stats.isRegular ? 'text-sage-800' : 'text-peach-700'
+                stats.loggedMonthsCount < 2
+                  ? 'text-slate-700'
+                  : stats.isRegular
+                  ? 'text-sage-800'
+                  : 'text-peach-700'
               }`}
             >
-              {stats.isRegular ? 'Consistent Rhythm' : 'Variable Cycle'}
+              {stats.loggedMonthsCount < 2
+                ? 'Needs More Logs'
+                : stats.isRegular
+                ? 'Consistent Rhythm'
+                : 'Variable Cycle'}
             </span>
             <span className="text-[11px] text-slate-600 font-medium block tabular-nums">
               {stats.loggedMonthsCount} of 6 months directly logged
@@ -570,15 +641,23 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
               {hoveredPoint ? (
                 <div className="px-2.5 py-1 rounded-xl bg-white border border-lavender-200 shadow-2xs text-slate-800 font-semibold tabular-nums">
                   {hoveredPoint.monthLabel}:{' '}
-                  <strong className="text-lavender-800">{hoveredPoint.cycleLength}d cycle</strong> (
-                  {hoveredPoint.deviationFromAvg === 0
-                    ? 'On avg'
-                    : `${hoveredPoint.deviationFromAvg > 0 ? '+' : ''}${hoveredPoint.deviationFromAvg}d vs avg`}
-                  ) · Bleed: {hoveredPoint.periodDuration}d ({hoveredPoint.startDateLabel})
+                  {hoveredPoint.isLogged && hoveredPoint.cycleLength ? (
+                    <>
+                      <strong className="text-lavender-800">{hoveredPoint.cycleLength}d cycle</strong> (
+                      {hoveredPoint.deviationFromAvg === 0
+                        ? 'On avg'
+                        : `${hoveredPoint.deviationFromAvg > 0 ? '+' : ''}${hoveredPoint.deviationFromAvg}d vs avg`}
+                      ) · Bleed:{' '}
+                      {hoveredPoint.periodDuration ? `${hoveredPoint.periodDuration}d` : 'Open'} (
+                      {hoveredPoint.startDateLabel})
+                    </>
+                  ) : (
+                    <span className="text-slate-500">No period logged for this month</span>
+                  )}
                 </div>
               ) : (
                 <span className="text-[11px] text-slate-500">
-                  Tap or hover any month on the wheel to inspect cycle length &amp; bleed days
+                  Tap or hover any logged month on the wheel to inspect real cycle length &amp; bleed days
                 </span>
               )}
             </div>
@@ -633,29 +712,35 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                     />
 
                     {/* Personal Mean Cycle Length Ring */}
-                    <circle
-                      r={d3WheelGeometry.avgR}
-                      fill="none"
-                      stroke="#7C5CFA"
-                      strokeWidth={1.6}
-                      strokeDasharray="5 4"
-                    />
+                    {avgCycleLength > 0 && (
+                      <circle
+                        r={d3WheelGeometry.avgR}
+                        fill="none"
+                        stroke="#7C5CFA"
+                        strokeWidth={1.6}
+                        strokeDasharray="5 4"
+                      />
+                    )}
 
                     {/* Shaded D3 Radial Cycle Area */}
-                    <path
-                      d={d3WheelGeometry.radialAreaPath}
-                      fill="url(#d3CycleWheelGrad)"
-                    />
+                    {d3WheelGeometry.radialAreaPath && (
+                      <path
+                        d={d3WheelGeometry.radialAreaPath}
+                        fill="url(#d3CycleWheelGrad)"
+                      />
+                    )}
 
                     {/* Closed D3 Radial Cycle Length Curve */}
-                    <path
-                      d={d3WheelGeometry.radialCurvePath}
-                      fill="none"
-                      stroke="#5639CC"
-                      strokeWidth={3}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
+                    {d3WheelGeometry.radialCurvePath && (
+                      <path
+                        d={d3WheelGeometry.radialCurvePath}
+                        fill="none"
+                        stroke="#5639CC"
+                        strokeWidth={3}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    )}
 
                     {/* Center Hub Readout Circle */}
                     <circle
@@ -678,7 +763,13 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                       textAnchor="middle"
                       className="fill-lavender-950 text-[16px] font-extrabold"
                     >
-                      {hoveredPoint ? `${hoveredPoint.cycleLength}d` : `${avgCycleLength}d`}
+                      {hoveredPoint
+                        ? hoveredPoint.cycleLength
+                          ? `${hoveredPoint.cycleLength}d`
+                          : '—'
+                        : avgCycleLength > 0
+                        ? `${avgCycleLength}d`
+                        : '—'}
                     </text>
                     <text
                       x={0}
@@ -687,14 +778,21 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                       className="fill-rose-600 text-[9.5px] font-bold"
                     >
                       {hoveredPoint
-                        ? `🩸 ${hoveredPoint.periodDuration}d bleed`
-                        : `🩸 ${avgPeriodDuration}d avg`}
+                        ? hoveredPoint.periodDuration
+                          ? `🩸 ${hoveredPoint.periodDuration}d bleed`
+                          : 'Not logged'
+                        : avgPeriodDuration > 0
+                        ? `🩸 ${avgPeriodDuration}d avg`
+                        : 'No logs yet'}
                     </text>
                   </g>
 
                   {/* Radial Spokes, Month Nodes & Perimeter Labels */}
                   {d3WheelGeometry.wheelNodes.map((node) => {
-                    const isOutlier = node.cycleLength < 25 || node.cycleLength > 35;
+                    const isOutlier =
+                      node.hasValue &&
+                      node.cycleLength !== null &&
+                      (node.cycleLength < 25 || node.cycleLength > 35);
                     const isHovered = hoveredPoint?.monthKey === node.monthKey;
 
                     return (
@@ -722,18 +820,20 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                           strokeDasharray="2 3"
                         />
 
-                        {/* Deviation stem from personal mean ring to month node */}
-                        <line
-                          x1={node.meanX}
-                          y1={node.meanY}
-                          x2={node.x}
-                          y2={node.y}
-                          stroke={isOutlier ? '#E11D48' : '#7C5CFA'}
-                          strokeWidth={2}
-                        />
+                        {/* Deviation stem from personal mean ring to month node (only if logged) */}
+                        {node.hasValue && avgCycleLength > 0 && (
+                          <line
+                            x1={node.meanX}
+                            y1={node.meanY}
+                            x2={node.x}
+                            y2={node.y}
+                            stroke={isOutlier ? '#E11D48' : '#7C5CFA'}
+                            strokeWidth={2}
+                          />
+                        )}
 
                         {/* Halo on hover or outlier */}
-                        {(isHovered || isOutlier) && (
+                        {node.hasValue && (isHovered || isOutlier) && (
                           <circle
                             cx={node.x}
                             cy={node.y}
@@ -743,15 +843,17 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                           />
                         )}
 
-                        {/* Month Data Point Circle */}
-                        <circle
-                          cx={node.x}
-                          cy={node.y}
-                          r={isHovered ? 7 : 5.5}
-                          fill={isOutlier ? '#E11D48' : node.isLogged ? '#5639CC' : '#94A3B8'}
-                          stroke="#FFFFFF"
-                          strokeWidth={2}
-                        />
+                        {/* Month Data Point Circle (only plot solid point when real log exists) */}
+                        {node.hasValue && (
+                          <circle
+                            cx={node.x}
+                            cy={node.y}
+                            r={isHovered ? 7 : 5.5}
+                            fill={isOutlier ? '#E11D48' : '#5639CC'}
+                            stroke="#FFFFFF"
+                            strokeWidth={2}
+                          />
+                        )}
 
                         {/* Outer Wheel Month & Cycle Length Badge */}
                         <text
@@ -769,10 +871,14 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                           y={node.labelY + 9}
                           textAnchor="middle"
                           className={`text-[10px] font-bold ${
-                            isOutlier ? 'fill-rose-600' : 'fill-lavender-700'
+                            !node.hasValue
+                              ? 'fill-slate-400'
+                              : isOutlier
+                              ? 'fill-rose-600'
+                              : 'fill-lavender-700'
                           }`}
                         >
-                          {node.cycleLength}d
+                          {node.hasValue ? `${node.cycleLength}d` : '—'}
                         </text>
                       </g>
                     );
@@ -788,7 +894,10 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                 <div className="grid grid-cols-2 gap-2">
                   {chartData.map((pt) => {
                     const isSelected = hoveredPoint?.monthKey === pt.monthKey;
-                    const isOutlier = pt.cycleLength < 25 || pt.cycleLength > 35;
+                    const isOutlier =
+                      pt.isLogged &&
+                      pt.cycleLength !== null &&
+                      (pt.cycleLength < 25 || pt.cycleLength > 35);
                     return (
                       <button
                         key={pt.monthKey}
@@ -810,12 +919,14 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                             className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded-md tabular-nums ${
                               isSelected
                                 ? 'bg-white/20 text-white'
+                                : !pt.isLogged || pt.cycleLength === null
+                                ? 'bg-slate-100 text-slate-500'
                                 : isOutlier
                                 ? 'bg-rose-100 text-rose-800'
                                 : 'bg-lavender-50 text-lavender-800'
                             }`}
                           >
-                            {pt.cycleLength}d
+                            {pt.isLogged && pt.cycleLength !== null ? `${pt.cycleLength}d` : '—'}
                           </span>
                         </div>
                         <div
@@ -823,7 +934,9 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                             isSelected ? 'text-lavender-100' : 'text-slate-500'
                           }`}
                         >
-                          🩸 {pt.periodDuration}d bleed · {pt.startDateLabel}
+                          {pt.isLogged
+                            ? `🩸 ${pt.periodDuration ? `${pt.periodDuration}d bleed` : 'Open'} · ${pt.startDateLabel}`
+                            : 'Not logged'}
                         </div>
                       </button>
                     );
@@ -908,8 +1021,10 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                     name: unknown,
                     props: { payload?: SixMonthPoint }
                   ) => {
-                    const tag = props?.payload?.isLogged ? 'Logged' : 'Avg Baseline';
-                    return [`${value ?? 0} days (${tag})`, String(name ?? '')];
+                    if (value === null || value === undefined || !props?.payload?.isLogged) {
+                      return ['Not logged', String(name ?? '')];
+                    }
+                    return [`${value} days (Logged)`, String(name ?? '')];
                   }}
                   labelFormatter={(
                     label: unknown,
@@ -917,7 +1032,7 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                   ) => {
                     const pt = payload?.[0]?.payload;
                     const labelText = String(label ?? '');
-                    return pt ? `${labelText} · Start: ${pt.startDateLabel}` : labelText;
+                    return pt ? `${labelText} · ${pt.startDateLabel}` : labelText;
                   }}
                 />
 
@@ -950,6 +1065,7 @@ export const CycleTrendsSection: React.FC<CycleTrendsSectionProps> = ({
                   <Line
                     yAxisId="cycleAxis"
                     type="monotone"
+                    connectNulls={false}
                     dataKey="cycleLength"
                     name="Cycle Length (Days)"
                     stroke="#5639CC"

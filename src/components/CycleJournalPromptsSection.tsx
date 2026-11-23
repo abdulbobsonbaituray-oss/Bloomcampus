@@ -112,7 +112,7 @@ export const CycleJournalPromptsSection: React.FC<CycleJournalPromptsSectionProp
       setPromptStage(metrics.stageKey);
       // Deterministically pick a daily prompt index based on cycleDay
       const prompts = STAGE_JOURNAL_PROMPTS[metrics.stageKey];
-      const dailyIdx = (metrics.cycleDay - 1) % prompts.length;
+      const dailyIdx = metrics.cycleDay > 0 ? (metrics.cycleDay - 1) % prompts.length : 0;
       setPromptIndex(Math.max(0, dailyIdx));
     }
   }, [metrics.stageKey, metrics.cycleDay, selectedDateStr, editingEntryId]);
@@ -384,7 +384,10 @@ export const CycleJournalPromptsSection: React.FC<CycleJournalPromptsSectionProp
               <span>{PHASE_ADVISOR_DATA[promptStage].shortName} Phase Prompt</span>
             </span>
             <span className="text-xs font-bold text-slate-600 font-mono tabular-nums">
-              {formatHumanDate(selectedDateStr)} · Cycle Day {metrics.cycleDay}
+              {formatHumanDate(selectedDateStr)} ·{' '}
+              {metrics.hasLoggedPeriods && metrics.cycleDay > 0
+                ? `Cycle Day ${metrics.cycleDay}`
+                : 'Unlogged Cycle'}
             </span>
           </div>
 

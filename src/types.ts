@@ -117,14 +117,14 @@ export interface SupportInquiry {
 
 export interface CustomerEntryRecord {
   id: string;
+  userId?: string;
   customerNumber?: number;
   name: string;
   email: string;
   age: string;
   phone: string;
-  password?: string;
   role?: 'admin' | 'client';
-  entryType: 'Create Account' | 'Sign In' | 'WebApp Session' | 'Admin Updated';
+  entryType: 'Create Account' | 'Sign In' | 'Google Sign In' | 'WebApp Session' | 'Admin Updated';
   deviceInfo: string;
   appUrl?: string;
   firstEntryAt: number;
@@ -143,13 +143,13 @@ export interface PhaseShiftNotificationSummary {
 }
 
 export interface UserData {
+  uid?: string;
   customerNumber?: number;
   firstEntryAt?: number;
   name: string;
   age: string;
   email: string;
   phone?: string;
-  password?: string;
   role?: 'admin' | 'client';
   createdAt: number;
   lastUpdatedAt?: string;
@@ -161,6 +161,7 @@ export interface UserData {
   entryHistory?: CustomerEntryRecord[];
   isVip: boolean;
   usedFreeAccessPassword?: boolean;
+  submittedFreeCode?: string | null;
   subscriptionStatus?: 'active' | 'free_password' | 'pending_verification' | 'expired' | 'trial';
   subscriptionUntil: number | null;
   paymentMethod: string | null;
@@ -200,6 +201,7 @@ export interface UserData {
 }
 
 export interface CycleMetrics {
+  hasLoggedPeriods: boolean;
   avgCycleLength: number;
   avgPeriodDuration: number;
   activePeriodStartStr?: string | null;

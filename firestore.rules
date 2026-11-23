@@ -6,62 +6,211 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    function isValidDocId(id) {
-      return id is string && id.size() >= 1 && id.size() <= 254 && id.matches('^[a-zA-Z0-9_\\-@.+]+$');
-    }
-
     function incoming() {
       return request.resource.data;
     }
 
-    // Role-based check distinguishing Owner/Administrators from regular clients
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUserDocId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-@.+]+$');
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        request.auth.token.email == 'abdulbobsonbaituray@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
     function isValidRole(data) {
       return !('role' in data) || data.role == 'admin' || data.role == 'client';
     }
 
+    function hasNoPasswordField(data) {
+      return !('password' in data);
+    }
+
     function isValidBloomCampusUser(data) {
       return data is map
-        && data.keys().hasAll(['email', 'name'])
-        && data.keys().size() <= 95
+        && data.keys().hasAll(['uid', 'email', 'name', 'createdAt'])
+        && data.keys().hasOnly([
+          'uid', 'email', 'name', 'age', 'phone', 'role',
+          'createdAt', 'firstEntryAt', 'customerNumber', 'lastUpdatedAt',
+          'lastSignInAt', 'signInCount', 'signupSource', 'deviceInfo',
+          'lastAppUrl', 'entryHistory', 'isVip', 'usedFreeAccessPassword',
+          'subscriptionStatus', 'subscriptionUntil', 'paymentMethod',
+          'pendingPayment', 'approvalWelcomePending', 'lastApprovedExpirationDate',
+          'paymentHistory', 'periods', 'emergencyPills', 'dailyLogs',
+          'journalEntries', 'skincareGoal', 'therapyLogs', 'appointments',
+          'academicTasks', 'cycleRemindersEnabled', 'lastReminderNotifiedForPeriod',
+          'phaseShiftNotificationsEnabled', 'lastNotifiedStageKey',
+          'lastPhaseShiftNotifiedAt', 'lastPhaseShiftSummary',
+          'pushNotificationsEnabled', 'appointmentRemindersEnabled',
+          'dailyCheckinRemindersEnabled', 'lastPushNotificationSentAt',
+          'welcomeMessageSent', 'welcomeMessageSentAt', 'welcomeMessagePendingModal',
+          'paymentAppreciationPending', 'lastPaymentAppreciationAt',
+          'lastPaymentAppreciationAmount', 'themeMode', 'customCycleLength',
+          'unlockedBadges', 'mythBusterCorrectIds', 'mythBusterAttempts',
+          'submittedFreeCode'
+        ])
+        && hasNoPasswordField(data)
+        && data.uid is string
+        && data.uid.size() >= 1
+        && data.uid.size() <= 128
         && data.email is string
         && data.email.size() >= 3
         && data.email.size() <= 254
         && data.name is string
         && data.name.size() >= 1
         && data.name.size() <= 200
+        && data.createdAt is number
+        && (!('age' in data) || (data.age is string && data.age.size() <= 20))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 60))
+        && (!('skincareGoal' in data) || (data.skincareGoal is string && data.skincareGoal.size() <= 120))
+        && (!('paymentMethod' in data) || data.paymentMethod == null || (data.paymentMethod is string && data.paymentMethod.size() <= 200))
+        && (!('submittedFreeCode' in data) || data.submittedFreeCode == null || (data.submittedFreeCode is string && data.submittedFreeCode.size() <= 100))
+        && (!('subscriptionUntil' in data) || data.subscriptionUntil == null || data.subscriptionUntil is number)
+        && (!('periods' in data) || (data.periods is list && data.periods.size() <= 120))
+        && (!('emergencyPills' in data) || (data.emergencyPills is list && data.emergencyPills.size() <= 120))
+        && (!('journalEntries' in data) || (data.journalEntries is list && data.journalEntries.size() <= 500))
+        && (!('therapyLogs' in data) || (data.therapyLogs is list && data.therapyLogs.size() <= 200))
+        && (!('appointments' in data) || (data.appointments is list && data.appointments.size() <= 200))
+        && (!('academicTasks' in data) || (data.academicTasks is list && data.academicTasks.size() <= 200))
+        && (!('dailyLogs' in data) || data.dailyLogs is map)
         && isValidRole(data);
+    }
+
+    function isSafeSelfCreateUser(data, userId) {
+      return data.uid == userId
+        && data.uid == request.auth.uid
+        && (!('role' in data) || data.role == 'client' || isAdmin())
+        && (!('isVip' in data) || data.isVip == false || isAdmin())
+        && (!('usedFreeAccessPassword' in data) || data.usedFreeAccessPassword == false)
+        && (!('subscriptionStatus' in data) || data.subscriptionStatus == 'active' || data.subscriptionStatus == 'trial')
+        && (!('subscriptionUntil' in data) || data.subscriptionUntil == null || (data.subscriptionUntil is number && data.subscriptionUntil <= request.time.toMillis() + 691200000));
+    }
+
+    function matchesActiveFreeCode(code) {
+      return code is string && code.size() >= 3 && (
+        (exists(/databases/$(database)/documents/bloomcampus_config/settings)
+          && get(/databases/$(database)/documents/bloomcampus_config/settings).data.freeAccessPassword is string
+          && code == get(/databases/$(database)/documents/bloomcampus_config/settings).data.freeAccessPassword)
+        || code == 'Bobson@565'
+      );
+    }
+
+    function isSafeSelfUpdateUser(data, prev, userId) {
+      let changed = incoming().diff(existing()).affectedKeys();
+      return data.uid == prev.uid
+        && data.uid == userId
+        && data.createdAt == prev.createdAt
+        && data.email == prev.email
+        && (!('role' in data) ? !('role' in prev) : (('role' in prev) ? data.role == prev.role : data.role == 'client'))
+        && (
+          // Action 1: Normal daily wellness, period, skincare, or profile updates (no privilege/subscription changes)
+          !changed.hasAny(['isVip', 'subscriptionUntil', 'subscriptionStatus', 'usedFreeAccessPassword', 'paymentMethod', 'pendingPayment', 'submittedFreeCode'])
+          || (
+            // Action 2: Submit Orange Money payment verification (cannot self-approve or alter expiration/VIP)
+            changed.hasOnly(['phone', 'paymentMethod', 'pendingPayment', 'subscriptionStatus', 'lastUpdatedAt'])
+            && data.subscriptionStatus == 'pending_verification'
+            && (!('isVip' in data) || data.isVip == existing().get('isVip', false))
+            && (!('subscriptionUntil' in data) || data.subscriptionUntil == existing().get('subscriptionUntil', null))
+          )
+          || (
+            // Action 3: Redeem verified 30-Day Free Access Pass Code validated server-side in rules
+            changed.hasOnly(['isVip', 'usedFreeAccessPassword', 'subscriptionStatus', 'subscriptionUntil', 'paymentMethod', 'pendingPayment', 'submittedFreeCode', 'lastUpdatedAt'])
+            && data.subscriptionStatus == 'free_password'
+            && data.usedFreeAccessPassword == true
+            && data.isVip == true
+            && ('submittedFreeCode' in data)
+            && matchesActiveFreeCode(data.submittedFreeCode)
+            && data.subscriptionUntil is number
+            && data.subscriptionUntil <= request.time.toMillis() + 2678400000
+          )
+        );
+    }
+
+    function isValidAdminRecord(data, adminUid) {
+      return data is map
+        && data.keys().hasAll(['uid', 'email', 'addedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'addedAt', 'name'])
+        && data.uid is string
+        && data.uid == adminUid
+        && data.uid.size() <= 128
+        && data.email is string
+        && data.email.size() >= 3
+        && data.email.size() <= 254
+        && data.addedAt is string
+        && data.addedAt.size() <= 64
+        && (!('name' in data) || (data.name is string && data.name.size() <= 200));
     }
 
     function isValidCustomerEntry(data) {
       return data is map
-        && data.keys().hasAll(['id', 'email', 'name'])
-        && data.keys().size() <= 35
+        && data.keys().hasAll(['id', 'userId', 'email', 'name', 'timestamp'])
+        && data.keys().hasOnly(['id', 'userId', 'customerNumber', 'name', 'email', 'age', 'phone', 'role', 'entryType', 'deviceInfo', 'appUrl', 'firstEntryAt', 'timestamp', 'timestampIso'])
+        && hasNoPasswordField(data)
         && data.id is string
         && data.id.size() >= 1
         && data.id.size() <= 128
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
         && data.email is string
         && data.email.size() >= 3
         && data.email.size() <= 254
         && data.name is string
         && data.name.size() >= 1
         && data.name.size() <= 200
+        && data.timestamp is number
+        && (!('age' in data) || (data.age is string && data.age.size() <= 20))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 60))
+        && (!('entryType' in data) || (data.entryType is string && data.entryType.size() <= 60))
+        && (!('deviceInfo' in data) || (data.deviceInfo is string && data.deviceInfo.size() <= 200))
+        && (!('appUrl' in data) || (data.appUrl is string && data.appUrl.size() <= 300))
+        && (!('timestampIso' in data) || (data.timestampIso is string && data.timestampIso.size() <= 64))
         && isValidRole(data);
     }
 
     function isValidSidratuAppointment(data) {
       return data is map
-        && data.keys().hasAll(['id', 'userEmail', 'treatmentType', 'requestedDate', 'requestedTime', 'status', 'createdAt'])
-        && data.keys().size() <= 20
+        && data.keys().hasAll(['id', 'userId', 'userEmail', 'treatmentType', 'requestedDate', 'requestedTime', 'status', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'userEmail', 'userName', 'treatmentType', 'requestedDate', 'requestedTime', 'notes', 'status', 'createdAt'])
         && data.id is string
+        && data.id.size() >= 1
         && data.id.size() <= 128
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
         && data.userEmail is string
         && data.userEmail.size() <= 254
+        && (!('userName' in data) || (data.userName is string && data.userName.size() <= 200))
         && data.treatmentType is string
         && data.treatmentType.size() <= 200
         && data.requestedDate is string
         && data.requestedDate.size() <= 32
         && data.requestedTime is string
         && data.requestedTime.size() <= 32
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000))
         && (data.status == 'Pending' || data.status == 'Confirmed')
         && data.createdAt is string
         && data.createdAt.size() <= 64;
@@ -69,10 +218,14 @@ service cloud.firestore {
 
     function isValidSidratuSkincareLog(data) {
       return data is map
-        && data.keys().hasAll(['id', 'userEmail', 'treatmentType', 'sessionDate', 'postSessionFeeling'])
-        && data.keys().size() <= 20
+        && data.keys().hasAll(['id', 'userId', 'userEmail', 'treatmentType', 'sessionDate', 'postSessionFeeling'])
+        && data.keys().hasOnly(['id', 'userId', 'userEmail', 'treatmentType', 'sessionDate', 'postSessionFeeling', 'stageAtSession'])
         && data.id is string
+        && data.id.size() >= 1
         && data.id.size() <= 128
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
         && data.userEmail is string
         && data.userEmail.size() <= 254
         && data.treatmentType is string
@@ -80,31 +233,41 @@ service cloud.firestore {
         && data.sessionDate is string
         && data.sessionDate.size() <= 32
         && data.postSessionFeeling is string
-        && data.postSessionFeeling.size() <= 2000;
+        && data.postSessionFeeling.size() <= 2000
+        && (!('stageAtSession' in data) || (data.stageAtSession is string && data.stageAtSession.size() <= 64));
     }
 
     function isValidAdminSettings(data) {
       return data is map
-        && data.keys().hasAll(['ownerEmail', 'adminPassword'])
-        && data.keys().size() <= 20
+        && data.keys().hasAll(['ownerEmail', 'updatedAt'])
+        && data.keys().hasOnly(['ownerEmail', 'adminPassword', 'freeAccessPassword', 'additionalAdmins', 'updatedAt'])
         && data.ownerEmail is string
         && data.ownerEmail.size() >= 3
         && data.ownerEmail.size() <= 254
-        && data.adminPassword is string
-        && data.adminPassword.size() >= 1
-        && data.adminPassword.size() <= 200;
+        && (!('adminPassword' in data) || (data.adminPassword is string && data.adminPassword.size() <= 200))
+        && (!('freeAccessPassword' in data) || (data.freeAccessPassword is string && data.freeAccessPassword.size() <= 200))
+        && (!('additionalAdmins' in data) || (data.additionalAdmins is list && data.additionalAdmins.size() <= 25))
+        && data.updatedAt is string
+        && data.updatedAt.size() <= 64;
     }
 
     function isValidSupportInquiry(data) {
       return data is map
-        && data.keys().hasAll(['id', 'userName', 'userEmail', 'subject', 'message', 'type', 'createdAt'])
-        && data.keys().size() <= 25
+        && data.keys().hasAll(['id', 'userId', 'userName', 'userEmail', 'subject', 'message', 'type', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'userName', 'userEmail', 'userPhone', 'userAge', 'deviceInfo', 'subject', 'message', 'type', 'createdAt'])
         && data.id is string
+        && data.id.size() >= 1
         && data.id.size() <= 128
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
         && data.userName is string
         && data.userName.size() <= 200
         && data.userEmail is string
         && data.userEmail.size() <= 254
+        && (!('userPhone' in data) || (data.userPhone is string && data.userPhone.size() <= 60))
+        && (!('userAge' in data) || (data.userAge is string && data.userAge.size() <= 20))
+        && (!('deviceInfo' in data) || (data.deviceInfo is string && data.deviceInfo.size() <= 200))
         && data.subject is string
         && data.subject.size() <= 300
         && data.message is string
@@ -116,72 +279,125 @@ service cloud.firestore {
 
     function isValidCommunityComment(data) {
       return data is map
-        && data.keys().hasAll(['id', 'userName', 'commentText', 'createdAt'])
-        && data.keys().size() <= 15
+        && data.keys().hasAll(['id', 'userId', 'userName', 'commentText', 'createdAt'])
+        && data.keys().hasOnly(['id', 'userId', 'userName', 'commentText', 'stageTag', 'treatmentTag', 'createdAt'])
         && data.id is string
+        && data.id.size() >= 1
         && data.id.size() <= 128
+        && data.userId is string
+        && data.userId.size() >= 1
+        && data.userId.size() <= 128
         && data.userName is string
+        && data.userName.size() >= 1
         && data.userName.size() <= 200
         && data.commentText is string
         && data.commentText.size() >= 1
         && data.commentText.size() <= 1000
+        && (!('stageTag' in data) || (data.stageTag is string && data.stageTag.size() <= 64))
+        && (!('treatmentTag' in data) || (data.treatmentTag is string && data.treatmentTag.size() <= 120))
         && data.createdAt is string
         && data.createdAt.size() <= 64;
     }
 
     // Connection health check path
     match /test/{docId} {
-      allow get, list: if true;
-      allow write: if false;
+      allow get: if true;
+      allow list, write: if false;
     }
 
-    // Registered users & sign-ups directory across all devices and URLs
+    // Trusted Admin UID registry
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && (isAdmin() || isOwner(adminUid));
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(adminUid) && isValidAdminRecord(incoming(), adminUid);
+      allow delete: if isAdmin() && isValidId(adminUid);
+    }
+
+    // Private per-user account & health logs (strictly isolated to owner or verified Admin)
     match /bloomcampus_users/{userId} {
-      allow get, list: if true;
-      allow create, update: if isValidDocId(userId) && isValidBloomCampusUser(incoming());
-      allow delete: if isValidDocId(userId);
+      allow get: if isValidUserDocId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidUserDocId(userId)
+        && isValidBloomCampusUser(incoming())
+        && (isAdmin() || (isOwner(userId) && isSafeSelfCreateUser(incoming(), userId)));
+      allow update: if isValidUserDocId(userId)
+        && isValidBloomCampusUser(incoming())
+        && (isAdmin() || (isOwner(userId) && isSafeSelfUpdateUser(incoming(), existing(), userId)));
+      allow delete: if isValidUserDocId(userId) && (isAdmin() || isOwner(userId));
     }
 
-    // Individual customer entries across all phones, computers, and shared links
+    // Individual sign-in audit entries isolated by userId
     match /bloomcampus_entries/{entryId} {
-      allow get, list: if true;
-      allow create, update: if isValidDocId(entryId) && isValidCustomerEntry(incoming());
-      allow delete: if isValidDocId(entryId);
+      allow get: if isValidId(entryId) && (isAdmin() || (isVerified() && resource.data.userId == request.auth.uid));
+      allow list: if isAdmin() || (isVerified() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(entryId)
+        && isValidCustomerEntry(incoming())
+        && (isAdmin() || (isVerified() && incoming().userId == request.auth.uid));
+      allow update: if isAdmin() && isValidId(entryId) && isValidCustomerEntry(incoming());
+      allow delete: if isAdmin() && isValidId(entryId);
     }
 
-    // Real-time synced client appointments at Sidratu Beauty Therapy Skin Care
+    // Client appointments at Sidratu Beauty Therapy Skin Care isolated by userId
     match /bloomcampus_appointments/{appointmentId} {
-      allow get, list: if true;
-      allow create, update: if isValidDocId(appointmentId) && isValidSidratuAppointment(incoming());
-      allow delete: if isValidDocId(appointmentId);
+      allow get: if isValidId(appointmentId) && (isAdmin() || (isVerified() && resource.data.userId == request.auth.uid));
+      allow list: if isAdmin() || (isVerified() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(appointmentId)
+        && isValidSidratuAppointment(incoming())
+        && (isAdmin() || (isVerified() && incoming().userId == request.auth.uid));
+      allow update: if isValidId(appointmentId)
+        && isValidSidratuAppointment(incoming())
+        && (isAdmin() || (isVerified() && existing().userId == request.auth.uid && incoming().userId == existing().userId && incoming().createdAt == existing().createdAt));
+      allow delete: if isValidId(appointmentId)
+        && (isAdmin() || (isVerified() && existing().userId == request.auth.uid));
     }
 
-    // Real-time synced client skincare therapy logs
+    // Client skincare therapy logs isolated by userId
     match /bloomcampus_skincare_logs/{logId} {
-      allow get, list: if true;
-      allow create, update: if isValidDocId(logId) && isValidSidratuSkincareLog(incoming());
-      allow delete: if isValidDocId(logId);
+      allow get: if isValidId(logId) && (isAdmin() || (isVerified() && resource.data.userId == request.auth.uid));
+      allow list: if isAdmin() || (isVerified() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(logId)
+        && isValidSidratuSkincareLog(incoming())
+        && (isAdmin() || (isVerified() && incoming().userId == request.auth.uid));
+      allow update: if isValidId(logId)
+        && isValidSidratuSkincareLog(incoming())
+        && (isAdmin() || (isVerified() && existing().userId == request.auth.uid && incoming().userId == existing().userId));
+      allow delete: if isValidId(logId)
+        && (isAdmin() || (isVerified() && existing().userId == request.auth.uid));
     }
 
-    // Owner Admin & Co-Admin settings
+    // Owner Admin & Co-Admin settings (Admin only)
     match /bloomcampus_config/{configId} {
-      allow get, list: if true;
-      allow create, update: if isValidDocId(configId) && isValidAdminSettings(incoming());
+      allow get: if isAdmin() && isValidId(configId);
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(configId) && isValidAdminSettings(incoming());
       allow delete: if false;
     }
 
-    // Payment, support, login, signup, welcome & appreciation inquiries
+    // Payment & support inquiries isolated by userId
     match /bloomcampus_inquiries/{inquiryId} {
-      allow get, list: if true;
-      allow create, update: if isValidDocId(inquiryId) && isValidSupportInquiry(incoming());
-      allow delete: if isValidDocId(inquiryId);
+      allow get: if isValidId(inquiryId) && (isAdmin() || (isVerified() && resource.data.userId == request.auth.uid));
+      allow list: if isAdmin() || (isVerified() && resource.data.userId == request.auth.uid);
+      allow create: if isValidId(inquiryId)
+        && isValidSupportInquiry(incoming())
+        && (isAdmin() || (isVerified() && incoming().userId == request.auth.uid));
+      allow update: if isAdmin() && isValidId(inquiryId) && isValidSupportInquiry(incoming());
+      allow delete: if isAdmin() && isValidId(inquiryId);
     }
 
-    // Community board comments
+    // Community board comments (no PII, verified auth required)
     match /bloomcampus_comments/{commentId} {
-      allow get, list: if true;
-      allow create, update: if isValidDocId(commentId) && isValidCommunityComment(incoming());
-      allow delete: if isValidDocId(commentId);
+      allow get: if isVerified() && isValidId(commentId);
+      allow list: if isVerified() && resource.data.commentText is string && resource.data.userName is string;
+      allow create: if isVerified()
+        && isValidId(commentId)
+        && isValidCommunityComment(incoming())
+        && incoming().userId == request.auth.uid;
+      allow update: if isVerified()
+        && isValidId(commentId)
+        && isValidCommunityComment(incoming())
+        && (isAdmin() || (existing().userId == request.auth.uid && incoming().userId == existing().userId && incoming().createdAt == existing().createdAt));
+      allow delete: if isValidId(commentId)
+        && (isAdmin() || (isVerified() && existing().userId == request.auth.uid));
     }
   }
 }

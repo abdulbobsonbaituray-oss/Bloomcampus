@@ -770,7 +770,9 @@ export const BioscienceReproductiveEducationCenter: React.FC<
                 🧬 Educational Resources · Bioscience &amp; Reproductive Health
               </span>
               <span className="px-2.5 py-1 rounded-lg bg-sage-50 text-sage-800 border border-sage-200 text-[11px] font-bold">
-                Day {cycleDay} of {avgCycleLength}
+                {cycleDay > 0 && avgCycleLength > 0
+                  ? `Day ${cycleDay} of ${avgCycleLength}`
+                  : 'Period not logged yet'}
               </span>
             </div>
 
@@ -932,7 +934,9 @@ export const BioscienceReproductiveEducationCenter: React.FC<
 
               <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
                 <span className="text-xs font-bold px-3 py-1.5 rounded-xl bg-cream border border-slate-200 text-slate-700">
-                  Day {cycleDay} of {avgCycleLength}
+                  {cycleDay > 0 && avgCycleLength > 0
+                    ? `Day ${cycleDay} of ${avgCycleLength}`
+                    : 'Period not logged yet'}
                 </span>
                 <button
                   type="button"

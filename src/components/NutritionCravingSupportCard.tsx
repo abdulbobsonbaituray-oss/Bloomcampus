@@ -166,7 +166,7 @@ export const NutritionCravingSupportCard: React.FC<NutritionCravingSupportCardPr
               </span>
               {isViewingCurrentStage && (
                 <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-slate-900 text-white">
-                  🎯 Active Stage (Day {cycleDay})
+                  {cycleDay > 0 ? `🎯 Active Stage (Day ${cycleDay})` : '🎯 Active Guide'}
                 </span>
               )}
             </div>

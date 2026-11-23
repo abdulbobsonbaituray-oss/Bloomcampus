@@ -25,6 +25,8 @@ import {
 } from '../constants';
 import { formatDateISO, formatHumanDate } from '../utils/cycleEngine';
 import {
+  postCommunityCommentToFirestore,
+  subscribeToCommunityCommentsFirestore,
   syncClientAppointmentToFirestore,
   syncClientSkincareLogToFirestore,
 } from '../firebase';
@@ -92,12 +94,17 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
   const [showCommunityComments, setShowCommunityComments] = useState(false);
 
   // Virtual Assistant Chat State
+  const stageSummaryForGreeting =
+    metrics.hasLoggedPeriods && metrics.cycleDay > 0
+      ? `I see you're in your ${currentStage.shortName} (Cycle Day ${metrics.cycleDay}).`
+      : `Log your period dates whenever ready for cycle-synced skin recommendations.`;
+
   const [chatHistory, setChatHistory] = useState<
     Array<{ role: 'user' | 'model'; text: string }>
   >([
     {
       role: 'model',
-      text: `Welcome to Sidratu Beauty Therapy Skin Care at 101 Jomo Kenyatta Road, Freetown! 🌸 I see you're in your ${currentStage.shortName} (Cycle Day ${metrics.cycleDay}). How can I help with your skin care, aesthetics, dental clinic questions, or cycle-synced treatments today?`,
+      text: `Welcome to Sidratu Beauty Therapy Skin Care at 101 Jomo Kenyatta Road, Freetown! 🌸 ${stageSummaryForGreeting} How can I help with your skin care, aesthetics, dental clinic questions, or cycle-synced treatments today?`,
     },
   ]);
   const [chatInput, setChatInput] = useState('');
@@ -109,25 +116,19 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
         return [
           {
             role: 'model',
-            text: `Welcome to Sidratu Beauty Therapy Skin Care at 101 Jomo Kenyatta Road, Freetown! 🌸 I see you're in your ${currentStage.shortName} (Cycle Day ${metrics.cycleDay}). How can I help with your skin care, aesthetics, dental clinic questions, or cycle-synced treatments today?`,
+            text: `Welcome to Sidratu Beauty Therapy Skin Care at 101 Jomo Kenyatta Road, Freetown! 🌸 ${stageSummaryForGreeting} How can I help with your skin care, aesthetics, dental clinic questions, or cycle-synced treatments today?`,
           },
         ];
       }
       return prev;
     });
-  }, [currentStage.shortName, metrics.cycleDay]);
+  }, [stageSummaryForGreeting]);
 
   useEffect(() => {
-    fetch('/api/community/comments')
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data.comments)) {
-          setComments(data.comments);
-        }
-      })
-      .catch(() => {
-        // Fallback if offline
-      });
+    const unsub = subscribeToCommunityCommentsFirestore((cloudComments) => {
+      setComments(cloudComments);
+    });
+    return () => unsub();
   }, []);
 
   const handleGoalChange = (newGoal: string) => {
@@ -162,7 +163,7 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
       ),
     }));
     if (userData.email) {
-      syncClientSkincareLogToFirestore(userData.email, newEntry).catch(() => {});
+      syncClientSkincareLogToFirestore(userData.email, newEntry, userData.uid).catch(() => {});
     }
     setLogFeeling('');
     showToast('✨ Therapy session saved & synced to Firestore in real time!', 'success');
@@ -220,7 +221,8 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
       syncClientAppointmentToFirestore(
         userData.email,
         userData.name || 'Client',
-        newAppt
+        newAppt,
+        userData.uid
       ).catch(() => {});
     }
     if (
@@ -325,35 +327,19 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
     if (!newCommentText.trim() || submittingComment) return;
     setSubmittingComment(true);
     try {
-      const res = await fetch('/api/community/comments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userName: userData.name || 'Campus Student',
-          commentText: newCommentText.trim(),
-          stageTag: currentStage.shortName,
-          treatmentTag: newCommentTreatment || undefined,
-        }),
+      const posted = await postCommunityCommentToFirestore({
+        userName: userData.name || 'Campus Student',
+        commentText: newCommentText.trim(),
+        stageTag: metrics.hasLoggedPeriods ? currentStage.shortName : 'Campus Member',
+        treatmentTag: newCommentTreatment || undefined,
       });
-      const data = await res.json();
-      if (res.ok && Array.isArray(data.comments)) {
-        setComments(data.comments);
+      if (posted) {
         setNewCommentText('');
         setNewCommentTreatment('');
         showToast('💬 Posted to the Campus & Sidratu Community Board!', 'success');
       }
     } catch {
-      const fallbackComment: CommunityComment = {
-        id: `local-${Date.now()}`,
-        userName: userData.name || 'Campus Student',
-        commentText: newCommentText.trim(),
-        stageTag: currentStage.shortName,
-        treatmentTag: newCommentTreatment || undefined,
-        createdAt: new Date().toISOString(),
-      };
-      setComments((prev) => [fallbackComment, ...prev]);
-      setNewCommentText('');
-      showToast('💬 Posted to Community Board!', 'success');
+      showToast('Please sign in with a verified account to post on the Community Board.', 'warning');
     } finally {
       setSubmittingComment(false);
     }

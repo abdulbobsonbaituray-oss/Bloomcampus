@@ -2,9 +2,15 @@
   "entities": {
     "BloomCampusUser": {
       "title": "BloomCampusUser",
-      "description": "Registered user account, role-based permission level, cycle logs, mood tracking, client appointments, and Sidratu skincare data in BloomCampus.",
+      "description": "Private user account, cycle logs, mood tracking, client appointments, and Sidratu skincare data keyed by Firebase Auth UID.",
       "type": "object",
       "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID owning this private user document.",
+          "minLength": 1,
+          "maxLength": 128
+        },
         "email": {
           "type": "string",
           "format": "email",
@@ -14,31 +20,27 @@
         "name": {
           "type": "string",
           "description": "Full name of the user.",
+          "minLength": 1,
           "maxLength": 200
         },
         "age": {
           "type": "string",
-          "description": "Age of the user.",
+          "description": "Optional age entered by the user.",
           "maxLength": 20
         },
         "phone": {
           "type": "string",
-          "description": "Phone number of the user.",
+          "description": "Optional phone number entered by the user.",
           "maxLength": 60
-        },
-        "password": {
-          "type": "string",
-          "description": "User account password for cross-device sign-in.",
-          "maxLength": 200
         },
         "role": {
           "type": "string",
           "enum": ["admin", "client"],
-          "description": "Role-based permission level distinguishing administrators from regular clients."
+          "description": "Role-based permission level."
         },
         "createdAt": {
           "type": "number",
-          "description": "Account registration timestamp in milliseconds."
+          "description": "Account creation timestamp in milliseconds."
         },
         "lastUpdatedAt": {
           "type": "string",
@@ -47,94 +49,50 @@
         },
         "lastSignInAt": {
           "type": "string",
-          "description": "ISO timestamp of most recent sign-in or active session.",
+          "description": "ISO timestamp of most recent sign-in.",
           "maxLength": 64
         },
         "signInCount": {
           "type": "number",
-          "description": "Total number of times the user has signed in."
+          "description": "Total number of user sign-ins."
         },
         "subscriptionStatus": {
           "type": "string",
-          "description": "Current subscription or free access status.",
-          "enum": ["active", "free_password", "pending_verification", "expired", "trial"]
+          "enum": ["active", "free_password", "pending_verification", "expired", "trial"],
+          "description": "Current subscription or 1-week free trial status."
         },
         "subscriptionUntil": {
           "type": "number",
-          "description": "Subscription expiration timestamp in milliseconds."
+          "description": "Trial or pass expiration timestamp in milliseconds."
         },
         "paymentMethod": {
           "type": "string",
-          "description": "Active access method description.",
+          "description": "Active access method label.",
           "maxLength": 200
         },
         "isVip": {
           "type": "boolean",
-          "description": "Whether the user has VIP or verified 30-day pass status."
+          "description": "Whether the user has an approved or unlocked pass."
         },
         "customCycleLength": {
           "type": "number",
-          "description": "User custom menstrual cycle length in days (21-45)."
-        },
-        "cycleRemindersEnabled": {
-          "type": "boolean",
-          "description": "Whether 2-day period reminder notifications are enabled."
-        },
-        "phaseShiftNotificationsEnabled": {
-          "type": "boolean",
-          "description": "Whether browser notifications for cycle phase transitions are enabled."
-        },
-        "pushNotificationsEnabled": {
-          "type": "boolean",
-          "description": "Whether mobile push notifications for reminders and updates are enabled."
-        },
-        "appointmentRemindersEnabled": {
-          "type": "boolean",
-          "description": "Whether mobile push notifications for Sidratu clinic appointments are enabled."
-        },
-        "dailyCheckinRemindersEnabled": {
-          "type": "boolean",
-          "description": "Whether mobile push notifications for daily mood and hydration check-ins are enabled."
-        },
-        "welcomeMessageSent": {
-          "type": "boolean",
-          "description": "Whether the automated welcome and thank-you message has been sent upon first account creation."
-        },
-        "welcomeMessageSentAt": {
-          "type": "string",
-          "description": "ISO timestamp when the automated welcome message was sent.",
-          "maxLength": 64
-        },
-        "paymentAppreciationPending": {
-          "type": "boolean",
-          "description": "Whether the automated payment appreciation message is active for the user."
-        },
-        "lastPaymentAppreciationAt": {
-          "type": "string",
-          "description": "ISO timestamp when the automated payment appreciation message was triggered.",
-          "maxLength": 64
-        },
-        "lastNotifiedStageKey": {
-          "type": "string",
-          "enum": ["MENSTRUATION", "FOLLICULAR", "OVULATION", "LUTEAL"],
-          "description": "The most recent cycle phase for which a Phase Shift Notification was recorded."
-        },
-        "lastPhaseShiftNotifiedAt": {
-          "type": "string",
-          "description": "ISO timestamp of the most recent Phase Shift Notification.",
-          "maxLength": 64
+          "description": "User-entered menstrual cycle length in days."
         },
         "periods": {
           "type": "array",
-          "description": "Logged menstrual period start and end dates."
+          "description": "User-logged menstrual period start and end dates."
         },
         "dailyLogs": {
           "type": "object",
-          "description": "Daily mood, symptoms, hydration, snacks, and notes keyed by YYYY-MM-DD."
+          "description": "User-logged mood, physical symptoms with intensity, hydration, and notes keyed by YYYY-MM-DD."
         },
         "emergencyPills": {
           "type": "array",
-          "description": "Logged emergency contraception timestamps and dates."
+          "description": "User-logged emergency contraception timestamps."
+        },
+        "journalEntries": {
+          "type": "array",
+          "description": "User-written cycle journal reflections."
         },
         "skincareGoal": {
           "type": "string",
@@ -143,294 +101,321 @@
         },
         "appointments": {
           "type": "array",
-          "description": "Synced Sidratu clinic client appointments."
+          "description": "User-booked Sidratu clinic appointments."
         },
         "therapyLogs": {
           "type": "array",
-          "description": "Synced Sidratu skincare therapy session logs."
+          "description": "User-logged Sidratu skincare therapy sessions."
+        },
+        "academicTasks": {
+          "type": "array",
+          "description": "User-entered study and exam planner tasks."
+        },
+        "customerNumber": {
+          "type": "number",
+          "description": "Sequential customer entry number."
+        },
+        "firstEntryAt": {
+          "type": "number",
+          "description": "First entry timestamp in milliseconds."
+        },
+        "submittedFreeCode": {
+          "type": "string",
+          "description": "Free pass code submitted for rule-level verification.",
+          "maxLength": 100
         }
       },
-      "required": ["email", "name", "createdAt"]
+      "required": ["uid", "email", "name", "createdAt"]
     },
-    "SidratuClientAppointment": {
-      "title": "SidratuClientAppointment",
-      "description": "Real-time synced client appointment at Sidratu Beauty Therapy Skin Care.",
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted administrator lookup document keyed by Firebase Auth UID.",
       "type": "object",
       "properties": {
-        "id": {
+        "uid": {
           "type": "string",
-          "description": "Unique appointment identifier.",
-          "maxLength": 128
-        },
-        "userEmail": {
-          "type": "string",
-          "format": "email",
-          "description": "Client email address.",
-          "maxLength": 254
-        },
-        "userName": {
-          "type": "string",
-          "description": "Client full name.",
-          "maxLength": 200
-        },
-        "treatmentType": {
-          "type": "string",
-          "description": "Booked skincare, aesthetics, or dental treatment.",
-          "maxLength": 200
-        },
-        "requestedDate": {
-          "type": "string",
-          "description": "Appointment date (YYYY-MM-DD).",
-          "maxLength": 32
-        },
-        "requestedTime": {
-          "type": "string",
-          "description": "Appointment time.",
-          "maxLength": 32
-        },
-        "status": {
-          "type": "string",
-          "enum": ["Pending", "Confirmed"],
-          "description": "Booking confirmation status."
-        },
-        "createdAt": {
-          "type": "string",
-          "description": "ISO timestamp when appointment was booked.",
-          "maxLength": 64
-        }
-      },
-      "required": ["id", "userEmail", "treatmentType", "requestedDate", "requestedTime", "status", "createdAt"]
-    },
-    "SidratuSkincareLog": {
-      "title": "SidratuSkincareLog",
-      "description": "Real-time synced client skincare therapy log.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "Unique therapy log identifier.",
-          "maxLength": 128
-        },
-        "userEmail": {
-          "type": "string",
-          "format": "email",
-          "description": "Client email address.",
-          "maxLength": 254
-        },
-        "treatmentType": {
-          "type": "string",
-          "description": "Skincare treatment type.",
-          "maxLength": 200
-        },
-        "sessionDate": {
-          "type": "string",
-          "description": "Date of therapy session.",
-          "maxLength": 32
-        },
-        "postSessionFeeling": {
-          "type": "string",
-          "description": "Client skin progress notes.",
-          "maxLength": 2000
-        }
-      },
-      "required": ["id", "userEmail", "treatmentType", "sessionDate", "postSessionFeeling"]
-    },
-    "AdminSettings": {
-      "title": "AdminSettings",
-      "description": "Owner and co-admin configuration settings.",
-      "type": "object",
-      "properties": {
-        "ownerEmail": {
-          "type": "string",
-          "format": "email",
-          "description": "Primary owner admin email.",
-          "maxLength": 254
-        },
-        "adminPassword": {
-          "type": "string",
-          "description": "Primary owner admin password.",
-          "maxLength": 200
-        },
-        "freeAccessPassword": {
-          "type": "string",
-          "description": "Fallback access password.",
-          "maxLength": 200
-        },
-        "updatedAt": {
-          "type": "string",
-          "description": "ISO timestamp when config was last updated.",
-          "maxLength": 64
-        }
-      },
-      "required": ["ownerEmail", "adminPassword", "updatedAt"]
-    },
-    "SupportInquiry": {
-      "title": "SupportInquiry",
-      "description": "Payment verification, automated welcome/appreciation log, or student support inquiry notification.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "Unique inquiry identifier.",
-          "maxLength": 128
-        },
-        "userName": {
-          "type": "string",
-          "description": "Sender name.",
-          "maxLength": 200
-        },
-        "userEmail": {
-          "type": "string",
-          "description": "Sender email.",
-          "maxLength": 254
-        },
-        "subject": {
-          "type": "string",
-          "description": "Inquiry subject line.",
-          "maxLength": 300
-        },
-        "message": {
-          "type": "string",
-          "description": "Inquiry message content.",
-          "maxLength": 5000
-        },
-        "type": {
-          "type": "string",
-          "enum": ["payment", "support", "login", "signup", "welcome", "appreciation"],
-          "description": "Type of inquiry or automated notification."
-        },
-        "createdAt": {
-          "type": "string",
-          "description": "ISO timestamp when inquiry was created.",
-          "maxLength": 64
-        }
-      },
-      "required": ["id", "userName", "userEmail", "subject", "message", "type", "createdAt"]
-    },
-    "CommunityComment": {
-      "title": "CommunityComment",
-      "description": "Public community board feedback and student tips.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "Unique comment identifier.",
-          "maxLength": 128
-        },
-        "userName": {
-          "type": "string",
-          "description": "Display name of commenter.",
-          "maxLength": 200
-        },
-        "commentText": {
-          "type": "string",
-          "description": "Comment body text.",
-          "maxLength": 1000
-        },
-        "createdAt": {
-          "type": "string",
-          "description": "ISO timestamp when comment was posted.",
-          "maxLength": 64
-        }
-      },
-      "required": ["id", "userName", "commentText", "createdAt"]
-    },
-    "CustomerEntryLog": {
-      "title": "CustomerEntryLog",
-      "description": "Individual customer entry and sign-in log across phones, computers, and shared app links.",
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "description": "Unique entry log identifier.",
           "maxLength": 128
         },
         "email": {
           "type": "string",
           "format": "email",
-          "description": "Customer email address.",
+          "maxLength": 254
+        },
+        "addedAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["uid", "email", "addedAt"]
+    },
+    "SidratuClientAppointment": {
+      "title": "SidratuClientAppointment",
+      "description": "Client appointment at Sidratu Beauty Therapy Skin Care isolated by owner userId.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "userName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "treatmentType": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "requestedDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "requestedTime": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Pending", "Confirmed"]
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "userId", "userEmail", "treatmentType", "requestedDate", "requestedTime", "status", "createdAt"]
+    },
+    "SidratuSkincareLog": {
+      "title": "SidratuSkincareLog",
+      "description": "Client skincare therapy log isolated by owner userId.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "treatmentType": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "sessionDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "postSessionFeeling": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "stageAtSession": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "userId", "userEmail", "treatmentType", "sessionDate", "postSessionFeeling"]
+    },
+    "AdminSettings": {
+      "title": "AdminSettings",
+      "description": "Owner admin configuration settings accessible only to admins.",
+      "type": "object",
+      "properties": {
+        "ownerEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "adminPassword": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "freeAccessPassword": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["ownerEmail", "updatedAt"]
+    },
+    "SupportInquiry": {
+      "title": "SupportInquiry",
+      "description": "Payment verification or support inquiry owned by the submitting user and readable by admins.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "userEmail": {
+          "type": "string",
+          "maxLength": 254
+        },
+        "subject": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 5000
+        },
+        "type": {
+          "type": "string",
+          "enum": ["payment", "support", "login", "signup", "welcome", "appreciation"]
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "userId", "userName", "userEmail", "subject", "message", "type", "createdAt"]
+    },
+    "CommunityComment": {
+      "title": "CommunityComment",
+      "description": "Community board feedback containing no PII, authored by signed-in users.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "commentText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "stageTag": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "treatmentTag": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "userId", "userName", "commentText", "createdAt"]
+    },
+    "CustomerEntryLog": {
+      "title": "CustomerEntryLog",
+      "description": "Sign-in audit entry owned by userId and visible only to that user or admins.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
           "maxLength": 254
         },
         "name": {
           "type": "string",
-          "description": "Customer full name.",
-          "maxLength": 200
-        },
-        "age": {
-          "type": "string",
-          "description": "Customer age.",
-          "maxLength": 20
-        },
-        "phone": {
-          "type": "string",
-          "description": "Phone number used by customer.",
-          "maxLength": 60
-        },
-        "password": {
-          "type": "string",
-          "description": "Password used by customer.",
           "maxLength": 200
         },
         "role": {
           "type": "string",
-          "enum": ["admin", "client"],
-          "description": "Role-based permission level."
+          "enum": ["admin", "client"]
         },
         "entryType": {
           "type": "string",
-          "description": "Type of entry event.",
           "maxLength": 60
         },
         "deviceInfo": {
           "type": "string",
-          "description": "Phone or computer device info.",
           "maxLength": 200
         },
         "firstEntryAt": {
-          "type": "number",
-          "description": "Timestamp of customer first entry in milliseconds."
+          "type": "number"
         },
         "timestamp": {
-          "type": "number",
-          "description": "Timestamp of this entry in milliseconds."
+          "type": "number"
         },
         "timestampIso": {
           "type": "string",
-          "description": "ISO timestamp of this entry.",
           "maxLength": 64
         }
       },
-      "required": ["id", "email", "name", "timestamp"]
+      "required": ["id", "userId", "email", "name", "timestamp"]
     }
   },
   "firestore": {
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Authoritative list of admin UIDs."
+    },
     "/bloomcampus_users/{userId}": {
       "schema": { "$ref": "#/entities/BloomCampusUser" },
-      "description": "Stores all registered user sign-ups, cycle logs, mood tracking, appointments, and skincare data across all devices."
+      "description": "Private user account, cycle logs, mood logs, and clinic history keyed by Firebase Auth UID."
     },
     "/bloomcampus_entries/{entryId}": {
       "schema": { "$ref": "#/entities/CustomerEntryLog" },
-      "description": "Stores every customer entry across phones, computers, and shared links."
+      "description": "Sign-in activity entries isolated by userId and readable by admins."
     },
     "/bloomcampus_appointments/{appointmentId}": {
       "schema": { "$ref": "#/entities/SidratuClientAppointment" },
-      "description": "Stores real-time synced Sidratu clinic client appointments."
+      "description": "Sidratu clinic client appointments isolated by userId and readable by admins."
     },
     "/bloomcampus_skincare_logs/{logId}": {
       "schema": { "$ref": "#/entities/SidratuSkincareLog" },
-      "description": "Stores real-time synced Sidratu client skincare therapy logs."
+      "description": "Sidratu client skincare therapy logs isolated by userId and readable by admins."
     },
     "/bloomcampus_config/{configId}": {
       "schema": { "$ref": "#/entities/AdminSettings" },
-      "description": "Stores owner admin and co-admin configuration."
+      "description": "Admin-only configuration settings."
     },
     "/bloomcampus_inquiries/{inquiryId}": {
       "schema": { "$ref": "#/entities/SupportInquiry" },
-      "description": "Stores student support, payment verification, welcome, and appreciation notifications."
+      "description": "Support and payment verification inquiries isolated by userId and readable by admins."
     },
     "/bloomcampus_comments/{commentId}": {
       "schema": { "$ref": "#/entities/CommunityComment" },
-      "description": "Stores community feedback comments."
+      "description": "Community board comments authored by verified users."
     }
   }
 }

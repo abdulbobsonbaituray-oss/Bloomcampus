@@ -91,7 +91,7 @@ interface OwnerAdminDashboardProps {
     age: string;
     email: string;
     phone: string;
-    password: string;
+    password?: string;
     originalEmail?: string;
     subscriptionStatus?: 'active' | 'pending_verification' | 'expired' | 'free_password';
     subscriptionDays?: number;
@@ -154,14 +154,13 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
   const [showAddUserForm, setShowAddUserForm] = useState(false);
   const [editingOriginalEmail, setEditingOriginalEmail] = useState<string | null>(null);
   const [manualUserName, setManualUserName] = useState('');
-  const [manualUserAge, setManualUserAge] = useState('21');
+  const [manualUserAge, setManualUserAge] = useState('');
   const [manualUserEmail, setManualUserEmail] = useState('');
   const [manualUserPhone, setManualUserPhone] = useState('');
-  const [manualUserPassword, setManualUserPassword] = useState('');
   const [manualSubStatus, setManualSubStatus] = useState<
     'active' | 'pending_verification' | 'expired' | 'free_password'
   >('active');
-  const [manualSubDays, setManualSubDays] = useState<string>('14');
+  const [manualSubDays, setManualSubDays] = useState<string>('7');
 
   // =========================================================================
   // 1. APP MONEY / REVENUE CALCULATOR STATE
@@ -291,13 +290,10 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     }
   };
 
-  // Auto-sync all entries on mount and every 8 seconds while Admin Console is open
+  // Initial Firestore refresh on mount (live updates continue via Firestore onSnapshot)
   useEffect(() => {
     void onRefreshUsers();
-    const interval = window.setInterval(() => {
-      void onRefreshUsers();
-    }, 8000);
-    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const additionalAdmins: AdminAccount[] = Array.isArray(adminConfig.additionalAdmins)
@@ -813,10 +809,9 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     const st = getTrialStatus(u);
     setEditingOriginalEmail(u.email);
     setManualUserName(u.name || '');
-    setManualUserAge(u.age || '21');
+    setManualUserAge(u.age || '');
     setManualUserEmail(u.email || '');
     setManualUserPhone(resolveCustomerPhoneUsed(u));
-    setManualUserPassword(u.password || '');
     setManualSubStatus(
       st.status === 'expired'
         ? 'expired'
@@ -826,7 +821,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
         ? 'free_password'
         : 'active'
     );
-    setManualSubDays(String(st.daysLeft > 0 ? st.daysLeft : 14));
+    setManualSubDays(String(st.daysLeft > 0 ? st.daysLeft : 7));
     setActiveAdminPage('entries');
     setShowAddUserForm(true);
     window.scrollTo({ top: 140, behavior: 'smooth' });
@@ -843,22 +838,20 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
     const parsedDays = Number(manualSubDays);
     onRegisterNewUserByAdmin({
       name: manualUserName.trim() || emailClean.split('@')[0],
-      age: manualUserAge.trim() || '21',
+      age: manualUserAge.trim(),
       email: emailClean,
       phone: manualUserPhone.trim(),
-      password: manualUserPassword.trim(),
       originalEmail: editingOriginalEmail || undefined,
       subscriptionStatus: manualSubStatus,
-      subscriptionDays: !Number.isNaN(parsedDays) ? parsedDays : 14,
+      subscriptionDays: !Number.isNaN(parsedDays) ? parsedDays : 7,
     });
     setEditingOriginalEmail(null);
     setManualUserName('');
-    setManualUserAge('21');
+    setManualUserAge('');
     setManualUserEmail('');
     setManualUserPhone('');
-    setManualUserPassword('');
     setManualSubStatus('active');
-    setManualSubDays('14');
+    setManualSubDays('7');
     setShowAddUserForm(false);
   };
 
@@ -1247,12 +1240,11 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                         if (showAddUserForm && editingOriginalEmail) {
                           setEditingOriginalEmail(null);
                           setManualUserName('');
-                          setManualUserAge('21');
+                          setManualUserAge('');
                           setManualUserEmail('');
                           setManualUserPhone('');
-                          setManualUserPassword('');
                           setManualSubStatus('active');
-                          setManualSubDays('14');
+                          setManualSubDays('7');
                         } else {
                           setShowAddUserForm((prev) => !prev);
                         }
@@ -1315,12 +1307,11 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                         onClick={() => {
                           setEditingOriginalEmail(null);
                           setManualUserName('');
-                          setManualUserAge('21');
+                          setManualUserAge('');
                           setManualUserEmail('');
                           setManualUserPhone('');
-                          setManualUserPassword('');
                           setManualSubStatus('active');
-                          setManualSubDays('14');
+                          setManualSubDays('7');
                         }}
                         className="text-[11px] font-bold text-rose-700 hover:underline cursor-pointer"
                       >
@@ -1358,16 +1349,15 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                     </div>
                     <div>
                       <label className="text-[11px] font-extrabold uppercase text-slate-700 block mb-1">
-                        3. Age *
+                        3. Age
                       </label>
                       <input
                         type="number"
                         min="10"
                         max="99"
-                        required
                         value={manualUserAge}
                         onChange={(e) => setManualUserAge(e.target.value)}
-                        placeholder="21"
+                        placeholder="Optional age"
                         className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-900"
                       />
                     </div>
@@ -1383,24 +1373,12 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                         className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono font-bold text-slate-900"
                       />
                     </div>
-                    <div>
-                      <label className="text-[11px] font-extrabold uppercase text-slate-700 block mb-1">
-                        5. Account Password
-                      </label>
-                      <input
-                        type="text"
-                        value={manualUserPassword}
-                        onChange={(e) => setManualUserPassword(e.target.value)}
-                        placeholder="Optional password"
-                        className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono font-bold text-slate-900"
-                      />
-                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end pt-1">
                     <div>
                       <label className="text-[11px] font-extrabold uppercase text-slate-700 block mb-1">
-                        6. Subscription Status
+                        5. Subscription Status
                       </label>
                       <select
                         value={manualSubStatus}
@@ -1423,7 +1401,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                     </div>
                     <div>
                       <label className="text-[11px] font-extrabold uppercase text-slate-700 block mb-1">
-                        7. Remaining Access Days
+                        6. Remaining Access Days
                       </label>
                       <input
                         type="number"
@@ -1431,7 +1409,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                         max="365"
                         value={manualSubDays}
                         onChange={(e) => setManualSubDays(e.target.value)}
-                        placeholder="14"
+                        placeholder="7"
                         className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-mono font-extrabold text-slate-900"
                       />
                     </div>
@@ -2602,9 +2580,15 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                           </div>
                           <div className="font-display font-extrabold text-sm text-slate-900 mt-1.5">
                             {u.name || 'Student'}{' '}
-                            <span className="text-xs font-mono font-bold text-slate-500">
-                              ({u.age ? `${u.age} yrs` : '21 yrs'})
-                            </span>
+                            {u.age ? (
+                              <span className="text-xs font-mono font-bold text-slate-500">
+                                ({u.age} yrs)
+                              </span>
+                            ) : (
+                              <span className="text-xs font-mono font-medium text-slate-400">
+                                (Age not provided)
+                              </span>
+                            )}
                           </div>
                           <div className="text-xs font-mono font-bold text-lavender-900 break-all">
                             ✉️ {u.email}

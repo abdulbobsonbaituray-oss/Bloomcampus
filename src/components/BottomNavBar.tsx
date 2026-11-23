@@ -50,7 +50,7 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
       label: 'My Period',
       shortLabel: 'Period',
       icon: Calendar,
-      badge: `D${cycleDay}`,
+      badge: cycleDay > 0 ? `D${cycleDay}` : undefined,
       activeBg: isDarkMode ? 'bg-rose-950/80' : 'bg-rose-50',
       activeText: isDarkMode ? 'text-rose-300' : 'text-rose-700',
       activeIndicator: 'bg-rose-500',

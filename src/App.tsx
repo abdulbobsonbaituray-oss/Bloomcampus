@@ -45,6 +45,7 @@ import {
   CREATOR_NAME,
   HABIT_ITEMS,
   MOOD_CATEGORIES,
+  OWNER_ADMIN_EMAIL,
   PHASE_ADVISOR_DATA,
   PHASE_SHIFT_NOTIFICATION_DATA,
   STORAGE_ADMIN_CONFIG_KEY,
@@ -52,18 +53,13 @@ import {
   STORAGE_HIDE_GUIDE_KEY,
   STORAGE_REMEMBER_ME_KEY,
   STORAGE_REMEMBERED_EMAIL_KEY,
-  STORAGE_SESSION_KEY,
   STORAGE_THEME_KEY,
-  STORAGE_USERS_KEY,
   SYMPTOM_ITEMS,
 } from './constants';
 import {
-  addDaysISO,
-  autoAdvancePeriodsIfNeeded,
   calculateCycleMetrics,
   createDefaultUserObject,
   diffDays,
-  formatDateISO,
   formatDateTimeLocalISO,
   formatHumanDate,
   formatLockedTodayHuman,
@@ -72,21 +68,39 @@ import {
   getLockedTodayISO,
   getSortedPeriods,
   getTrialStatus,
-  isOwnerAdminCredentials,
   isSecretVipPassword,
   saveAdminConfig,
 } from './utils/cycleEngine';
 import { exportClinicSummaryToPDF } from './utils/clinicPdfExport';
 import {
+  auth,
+  clearAllSupportInquiriesFromFirestore,
+  clearDeletedEmailLocally,
+  deleteMultipleUsersFromFirestore,
+  deleteSupportInquiryFromFirestore,
+  deleteUserFromFirestore,
+  emailToDocId,
+  fetchAllUsersFromFirestore,
   getClientDeviceLabel,
+  getCurrentFirebaseIdToken,
+  loadUserDocByUid,
+  logCustomerEntryToFirestore,
   resendVerificationEmailFirebase,
   resolveCustomerPhoneUsed,
+  saveUserDocByUid,
   sendPasswordResetEmailFirebase,
   setFirebaseAuthRememberPersistence,
   signInWithEmailPasswordFirebase,
   signInWithGooglePopup,
   signOutFirebase,
   signUpWithEmailPasswordFirebase,
+  subscribeToAdminConfigFirestore,
+  subscribeToAllUsersFirestore,
+  subscribeToFirebaseAuth,
+  subscribeToSupportInquiriesFirestore,
+  subscribeToUserDocByUid,
+  syncAdminConfigToFirestore,
+  syncSupportInquiryToFirestore,
 } from './firebase';
 import { BottomNavBar, CoreNavSection } from './components/BottomNavBar';
 import { CycleInsightsPanel } from './components/CycleInsightsPanel';
@@ -307,48 +321,59 @@ const EDUCATION_VIDEOS = [
   },
 ];
 
-function loadUsersFromStorage(): Record<string, UserData> {
-  try {
-    const raw = localStorage.getItem(STORAGE_USERS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
+const PENDING_SIGNUP_PROFILE_KEY = 'bloomcampus_pending_signup_profile_v1';
+
+interface PendingSignupProfile {
+  email: string;
+  name: string;
+  age: string;
+  phone: string;
+  createdAt: number;
 }
 
-function saveUsersToStorage(users: Record<string, UserData>) {
+function savePendingSignupProfile(profile: PendingSignupProfile) {
   try {
-    localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(users));
+    sessionStorage.setItem(PENDING_SIGNUP_PROFILE_KEY, JSON.stringify(profile));
   } catch {
     // ignore storage quota errors
   }
 }
 
+function readPendingSignupProfile(email: string): PendingSignupProfile | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_SIGNUP_PROFILE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingSignupProfile;
+    if (parsed?.email?.trim().toLowerCase() === email.trim().toLowerCase()) {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingSignupProfile() {
+  try {
+    sessionStorage.removeItem(PENDING_SIGNUP_PROFILE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export default function App() {
   const lockedTodayISO = getLockedTodayISO();
-  const [usersMap, setUsersMap] = useState<Record<string, UserData>>(() => loadUsersFromStorage());
+  const [usersMap, setUsersMap] = useState<Record<string, UserData>>({});
   const [adminConfig, setAdminConfig] = useState<AdminConfig>(() => getAdminConfig());
   const [supportInquiries, setSupportInquiries] = useState<SupportInquiry[]>([]);
 
-  const [currentEmail, setCurrentEmail] = useState<string | null>(() => {
-    try {
-      const remembered = localStorage.getItem(STORAGE_SESSION_KEY);
-      if (remembered) return remembered.toLowerCase().trim();
-      return sessionStorage.getItem(STORAGE_SESSION_KEY)?.toLowerCase().trim() || null;
-    } catch {
-      return null;
-    }
-  });
+  const [authInitialized, setAuthInitialized] = useState<boolean>(false);
+  const [firebaseUid, setFirebaseUid] = useState<string | null>(null);
+  const [currentEmail, setCurrentEmail] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<UserData | null>(null);
 
-  const [isAdminSession, setIsAdminSession] = useState<boolean>(() => {
-    try {
-      return sessionStorage.getItem(STORAGE_ADMIN_SESSION_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
+  const [isAdminSession, setIsAdminSession] = useState<boolean>(false);
+  const pendingAuthSourceRef = useRef<string | null>(null);
 
   // Theme & privacy UI state
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -387,6 +412,14 @@ export default function App() {
   const [showPaywallModal, setShowPaywallModal] = useState<boolean>(false);
   const [showSupportModal, setShowSupportModal] = useState<boolean>(false);
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [stageTransitionAlert, setStageTransitionAlert] = useState<{
+    fromStage: StageKey;
+    toStage: StageKey;
+    headline: string;
+    tip: string;
+    detectedAt: string;
+  } | null>(null);
+  const prevObservedStageRef = useRef<{ uid: string; stageKey: StageKey } | null>(null);
 
   // Collapsible accumulating data lists (collapsed by default to reduce scrolling)
   const [showPeriodHistory, setShowPeriodHistory] = useState<boolean>(false);
@@ -473,115 +506,296 @@ export default function App() {
     }
   }, [isDarkMode]);
 
-  // Persist usersMap locally whenever updated
+  // Clear any legacy local multi-user dumps from older app versions on mount
   useEffect(() => {
-    saveUsersToStorage(usersMap);
-  }, [usersMap]);
-
-  // Sync bootstrap data from backend `/api/users/sync`
-  const refreshFromBackend = useCallback(async (): Promise<number> => {
     try {
-      const res = await fetch('/api/users/sync');
-      if (!res.ok) return Object.keys(usersMap).length;
-      const data = await res.json();
-      if (data?.users && typeof data.users === 'object') {
-        setUsersMap((prev) => {
-          const merged = { ...data.users, ...prev };
-          // Preserve server admin-controlled fields if server record is newer
-          Object.keys(data.users).forEach((k) => {
-            const srv = data.users[k];
-            const loc = prev[k];
-            if (!loc) {
-              merged[k] = srv;
-            } else {
-              const srvUpdated = new Date(srv.lastUpdatedAt || 0).getTime();
-              const locUpdated = new Date(loc.lastUpdatedAt || 0).getTime();
-              merged[k] = srvUpdated > locUpdated ? srv : loc;
+      localStorage.removeItem('bloomcampus_users_v1');
+      localStorage.removeItem('bloomcampus_current_user_v1');
+      sessionStorage.removeItem('bloomcampus_current_user_v1');
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Subscribe to Firebase Auth state & bind ONLY the authenticated user's UID-scoped Firestore docs
+  useEffect(() => {
+    let unsubUserDoc: (() => void) | null = null;
+    let unsubUserInquiries: (() => void) | null = null;
+    let cancelled = false;
+
+    const cleanupDataListeners = () => {
+      if (unsubUserDoc) {
+        unsubUserDoc();
+        unsubUserDoc = null;
+      }
+      if (unsubUserInquiries) {
+        unsubUserInquiries();
+        unsubUserInquiries = null;
+      }
+    };
+
+    const unsubAuth = subscribeToFirebaseAuth((fbUser) => {
+      cleanupDataListeners();
+
+      if (!fbUser || !fbUser.email) {
+        setFirebaseUid(null);
+        setCurrentEmail(null);
+        setCurrentUser(null);
+        setUsersMap({});
+        setSupportInquiries([]);
+        setIsAdminSession(false);
+        setAuthInitialized(true);
+        return;
+      }
+
+      const isGoogle = fbUser.providerData.some((p) => p.providerId === 'google.com');
+      const isVerified = Boolean(fbUser.emailVerified || isGoogle);
+      if (!isVerified) {
+        // Strict privacy: do not keep an unverified account signed in or load data
+        setFirebaseUid(null);
+        setCurrentEmail(null);
+        setCurrentUser(null);
+        setUsersMap({});
+        setSupportInquiries([]);
+        setIsAdminSession(false);
+        setAuthInitialized(true);
+        return;
+      }
+
+      const cleanEmail = fbUser.email.trim().toLowerCase();
+      const uid = fbUser.uid;
+      setFirebaseUid(uid);
+      setCurrentEmail(cleanEmail);
+
+      const isOwnerEmail = cleanEmail === OWNER_ADMIN_EMAIL.toLowerCase();
+      try {
+        if (isOwnerEmail && sessionStorage.getItem(STORAGE_ADMIN_SESSION_KEY) === 'true') {
+          setIsAdminSession(true);
+        } else if (!isOwnerEmail) {
+          setIsAdminSession(false);
+          sessionStorage.removeItem(STORAGE_ADMIN_SESSION_KEY);
+        }
+      } catch {
+        setIsAdminSession(false);
+      }
+
+      const bootstrapAndSubscribe = async () => {
+        const deviceLabel = getClientDeviceLabel();
+        const nowIso = new Date().toISOString();
+        const signInSource = pendingAuthSourceRef.current;
+        pendingAuthSourceRef.current = null;
+
+        try {
+          const existingDoc = await loadUserDocByUid(uid);
+          if (cancelled) return;
+
+          if (!existingDoc) {
+            // Check authenticated legacy store migration first so genuine prior user data is preserved
+            let legacyUser: UserData | null = null;
+            const idToken = await getCurrentFirebaseIdToken();
+            if (idToken) {
+              try {
+                const migRes = await fetch('/api/users/migrate-legacy', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${idToken}`,
+                  },
+                });
+                if (migRes.ok) {
+                  const migJson = await migRes.json();
+                  if (migJson?.migrated && migJson.userData) {
+                    legacyUser = migJson.userData as UserData;
+                  }
+                }
+              } catch {
+                // continue cleanly with fresh profile
+              }
             }
-          });
-          return merged;
+
+            const pendingSignup = readPendingSignupProfile(cleanEmail);
+            const fallbackName =
+              pendingSignup?.name ||
+              legacyUser?.name ||
+              fbUser.displayName ||
+              cleanEmail.split('@')[0];
+
+            const baseUser = legacyUser
+              ? {
+                  ...createDefaultUserObject(
+                    fallbackName,
+                    cleanEmail,
+                    '',
+                    legacyUser.age || pendingSignup?.age || '',
+                    resolveCustomerPhoneUsed(legacyUser) || pendingSignup?.phone || '',
+                    uid
+                  ),
+                  ...legacyUser,
+                }
+              : createDefaultUserObject(
+                  fallbackName,
+                  cleanEmail,
+                  '',
+                  pendingSignup?.age || '',
+                  pendingSignup?.phone || '',
+                  uid
+                );
+
+            const initialUser: UserData = {
+              ...baseUser,
+              uid,
+              email: cleanEmail,
+              name: fallbackName,
+              role: isOwnerEmail ? 'admin' : 'client',
+              lastSignInAt: nowIso,
+              lastUpdatedAt: nowIso,
+              signInCount: Math.max(1, (legacyUser?.signInCount || 0) + 1),
+              deviceInfo: deviceLabel,
+              lastAppUrl: typeof window !== 'undefined' ? window.location.origin : '',
+              signupSource:
+                legacyUser?.signupSource ||
+                signInSource ||
+                (isGoogle ? 'Google Sign In' : 'Verified Account'),
+            };
+            delete (initialUser as unknown as Record<string, unknown>).password;
+
+            clearDeletedEmailLocally(cleanEmail);
+            await saveUserDocByUid(uid, initialUser, { action: 'create' });
+            clearPendingSignupProfile();
+
+            if (!cancelled) {
+              setCurrentUser(initialUser);
+            }
+            void logCustomerEntryToFirestore(
+              initialUser,
+              pendingSignup ? 'Create Account' : isGoogle ? 'Google Sign In' : 'Sign In'
+            );
+          } else {
+            clearPendingSignupProfile();
+            let activeUser = existingDoc;
+            if (signInSource) {
+              const updatedLoginMeta: UserData = {
+                ...existingDoc,
+                uid,
+                email: cleanEmail,
+                name: existingDoc.name || fbUser.displayName || cleanEmail.split('@')[0],
+                lastSignInAt: nowIso,
+                lastUpdatedAt: nowIso,
+                signInCount: (existingDoc.signInCount || 0) + 1,
+                deviceInfo: deviceLabel,
+                lastAppUrl: typeof window !== 'undefined' ? window.location.origin : '',
+              };
+              await saveUserDocByUid(uid, updatedLoginMeta, { action: 'normal' });
+              activeUser = updatedLoginMeta;
+              void logCustomerEntryToFirestore(
+                updatedLoginMeta,
+                isGoogle ? 'Google Sign In' : 'Sign In'
+              );
+            }
+            if (!cancelled) {
+              setCurrentUser(activeUser);
+            }
+          }
+        } catch (err) {
+          console.error('Failed to bootstrap authenticated user profile:', err);
+        } finally {
+          if (!cancelled) {
+            setAuthInitialized(true);
+          }
+        }
+
+        if (cancelled) return;
+
+        unsubUserDoc = subscribeToUserDocByUid(uid, (docUser) => {
+          if (docUser) {
+            setCurrentUser(docUser);
+          }
         });
-      }
-      if (data?.adminConfig && typeof data.adminConfig === 'object') {
-        setAdminConfig(data.adminConfig);
-        saveAdminConfig(data.adminConfig);
-      }
-      if (Array.isArray(data?.supportInquiries)) {
-        setSupportInquiries(data.supportInquiries);
-      }
-      return data?.totalUsers || Object.keys(data?.users || {}).length;
-    } catch {
-      return Object.keys(usersMap).length;
-    }
-  }, [usersMap]);
 
+        if (!isOwnerEmail) {
+          unsubUserInquiries = subscribeToSupportInquiriesFirestore((list) => {
+            setSupportInquiries(list);
+          });
+        }
+      };
+
+      void bootstrapAndSubscribe();
+    });
+
+    return () => {
+      cancelled = true;
+      cleanupDataListeners();
+      unsubAuth();
+    };
+  }, []);
+
+  // Admin-only Firestore subscriptions (strictly gated on verified owner email & active admin session)
   useEffect(() => {
-    refreshFromBackend();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const verifiedOwner =
+      isAdminSession &&
+      auth.currentUser &&
+      (auth.currentUser.emailVerified ||
+        auth.currentUser.providerData.some((p) => p.providerId === 'google.com')) &&
+      auth.currentUser.email?.trim().toLowerCase() === OWNER_ADMIN_EMAIL.toLowerCase();
 
-  const syncUserToBackend = useCallback(async (userObj: UserData, forceOverwriteUser = false) => {
-    try {
-      await fetch('/api/users/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: userObj.email,
-          userData: userObj,
-          forceOverwriteUser,
-        }),
-      });
-    } catch {
-      // offline-safe
+    if (!verifiedOwner) {
+      setUsersMap({});
+      return;
     }
-  }, []);
 
-  const currentUser: UserData | null = useMemo(() => {
-    if (!currentEmail) return null;
-    return usersMap[currentEmail] || null;
-  }, [currentEmail, usersMap]);
+    const unsubUsers = subscribeToAllUsersFirestore((allUsers) => {
+      setUsersMap(allUsers);
+    });
+    const unsubCfg = subscribeToAdminConfigFirestore((cfg) => {
+      setAdminConfig(cfg);
+      saveAdminConfig(cfg);
+    });
+    const unsubInq = subscribeToSupportInquiriesFirestore((inquiries) => {
+      setSupportInquiries(inquiries);
+    });
+
+    return () => {
+      unsubUsers();
+      unsubCfg();
+      unsubInq();
+    };
+  }, [isAdminSession, firebaseUid]);
+
+  const refreshAdminUsersFromFirestore = useCallback(async (): Promise<number> => {
+    const verifiedOwner =
+      auth.currentUser &&
+      (auth.currentUser.emailVerified ||
+        auth.currentUser.providerData.some((p) => p.providerId === 'google.com')) &&
+      auth.currentUser.email?.trim().toLowerCase() === OWNER_ADMIN_EMAIL.toLowerCase();
+    if (!verifiedOwner) return 0;
+    const allUsers = await fetchAllUsersFromFirestore();
+    setUsersMap(allUsers);
+    return Object.keys(allUsers).length;
+  }, []);
 
   const updateCurrentUser = useCallback(
-    (updater: (prev: UserData) => UserData) => {
-      if (!currentEmail) return;
-      setUsersMap((prevMap) => {
-        const existing = prevMap[currentEmail];
-        if (!existing) return prevMap;
-        const updatedRaw = updater(existing);
+    (
+      updater: (prev: UserData) => UserData,
+      action: 'normal' | 'pending_payment' | 'free_code' = 'normal'
+    ) => {
+      if (!firebaseUid || !currentEmail) return;
+      setCurrentUser((prev) => {
+        if (!prev) return prev;
+        const updatedRaw = updater(prev);
         const updated: UserData = {
           ...updatedRaw,
+          uid: firebaseUid,
           email: currentEmail,
           lastUpdatedAt: new Date().toISOString(),
         };
-        void syncUserToBackend(updated);
-        return {
-          ...prevMap,
-          [currentEmail]: updated,
-        };
+        void saveUserDocByUid(firebaseUid, updated, { action });
+        return updated;
       });
     },
-    [currentEmail, syncUserToBackend]
+    [firebaseUid, currentEmail]
   );
 
-  // Automatic rollover from last LMP Start -> LMP End after each period ends and cycle completes
-  useEffect(() => {
-    if (!currentUser || !currentUser.periods || currentUser.periods.length === 0) return;
-    const rollover = autoAdvancePeriodsIfNeeded(currentUser, lockedTodayISO);
-    if (rollover.changed) {
-      updateCurrentUser((prev) => ({
-        ...prev,
-        periods: rollover.periods,
-      }));
-      if (rollover.autoAdvancedCount > 0) {
-        showToast(
-          `🩸 Automatic cycle rollover updated your LMP dates for the new cycle (${rollover.latestPeriod?.startDate}).`,
-          'info'
-        );
-      }
-    }
-  }, [currentUser, lockedTodayISO, updateCurrentUser, showToast]);
-
-  // Sync LMP input fields with latest period when user opens/updates
+  // Sync LMP input fields with latest real logged period when user opens/updates
   const sortedPeriods = useMemo(() => getSortedPeriods(currentUser?.periods), [currentUser?.periods]);
   const latestPeriod = sortedPeriods.length > 0 ? sortedPeriods[sortedPeriods.length - 1] : null;
 
@@ -612,79 +826,83 @@ export default function App() {
 
   const trialStatus = useMemo(() => getTrialStatus(currentUser), [currentUser]);
 
-  // Helper to update or create local user record on login
-  const activateUserSession = useCallback(
-    (emailRaw: string, fallbackName = '', fallbackAge = '', fallbackPhone = '', source = 'Sign In') => {
-      const cleanEmail = emailRaw.trim().toLowerCase();
-      const nowIso = new Date().toISOString();
-      const deviceLabel = getClientDeviceLabel();
-
-      setUsersMap((prevMap) => {
-        const existing = prevMap[cleanEmail];
-        const baseUser =
-          existing ||
-          createDefaultUserObject(
-            fallbackName || cleanEmail.split('@')[0],
-            cleanEmail,
-            '',
-            fallbackAge,
-            fallbackPhone
-          );
-        const updatedUser: UserData = {
-          ...baseUser,
-          name: existing?.name || fallbackName || baseUser.name,
-          age: existing?.age || fallbackAge || baseUser.age || '',
-          phone: resolveCustomerPhoneUsed(existing) || fallbackPhone || baseUser.phone || '',
-          lastSignInAt: nowIso,
-          lastUpdatedAt: nowIso,
-          signInCount: (existing?.signInCount || 0) + 1,
-          deviceInfo: deviceLabel,
-          lastAppUrl: typeof window !== 'undefined' ? window.location.origin : '',
-          signupSource: existing?.signupSource || source,
-        };
-        void syncUserToBackend(updatedUser);
-        return {
-          ...prevMap,
-          [cleanEmail]: updatedUser,
-        };
-      });
-
-      setCurrentEmail(cleanEmail);
-      try {
-        localStorage.setItem(STORAGE_REMEMBERED_EMAIL_KEY, cleanEmail);
-        localStorage.setItem(STORAGE_REMEMBER_ME_KEY, String(rememberMe));
-        if (rememberMe) {
-          localStorage.setItem(STORAGE_SESSION_KEY, cleanEmail);
-          sessionStorage.removeItem(STORAGE_SESSION_KEY);
-        } else {
-          sessionStorage.setItem(STORAGE_SESSION_KEY, cleanEmail);
-          localStorage.removeItem(STORAGE_SESSION_KEY);
-        }
-      } catch {
-        // ignore
+  // Trigger a subtle UI alert & toast whenever the cycle stage transitions (when alerts are enabled)
+  useEffect(() => {
+    if (!currentUser || !firebaseUid || !todayMetrics.hasLoggedPeriods || todayMetrics.cycleDay <= 0) {
+      if (!todayMetrics.hasLoggedPeriods) {
+        prevObservedStageRef.current = null;
+        setStageTransitionAlert(null);
       }
+      return;
+    }
 
-      // Notify owner inbox of login
-      fetch('/api/admin/inquiries', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userName: fallbackName || cleanEmail.split('@')[0],
-          userEmail: cleanEmail,
-          userPhone: fallbackPhone || undefined,
-          userAge: fallbackAge || undefined,
-          deviceInfo: deviceLabel,
-          subject: `${source}: ${cleanEmail}`,
-          message: `User signed in via ${deviceLabel}.`,
-          type: source === 'Create Account' ? 'signup' : 'login',
-        }),
-      }).catch(() => {});
-    },
-    [rememberMe, syncUserToBackend]
-  );
+    const alertsEnabled = currentUser.phaseShiftNotificationsEnabled !== false;
+    const currentStage = todayMetrics.stageKey;
+    const storedLastStage = currentUser.lastNotifiedStageKey;
+    const prevObserved =
+      prevObservedStageRef.current?.uid === firebaseUid
+        ? prevObservedStageRef.current.stageKey
+        : null;
+
+    const priorStage = prevObserved || storedLastStage || null;
+    prevObservedStageRef.current = { uid: firebaseUid, stageKey: currentStage };
+
+    // First-time baseline: record current stage quietly without raising a false transition notification
+    if (!priorStage) {
+      updateCurrentUser((prev) => ({
+        ...prev,
+        lastNotifiedStageKey: currentStage,
+      }));
+      return;
+    }
+
+    if (priorStage !== currentStage) {
+      const guidance = PHASE_SHIFT_NOTIFICATION_DATA[currentStage];
+      const fromInfo = PHASE_ADVISOR_DATA[priorStage];
+      const toInfo = PHASE_ADVISOR_DATA[currentStage];
+      const nowIso = new Date().toISOString();
+
+      updateCurrentUser((prev) => ({
+        ...prev,
+        lastNotifiedStageKey: currentStage,
+        lastPhaseShiftNotifiedAt: nowIso,
+        lastPhaseShiftSummary: {
+          fromStage: priorStage,
+          toStage: currentStage,
+          notifiedAt: nowIso,
+          nutritionTip: guidance.nutritionTip,
+          skincareTip: guidance.skincareTip,
+          recommendedSnack: guidance.recommendedSnack,
+          recommendedTreatment: guidance.recommendedTreatment,
+        },
+      }));
+
+      if (alertsEnabled) {
+        setStageTransitionAlert({
+          fromStage: priorStage,
+          toStage: currentStage,
+          headline: `${guidance.emoji} Stage Transition: ${fromInfo.everydayName} → ${toInfo.everydayName}`,
+          tip: `${guidance.hormoneShiftText} ${guidance.recommendedSnack}`,
+          detectedAt: nowIso,
+        });
+        showToast(
+          `${guidance.emoji} Cycle stage transitioned to ${toInfo.everydayName} (${toInfo.shortName}).`,
+          'info'
+        );
+      }
+    }
+  }, [
+    currentUser,
+    firebaseUid,
+    todayMetrics.hasLoggedPeriods,
+    todayMetrics.cycleDay,
+    todayMetrics.stageKey,
+    updateCurrentUser,
+    showToast,
+  ]);
 
   // =========================================================================
-  // AUTH HANDLERS (FIREBASE AUTH ONLY + PERSISTENT EMAIL VERIFICATION BANNER)
+  // AUTH HANDLERS (FIREBASE AUTH ONLY + CREATE ACCOUNT -> LOG IN SECTION FLOW)
   // =========================================================================
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
@@ -715,24 +933,11 @@ export default function App() {
       return;
     }
 
-    if (!cleanPass || cleanPass.length < 4) {
+    if (!cleanPass || cleanPass.length < 6) {
       setAuthNotice({
         tone: 'error',
-        message: 'Please enter a password (at least 6 characters recommended).',
+        message: 'Please enter your password (at least 6 characters).',
       });
-      return;
-    }
-
-    // Check Owner / Admin login first
-    if (authMode === 'login' && isOwnerAdminCredentials(cleanEmail, cleanPass, adminConfig)) {
-      setIsAdminSession(true);
-      try {
-        sessionStorage.setItem(STORAGE_ADMIN_SESSION_KEY, 'true');
-      } catch {
-        // ignore
-      }
-      activateUserSession(cleanEmail, CREATOR_NAME, '', '', 'Admin Login');
-      showToast('🛡️ Signed in to Owner Admin Dashboard.', 'success');
       return;
     }
 
@@ -746,10 +951,20 @@ export default function App() {
         return;
       }
 
+      // Hold non-sensitive signup details temporarily in sessionStorage until user signs in via Log In section
+      savePendingSignupProfile({
+        email: cleanEmail,
+        name: authName.trim(),
+        age: authAge.trim(),
+        phone: authPhone.trim(),
+        createdAt: Date.now(),
+      });
+
       const res = await signUpWithEmailPasswordFirebase(cleanEmail, cleanPass, authName.trim());
       setAuthLoading(false);
 
       if (res.errorCode && res.errorCode !== 'auth/email-already-in-use') {
+        clearPendingSignupProfile();
         const readableErr =
           res.errorCode === 'auth/weak-password'
             ? 'Password must be at least 6 characters.'
@@ -760,44 +975,36 @@ export default function App() {
         return;
       }
 
-      // Create/save user profile in local storage & server sync, but DO NOT auto-login until verified
-      const defaultObj = createDefaultUserObject(
-        authName.trim(),
-        cleanEmail,
-        cleanPass,
-        authAge.trim(),
-        authPhone.trim()
-      );
-      setUsersMap((prev) => ({
-        ...prev,
-        [cleanEmail]: prev[cleanEmail] ? { ...prev[cleanEmail], ...defaultObj } : defaultObj,
-      }));
-      void syncUserToBackend(defaultObj);
+      // Every newly created account must verify & sign in through the Log In section (never auto-signed-in)
+      setAuthPassword('');
+      setAuthMode('login');
 
       if (res.emailVerified) {
-        setAuthMode('login');
         setAuthNotice({
           tone: 'success',
-          message: `Account for ${cleanEmail} is already verified! You can log in now.`,
+          message: `Account for ${cleanEmail} already exists and is verified. Please enter your password here in the Log In section.`,
         });
       } else {
-        setAuthMode('login');
         setAuthNotice({
           tone: 'verification',
           pendingVerifyEmail: cleanEmail,
           message: res.verificationEmailSent
-            ? `Verification link sent to ${cleanEmail}! Check your email & click the verification link (also check Spam), then click Log In.`
-            : `Please verify ${cleanEmail} via the link in your inbox before logging in. Need another link? Use "Resend Verification Email" below.`,
+            ? `Account created! Verification link sent to ${cleanEmail}. Verify via email (also check Spam), then sign in here in the Log In section.`
+            : `Account created for ${cleanEmail}. Verify your email first, then sign in here in the Log In section.`,
         });
       }
       return;
     }
 
-    // SIGN IN FLOW
+    // SIGN IN FLOW (All users & Owner Admin must authenticate through Firebase Auth)
+    pendingAuthSourceRef.current =
+      cleanEmail === OWNER_ADMIN_EMAIL.toLowerCase() ? 'Admin Login' : 'Sign In';
+
     const signInRes = await signInWithEmailPasswordFirebase(cleanEmail, cleanPass, false);
     setAuthLoading(false);
 
     if (signInRes.errorCode === 'auth/email-not-verified') {
+      pendingAuthSourceRef.current = null;
       setAuthNotice({
         tone: 'verification',
         pendingVerifyEmail: cleanEmail,
@@ -808,22 +1015,35 @@ export default function App() {
     }
 
     if (signInRes.user && signInRes.emailVerified) {
-      activateUserSession(
-        cleanEmail,
-        signInRes.user.displayName || usersMap[cleanEmail]?.name || cleanEmail.split('@')[0],
-        usersMap[cleanEmail]?.age || '',
-        usersMap[cleanEmail]?.phone || '',
-        'Sign In'
-      );
+      setAuthPassword('');
+      try {
+        localStorage.setItem(STORAGE_REMEMBERED_EMAIL_KEY, cleanEmail);
+        localStorage.setItem(STORAGE_REMEMBER_ME_KEY, String(rememberMe));
+        if (cleanEmail === OWNER_ADMIN_EMAIL.toLowerCase()) {
+          setIsAdminSession(true);
+          sessionStorage.setItem(STORAGE_ADMIN_SESSION_KEY, 'true');
+        }
+      } catch {
+        // ignore
+      }
       setAuthNotice(null);
-      showToast('🌸 Welcome back to BloomCampus!', 'success');
+      showToast(
+        cleanEmail === OWNER_ADMIN_EMAIL.toLowerCase()
+          ? '🛡️ Signed in to Owner Admin Dashboard.'
+          : '🌸 Welcome back to BloomCampus!',
+        'success'
+      );
       return;
     }
 
+    pendingAuthSourceRef.current = null;
+    const isOwnerAttempt = cleanEmail === OWNER_ADMIN_EMAIL.toLowerCase();
     const errMsg =
       signInRes.errorCode === 'auth/wrong-password' ||
       signInRes.errorCode === 'auth/invalid-credential'
-        ? 'Incorrect email or password. Please double-check or reset your password.'
+        ? isOwnerAttempt
+          ? `Incorrect email or password for ${cleanEmail}. If this owner account uses Google Sign-In, tap "Continue with Google" below or use "Forgot password?".`
+          : 'Incorrect email or password. Please double-check or reset your password.'
         : signInRes.errorCode === 'auth/user-not-found'
         ? 'No account found with this email. Tap Create Account above to get started.'
         : signInRes.errorCode === 'auth/too-many-requests'
@@ -834,19 +1054,28 @@ export default function App() {
 
   const handleGoogleLogin = async () => {
     setAuthLoading(true);
+    pendingAuthSourceRef.current = 'Google Sign In';
     try {
       await setFirebaseAuthRememberPersistence(rememberMe);
       const user = await signInWithGooglePopup();
       if (user && user.email) {
         const cleanEmail = user.email.trim().toLowerCase();
-        if (cleanEmail === adminConfig.ownerEmail.toLowerCase()) {
-          setIsAdminSession(true);
+        setAuthPassword('');
+        try {
+          localStorage.setItem(STORAGE_REMEMBERED_EMAIL_KEY, cleanEmail);
+          localStorage.setItem(STORAGE_REMEMBER_ME_KEY, String(rememberMe));
+          if (cleanEmail === OWNER_ADMIN_EMAIL.toLowerCase()) {
+            setIsAdminSession(true);
+            sessionStorage.setItem(STORAGE_ADMIN_SESSION_KEY, 'true');
+          }
+        } catch {
+          // ignore
         }
-        activateUserSession(cleanEmail, user.displayName || cleanEmail.split('@')[0], '', '', 'Google Sign In');
         setAuthNotice(null);
         showToast('🌸 Signed in with Google!', 'success');
       }
     } catch {
+      pendingAuthSourceRef.current = null;
       setAuthNotice({
         tone: 'error',
         message: 'Google Sign-In was canceled or blocked. You can sign in using email & password.',
@@ -862,7 +1091,7 @@ export default function App() {
       setAuthNotice({
         tone: 'verification',
         pendingVerifyEmail: targetEmail,
-        message: 'Enter your email and password in the form above, then click Resend Verification Email.',
+        message: 'Enter your email and password in the Log In form above, then click Resend Verification Email.',
       });
       return;
     }
@@ -894,11 +1123,14 @@ export default function App() {
 
   const handleSignOut = async () => {
     await signOutFirebase();
+    setFirebaseUid(null);
     setCurrentEmail(null);
+    setCurrentUser(null);
+    setUsersMap({});
+    setSupportInquiries([]);
     setIsAdminSession(false);
+    clearPendingSignupProfile();
     try {
-      localStorage.removeItem(STORAGE_SESSION_KEY);
-      sessionStorage.removeItem(STORAGE_SESSION_KEY);
       sessionStorage.removeItem(STORAGE_ADMIN_SESSION_KEY);
     } catch {
       // ignore
@@ -935,16 +1167,11 @@ export default function App() {
           endDate: lmpEndInput || null,
           autoGenerated: false,
         },
-      ];
-      const draft: UserData = {
+      ].sort((a, b) => a.startDate.localeCompare(b.startDate));
+      return {
         ...prev,
         customCycleLength: clampedCycleLen,
         periods: updatedManualList,
-      };
-      const rolled = autoAdvancePeriodsIfNeeded(draft, lockedTodayISO);
-      return {
-        ...draft,
-        periods: rolled.periods,
       };
     });
 
@@ -957,12 +1184,12 @@ export default function App() {
       const manualOnly = getSortedPeriods(prev.periods).filter(
         (p) => !p.autoGenerated && p.startDate !== dateStr
       );
-      const draft: UserData = {
+      return {
         ...prev,
-        periods: [...manualOnly, { startDate: dateStr, endDate: null, autoGenerated: false }],
+        periods: [...manualOnly, { startDate: dateStr, endDate: null, autoGenerated: false }].sort(
+          (a, b) => a.startDate.localeCompare(b.startDate)
+        ),
       };
-      const rolled = autoAdvancePeriodsIfNeeded(draft, lockedTodayISO);
-      return { ...draft, periods: rolled.periods };
     });
     showToast(`🩸 Set ${formatHumanDate(dateStr)} as Period Start Date.`, 'success');
   };
@@ -983,8 +1210,7 @@ export default function App() {
           ? { ...p, endDate: dateStr, autoGenerated: false }
           : p
       );
-      const rolled = autoAdvancePeriodsIfNeeded({ ...prev, periods: updated }, lockedTodayISO);
-      return { ...prev, periods: rolled.periods };
+      return { ...prev, periods: updated };
     });
     showToast(`✅ Set ${formatHumanDate(dateStr)} as Period End Date.`, 'success');
   };
@@ -1021,9 +1247,13 @@ export default function App() {
     ) => {
       updateCurrentUser((prev) => {
         const dayMetrics = calculateCycleMetrics(prev, dateStr);
+        const derivedStage =
+          dayMetrics.hasLoggedPeriods && dayMetrics.cycleDay > 0
+            ? PHASE_ADVISOR_DATA[dayMetrics.stageKey].shortName
+            : null;
         const existing = prev.dailyLogs?.[dateStr] || {
           mood: null,
-          stageAtLog: PHASE_ADVISOR_DATA[dayMetrics.stageKey].shortName,
+          stageAtLog: derivedStage,
           symptoms: [],
           symptomDurations: {},
           intensity: {},
@@ -1035,7 +1265,7 @@ export default function App() {
         };
         const updated = updater({
           ...existing,
-          stageAtLog: existing.stageAtLog || PHASE_ADVISOR_DATA[dayMetrics.stageKey].shortName,
+          stageAtLog: existing.stageAtLog || derivedStage,
         });
         return {
           ...prev,
@@ -1085,57 +1315,94 @@ export default function App() {
       return;
     }
     const nowIso = new Date().toISOString();
-    updateCurrentUser((prev) => ({
-      ...prev,
-      phone: omSenderPhone.trim(),
-      subscriptionStatus: 'pending_verification',
-      paymentMethod: 'Orange Money (Pending Verification)',
-      pendingPayment: {
-        id: `pay-${Date.now()}`,
-        senderName: prev.name,
-        userEmail: prev.email,
-        senderPhone: omSenderPhone.trim(),
-        transactionId: omTxId.trim(),
-        amount: 'Le 30',
-        method: 'Orange Money',
-        submittedAt: nowIso,
-        status: 'pending',
-      },
-    }));
-    fetch('/api/admin/inquiries', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userName: currentUser.name,
-        userEmail: currentUser.email,
-        userPhone: omSenderPhone.trim(),
-        deviceInfo: getClientDeviceLabel(),
-        subject: `Orange Money Pass Verification — ${omTxId.trim()}`,
-        message: `Phone: ${omSenderPhone.trim()} | TxID: ${omTxId.trim()} | Amount: Le 30`,
-        type: 'payment',
+    const txIdClean = omTxId.trim();
+    const senderPhoneClean = omSenderPhone.trim();
+    updateCurrentUser(
+      (prev) => ({
+        ...prev,
+        phone: senderPhoneClean,
+        subscriptionStatus: 'pending_verification',
+        paymentMethod: 'Orange Money (Pending Verification)',
+        pendingPayment: {
+          id: `pay-${Date.now()}`,
+          senderName: prev.name,
+          userEmail: prev.email,
+          senderPhone: senderPhoneClean,
+          transactionId: txIdClean,
+          amount: 'Le 30',
+          method: 'Orange Money',
+          submittedAt: nowIso,
+          status: 'pending',
+        },
       }),
+      'pending_payment'
+    );
+    void syncSupportInquiryToFirestore({
+      id: `inq_pay_${Date.now()}`,
+      userName: currentUser.name,
+      userEmail: currentUser.email,
+      userPhone: senderPhoneClean,
+      deviceInfo: getClientDeviceLabel(),
+      subject: `Orange Money Pass Verification — ${txIdClean}`,
+      message: `Phone: ${senderPhoneClean} | TxID: ${txIdClean} | Amount: Le 30`,
+      type: 'payment',
+      createdAt: nowIso,
     }).catch(() => {});
     setOmTxId('');
     setShowPaywallModal(false);
     showToast('⏳ Payment submitted! The owner will verify your Le 30 pass shortly.', 'success');
   };
 
-  const handleVipPasswordUnlock = (e: React.FormEvent) => {
+  const handleVipPasswordUnlock = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isSecretVipPassword(vipPassInput, adminConfig.freeAccessPassword)) {
+    const codeInput = vipPassInput.trim();
+    if (!codeInput) {
+      showToast('Enter your free access pass code.', 'warning');
+      return;
+    }
+
+    let isValidPass = false;
+    const idToken = await getCurrentFirebaseIdToken();
+    if (idToken) {
+      try {
+        const res = await fetch('/api/auth/verify-free-pass', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({ code: codeInput }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          isValidPass = Boolean(data?.valid);
+        }
+      } catch {
+        isValidPass = isSecretVipPassword(codeInput, adminConfig.freeAccessPassword);
+      }
+    } else {
+      isValidPass = isSecretVipPassword(codeInput, adminConfig.freeAccessPassword);
+    }
+
+    if (!isValidPass) {
       showToast('Invalid free access password. Contact support for an active pass code.', 'warning');
       return;
     }
+
     const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
-    updateCurrentUser((prev) => ({
-      ...prev,
-      isVip: true,
-      usedFreeAccessPassword: true,
-      subscriptionStatus: 'free_password',
-      subscriptionUntil: Date.now() + thirtyDaysMs,
-      paymentMethod: 'Free 30-Day Pass Code',
-      pendingPayment: null,
-    }));
+    updateCurrentUser(
+      (prev) => ({
+        ...prev,
+        isVip: true,
+        usedFreeAccessPassword: true,
+        subscriptionStatus: 'free_password',
+        subscriptionUntil: Date.now() + thirtyDaysMs,
+        paymentMethod: '1-Month Free Pass Code',
+        pendingPayment: null,
+        submittedFreeCode: codeInput,
+      }),
+      'free_code'
+    );
     setVipPassInput('');
     setShowPaywallModal(false);
     showToast('🎁 30-Day Free Pass unlocked!', 'success');
@@ -1149,19 +1416,17 @@ export default function App() {
     }
     setSupportSending(true);
     try {
-      await fetch('/api/admin/inquiries', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userName: currentUser.name,
-          userEmail: currentUser.email,
-          userPhone: currentUser.phone,
-          userAge: currentUser.age,
-          deviceInfo: getClientDeviceLabel(),
-          subject: supportSubject.trim() || 'Student Support Inquiry',
-          message: supportMessage.trim(),
-          type: 'support',
-        }),
+      await syncSupportInquiryToFirestore({
+        id: `inq_sup_${Date.now()}`,
+        userName: currentUser.name,
+        userEmail: currentUser.email,
+        userPhone: currentUser.phone,
+        userAge: currentUser.age,
+        deviceInfo: getClientDeviceLabel(),
+        subject: supportSubject.trim() || 'Student Support Inquiry',
+        message: supportMessage.trim(),
+        type: 'support',
+        createdAt: new Date().toISOString(),
       });
       setSupportSubject('');
       setSupportMessage('');
@@ -1245,9 +1510,26 @@ export default function App() {
   }, [currentUser?.dailyLogs]);
 
   // =========================================================================
-  // ADMIN DASHBOARD VIEW
+  // AUTH INITIALIZATION LOADING STATE
   // =========================================================================
-  if (isAdminSession) {
+  if (!authInitialized) {
+    return (
+      <div className="min-h-screen bg-cream flex items-center justify-center p-6">
+        <div className="rounded-3xl bg-white border-2 border-lavender-200 px-8 py-6 shadow-md text-center space-y-2">
+          <div className="text-3xl">🌸</div>
+          <div className="font-display font-extrabold text-base text-slate-900">BloomCampus</div>
+          <div className="text-xs text-slate-500 font-semibold">
+            Restoring your private verified session...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // ADMIN DASHBOARD VIEW (Strictly Verified Owner Firebase Auth Only)
+  // =========================================================================
+  if (isAdminSession && currentEmail === OWNER_ADMIN_EMAIL.toLowerCase()) {
     return (
       <div className="min-h-screen bg-cream">
         <OwnerAdminDashboard
@@ -1257,11 +1539,18 @@ export default function App() {
           onUpdateAdminConfig={(nextCfg) => {
             setAdminConfig(nextCfg);
             saveAdminConfig(nextCfg);
-            fetch('/api/admin/config', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(nextCfg),
-            }).catch(() => {});
+            void syncAdminConfigToFirestore(nextCfg);
+            void getCurrentFirebaseIdToken().then((idToken) => {
+              if (!idToken) return;
+              fetch('/api/admin/config', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${idToken}`,
+                },
+                body: JSON.stringify(nextCfg),
+              }).catch(() => {});
+            });
           }}
           onApproveUserPayment={(userEmail) => {
             const clean = userEmail.toLowerCase().trim();
@@ -1279,7 +1568,8 @@ export default function App() {
                   : null,
                 lastUpdatedAt: new Date().toISOString(),
               };
-              void syncUserToBackend(nextUser, true);
+              const targetUid = target.uid || emailToDocId(clean);
+              void saveUserDocByUid(targetUid, nextUser, { action: 'admin' });
               return { ...prev, [clean]: nextUser };
             });
             showToast(`✅ Approved pass for ${clean}.`, 'success');
@@ -1296,7 +1586,8 @@ export default function App() {
                 subscriptionUntil: base + days * 24 * 60 * 60 * 1000,
                 lastUpdatedAt: new Date().toISOString(),
               };
-              void syncUserToBackend(nextUser, true);
+              const targetUid = target.uid || emailToDocId(clean);
+              void saveUserDocByUid(targetUid, nextUser, { action: 'admin' });
               return { ...prev, [clean]: nextUser };
             });
             showToast(`🎁 Extended access by ${days} days for ${clean}.`, 'success');
@@ -1316,7 +1607,8 @@ export default function App() {
                     : null,
                 lastUpdatedAt: new Date().toISOString(),
               };
-              void syncUserToBackend(nextUser, true);
+              const targetUid = target.uid || emailToDocId(clean);
+              void saveUserDocByUid(targetUid, nextUser, { action: 'admin' });
               return { ...prev, [clean]: nextUser };
             });
             showToast(`Updated access status (${mode}) for ${clean}.`, 'warning');
@@ -1331,25 +1623,44 @@ export default function App() {
                 pendingPayment: null,
                 lastUpdatedAt: new Date().toISOString(),
               };
-              void syncUserToBackend(nextUser, true);
+              const targetUid = target.uid || emailToDocId(clean);
+              void saveUserDocByUid(targetUid, nextUser, { action: 'admin' });
               return { ...prev, [clean]: nextUser };
             });
           }}
           onRegisterNewUserByAdmin={(params) => {
             const clean = params.email.trim().toLowerCase();
+            const originalClean = params.originalEmail?.trim().toLowerCase();
+            const existing = (originalClean && usersMap[originalClean]) || usersMap[clean];
             const days = params.subscriptionDays || 30;
-            const newObj = createDefaultUserObject(
-              params.name.trim(),
-              clean,
-              params.password,
-              params.age,
-              params.phone
-            );
-            newObj.subscriptionStatus = params.subscriptionStatus || 'active';
-            newObj.subscriptionUntil = Date.now() + days * 24 * 60 * 60 * 1000;
+            const targetUid = existing?.uid || emailToDocId(clean);
+            const newObj: UserData = existing
+              ? {
+                  ...existing,
+                  uid: targetUid,
+                  email: clean,
+                  name: params.name.trim(),
+                  age: params.age.trim(),
+                  phone: params.phone.trim(),
+                  subscriptionStatus: params.subscriptionStatus || existing.subscriptionStatus || 'active',
+                  subscriptionUntil: Date.now() + days * 24 * 60 * 60 * 1000,
+                  lastUpdatedAt: new Date().toISOString(),
+                }
+              : {
+                  ...createDefaultUserObject(
+                    params.name.trim(),
+                    clean,
+                    '',
+                    params.age,
+                    params.phone,
+                    targetUid
+                  ),
+                  subscriptionStatus: params.subscriptionStatus || 'active',
+                  subscriptionUntil: Date.now() + days * 24 * 60 * 60 * 1000,
+                };
             setUsersMap((prev) => ({ ...prev, [clean]: newObj }));
-            void syncUserToBackend(newObj, true);
-            showToast(`Registered/Updated ${clean}.`, 'success');
+            void saveUserDocByUid(targetUid, newObj, { action: 'admin' });
+            showToast(`Updated ${clean} in Firestore.`, 'success');
           }}
           onDeleteUser={(userEmail) => {
             const clean = userEmail.toLowerCase().trim();
@@ -1358,11 +1669,18 @@ export default function App() {
               delete copy[clean];
               return copy;
             });
-            fetch('/api/users/delete', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email: clean }),
-            }).catch(() => {});
+            void deleteUserFromFirestore(clean);
+            void getCurrentFirebaseIdToken().then((idToken) => {
+              if (!idToken) return;
+              fetch('/api/users/delete', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${idToken}`,
+                },
+                body: JSON.stringify({ email: clean }),
+              }).catch(() => {});
+            });
           }}
           onBulkDeleteUsers={(emails) => {
             const lowered = emails.map((e) => e.toLowerCase().trim());
@@ -1371,23 +1689,30 @@ export default function App() {
               lowered.forEach((em) => delete copy[em]);
               return copy;
             });
-            fetch('/api/users/delete', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ emails: lowered }),
-            }).catch(() => {});
+            void deleteMultipleUsersFromFirestore(lowered);
+            void getCurrentFirebaseIdToken().then((idToken) => {
+              if (!idToken) return;
+              fetch('/api/users/delete', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${idToken}`,
+                },
+                body: JSON.stringify({ emails: lowered }),
+              }).catch(() => {});
+            });
           }}
           onDeleteSupportInquiry={(inquiryId, clearAll) => {
             setSupportInquiries((prev) =>
               clearAll ? [] : prev.filter((i) => i.id !== inquiryId)
             );
-            fetch('/api/admin/inquiries/delete', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ id: inquiryId, clearAll }),
-            }).catch(() => {});
+            if (clearAll) {
+              void clearAllSupportInquiriesFromFirestore();
+            } else if (inquiryId) {
+              void deleteSupportInquiryFromFirestore(inquiryId);
+            }
           }}
-          onRefreshUsers={refreshFromBackend}
+          onRefreshUsers={refreshAdminUsersFromFirestore}
           onExitAdmin={() => {
             setIsAdminSession(false);
             try {
@@ -1685,7 +2010,9 @@ export default function App() {
                   BloomCampus
                 </span>
                 <span className="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full bg-lavender-100 text-lavender-900 text-[10px] font-extrabold">
-                  Day {todayMetrics.cycleDay} · {currentStageInfo.everydayName}
+                  {todayMetrics.hasLoggedPeriods && todayMetrics.cycleDay > 0
+                    ? `Day ${todayMetrics.cycleDay} · ${currentStageInfo.everydayName}`
+                    : 'Period Not Logged'}
                 </span>
               </div>
               <div className="text-[11px] text-slate-500 truncate">
@@ -1747,10 +2074,17 @@ export default function App() {
               {isDarkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
             </button>
 
-            {currentEmail === adminConfig.ownerEmail.toLowerCase() && (
+            {currentEmail === OWNER_ADMIN_EMAIL.toLowerCase() && (
               <button
                 type="button"
-                onClick={() => setIsAdminSession(true)}
+                onClick={() => {
+                  setIsAdminSession(true);
+                  try {
+                    sessionStorage.setItem(STORAGE_ADMIN_SESSION_KEY, 'true');
+                  } catch {
+                    // ignore
+                  }
+                }}
                 className="p-2 rounded-xl bg-plum-900 hover:bg-lavender-900 text-gold-400 border border-gold-500/40 cursor-pointer"
                 title="Open Owner Admin Dashboard"
               >
@@ -1773,6 +2107,56 @@ export default function App() {
 
       {/* MAIN CONTENT SHELL */}
       <main className="max-w-5xl mx-auto px-3 sm:px-5 pt-4 sm:pt-5 space-y-4">
+        {/* SUBTLE CYCLE STAGE TRANSITION ALERT */}
+        {stageTransitionAlert && currentUser.phaseShiftNotificationsEnabled !== false && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-2xl bg-lavender-50 border border-lavender-300 px-4 py-3 shadow-xs flex items-start justify-between gap-3 text-xs no-print"
+          >
+            <div className="flex items-start gap-2.5">
+              <div className="w-7 h-7 rounded-xl bg-lavender-700 text-white flex items-center justify-center shrink-0 mt-0.5">
+                <Bell className="w-3.5 h-3.5" />
+              </div>
+              <div className="space-y-0.5">
+                <div className="font-display font-extrabold text-lavender-950">
+                  {stageTransitionAlert.headline}
+                </div>
+                <p className="text-slate-700 leading-relaxed">{stageTransitionAlert.tip}</p>
+                <div className="pt-1 flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveSection('tracker');
+                      setTrackerSubTab('dates');
+                      setShowCycleAlerts(true);
+                      setStageTransitionAlert(null);
+                    }}
+                    className="font-extrabold text-lavender-800 hover:underline cursor-pointer"
+                  >
+                    View Cycle Shift Alerts →
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStageTransitionAlert(null)}
+                    className="font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setStageTransitionAlert(null)}
+              aria-label="Dismiss stage transition alert"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-lavender-100 cursor-pointer shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* =================================================================== */}
         {/* TAB 1: TRACKER ("My Period")                                         */}
         {/* =================================================================== */}
@@ -1793,13 +2177,17 @@ export default function App() {
                     )}
                   </div>
                   <h2 className="font-display font-extrabold text-2xl sm:text-3xl flex items-center gap-2">
-                    <span>{currentStageInfo.emoji}</span>
+                    <span>{todayMetrics.hasLoggedPeriods ? currentStageInfo.emoji : '🩸'}</span>
                     <span>
-                      Day {todayMetrics.cycleDay}: {currentStageInfo.everydayName}
+                      {todayMetrics.hasLoggedPeriods && todayMetrics.cycleDay > 0
+                        ? `Day ${todayMetrics.cycleDay}: ${currentStageInfo.everydayName}`
+                        : 'Log Your Last Period to Start'}
                     </span>
                   </h2>
                   <p className="text-xs sm:text-sm text-white/90 max-w-xl">
-                    {currentStageInfo.everydaySummary}
+                    {todayMetrics.hasLoggedPeriods
+                      ? currentStageInfo.everydaySummary
+                      : 'No period dates have been logged yet. Enter your last period start date below — BloomCampus never invents or guesses unlogged cycle data.'}
                   </p>
                 </div>
 
@@ -1842,18 +2230,26 @@ export default function App() {
                 <div className="rounded-2xl bg-black/20 px-3.5 py-2.5 border border-white/10">
                   <div className="text-[11px] font-bold text-white/75">Fertile Days Window</div>
                   <div className="font-display font-extrabold text-sm sm:text-base text-white mt-0.5 tabular-nums">
-                    {todayMetrics.ovulationWindowStartStr && todayMetrics.ovulationWindowEndStr
+                    {todayMetrics.hasLoggedPeriods &&
+                    todayMetrics.ovulationWindowStartStr &&
+                    todayMetrics.ovulationWindowEndStr
                       ? `${formatShortMonthDay(todayMetrics.ovulationWindowStartStr)} – ${formatShortMonthDay(
                           todayMetrics.ovulationWindowEndStr
                         )}`
-                      : `Cycle Days ${todayMetrics.ovStart}–${todayMetrics.ovEnd}`}
+                      : 'Log start date to calculate'}
                   </div>
                 </div>
 
                 <div className="rounded-2xl bg-black/20 px-3.5 py-2.5 border border-white/10">
                   <div className="text-[11px] font-bold text-white/75">Your Cycle Length</div>
                   <div className="font-display font-extrabold text-sm sm:text-base text-white mt-0.5 tabular-nums">
-                    {todayMetrics.avgCycleLength} days · {todayMetrics.avgPeriodDuration}d bleed
+                    {todayMetrics.hasLoggedPeriods
+                      ? `${todayMetrics.avgCycleLength} days · ${
+                          todayMetrics.avgPeriodDuration > 0
+                            ? `${todayMetrics.avgPeriodDuration}d bleed`
+                            : 'End date not logged'
+                        }`
+                      : 'Not logged yet'}
                   </div>
                 </div>
               </div>
@@ -1945,7 +2341,7 @@ export default function App() {
                         Update Your Last Period (LMP) Dates
                       </h3>
                       <p className="text-xs text-slate-600">
-                        Once entered, BloomCampus automatically advances from LMP Start to LMP End each cycle.
+                        Log your actual period start &amp; end dates. Cycle insights &amp; predictions calculate strictly from what you record.
                       </p>
                     </div>
                     <button
@@ -2100,9 +2496,18 @@ export default function App() {
                     aria-expanded={showCycleAlerts}
                     className="w-full px-4 py-3.5 flex items-center justify-between gap-2 text-left hover:bg-cream transition-colors cursor-pointer"
                   >
-                    <span className="font-display font-extrabold text-sm text-slate-900 flex items-center gap-1.5">
+                    <span className="font-display font-extrabold text-sm text-slate-900 flex items-center gap-2">
                       <Bell className="w-4 h-4 text-lavender-700" />
                       <span>Cycle Shift Alerts &amp; What Changed Today</span>
+                      <span
+                        className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                          currentUser.phaseShiftNotificationsEnabled !== false
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {currentUser.phaseShiftNotificationsEnabled !== false ? 'Alerts On' : 'Alerts Off'}
+                      </span>
                     </span>
                     <ChevronDown
                       className={`w-4 h-4 text-slate-500 transition-transform ${
@@ -2113,42 +2518,108 @@ export default function App() {
 
                   {showCycleAlerts && (
                     <div className="px-4 pb-4 pt-2 border-t border-slate-100 space-y-3 text-xs">
-                      <div className="flex items-center justify-between p-3 rounded-xl bg-lavender-50 border border-lavender-200">
-                        <div>
-                          <div className="font-bold text-slate-900">Phase Shift Wellness Alerts</div>
+                      <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl bg-lavender-50 border border-lavender-200">
+                        <div className="space-y-0.5 max-w-md">
+                          <div className="font-bold text-slate-900">
+                            Stage Transition Notification Alerts
+                          </div>
                           <div className="text-slate-600">
-                            Get snack, energy, and Sidratu skincare guidance whenever your stage shifts.
+                            Trigger a subtle toast and stage-shift alert banner whenever your cycle transitions into a new hormonal stage.
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            updateCurrentUser((prev) => ({
-                              ...prev,
-                              phaseShiftNotificationsEnabled: !prev.phaseShiftNotificationsEnabled,
-                            }))
-                          }
-                          className={`px-3 py-1.5 rounded-xl font-extrabold cursor-pointer ${
-                            currentUser.phaseShiftNotificationsEnabled !== false
-                              ? 'bg-emerald-600 text-white'
-                              : 'bg-slate-200 text-slate-700'
-                          }`}
-                        >
-                          {currentUser.phaseShiftNotificationsEnabled !== false ? 'On' : 'Off'}
-                        </button>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={currentUser.phaseShiftNotificationsEnabled !== false}
+                            aria-label="Toggle Stage Transition Notifications"
+                            onClick={() => {
+                              const currentlyEnabled =
+                                currentUser.phaseShiftNotificationsEnabled !== false;
+                              const nextEnabled = !currentlyEnabled;
+                              updateCurrentUser((prev) => ({
+                                ...prev,
+                                phaseShiftNotificationsEnabled: nextEnabled,
+                                ...(nextEnabled && todayMetrics.hasLoggedPeriods
+                                  ? { lastNotifiedStageKey: todayMetrics.stageKey }
+                                  : {}),
+                              }));
+                              if (!nextEnabled) {
+                                setStageTransitionAlert(null);
+                                showToast('🔕 Stage transition notifications turned off.', 'info');
+                              } else {
+                                showToast(
+                                  '🔔 Stage transition notifications turned on! You will be alerted whenever your stage shifts.',
+                                  'success'
+                                );
+                              }
+                            }}
+                            className={`relative inline-flex h-7 w-13 items-center rounded-full transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-lavender-500 ${
+                              currentUser.phaseShiftNotificationsEnabled !== false
+                                ? 'bg-emerald-600'
+                                : 'bg-slate-300'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-xs transition-transform ${
+                                currentUser.phaseShiftNotificationsEnabled !== false
+                                  ? 'translate-x-7'
+                                  : 'translate-x-1'
+                              }`}
+                            />
+                          </button>
+                          <span className="font-extrabold text-slate-800 w-7">
+                            {currentUser.phaseShiftNotificationsEnabled !== false ? 'On' : 'Off'}
+                          </span>
+                        </div>
                       </div>
 
                       <div className="p-3 rounded-xl bg-cream border border-slate-200 space-y-1.5">
-                        <div className="font-extrabold text-lavender-900">
-                          {PHASE_SHIFT_NOTIFICATION_DATA[todayMetrics.stageKey].emoji}{' '}
-                          {PHASE_SHIFT_NOTIFICATION_DATA[todayMetrics.stageKey].headline}
-                        </div>
-                        <p className="text-slate-700">
-                          {PHASE_SHIFT_NOTIFICATION_DATA[todayMetrics.stageKey].nutritionTip}
-                        </p>
-                        <p className="text-plum-900 font-semibold">
-                          Skincare Focus: {PHASE_SHIFT_NOTIFICATION_DATA[todayMetrics.stageKey].skincareTip}
-                        </p>
+                        {todayMetrics.hasLoggedPeriods ? (
+                          <>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="font-extrabold text-lavender-900">
+                                {PHASE_SHIFT_NOTIFICATION_DATA[todayMetrics.stageKey].emoji}{' '}
+                                {PHASE_SHIFT_NOTIFICATION_DATA[todayMetrics.stageKey].headline}
+                              </div>
+                              {currentUser.phaseShiftNotificationsEnabled !== false && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const guidance =
+                                      PHASE_SHIFT_NOTIFICATION_DATA[todayMetrics.stageKey];
+                                    const info = PHASE_ADVISOR_DATA[todayMetrics.stageKey];
+                                    setStageTransitionAlert({
+                                      fromStage: guidance.defaultFromStage,
+                                      toStage: todayMetrics.stageKey,
+                                      headline: `${guidance.emoji} Active Stage Alert: ${info.everydayName} (${info.shortName})`,
+                                      tip: `${guidance.hormoneShiftText} ${guidance.recommendedSnack}`,
+                                      detectedAt: new Date().toISOString(),
+                                    });
+                                    showToast(
+                                      `${guidance.emoji} Stage alert preview: ${info.everydayName} — ${guidance.headline}`,
+                                      'info'
+                                    );
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-white hover:bg-lavender-100 text-lavender-800 border border-lavender-200 font-bold text-[11px] cursor-pointer"
+                                >
+                                  🔔 Test Shift Alert
+                                </button>
+                              )}
+                            </div>
+                            <p className="text-slate-700">
+                              {PHASE_SHIFT_NOTIFICATION_DATA[todayMetrics.stageKey].nutritionTip}
+                            </p>
+                            <p className="text-plum-900 font-semibold">
+                              Skincare Focus: {PHASE_SHIFT_NOTIFICATION_DATA[todayMetrics.stageKey].skincareTip}
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-slate-600">
+                            Log your period dates above to receive live stage transition alerts, snack tips, and Sidratu skincare guidance.
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
@@ -2175,7 +2646,10 @@ export default function App() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 {(['MENSTRUATION', 'FOLLICULAR', 'OVULATION', 'LUTEAL'] as StageKey[]).map((key) => {
                   const info = PHASE_ADVISOR_DATA[key];
-                  const isCurrent = todayMetrics.stageKey === key;
+                  const isCurrent =
+                    todayMetrics.hasLoggedPeriods &&
+                    todayMetrics.cycleDay > 0 &&
+                    todayMetrics.stageKey === key;
                   return (
                     <div
                       key={key}
@@ -2226,8 +2700,10 @@ export default function App() {
             <div className="rounded-2xl bg-white border border-lavender-200 p-3.5 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
               <div>
                 <div className="text-xs font-extrabold text-lavender-900">
-                  Logging For: {formatHumanDate(selectedDateStr)} (Day {selectedMetrics.cycleDay} ·{' '}
-                  {PHASE_ADVISOR_DATA[selectedMetrics.stageKey].everydayName})
+                  Logging For: {formatHumanDate(selectedDateStr)}{' '}
+                  {selectedMetrics.hasLoggedPeriods && selectedMetrics.cycleDay > 0
+                    ? `(Day ${selectedMetrics.cycleDay} · ${PHASE_ADVISOR_DATA[selectedMetrics.stageKey].everydayName})`
+                    : '(Period not logged for this date)'}
                 </div>
                 <div className="text-[11px] text-slate-500">
                   Daily moods &amp; cramps automatically build your Doctor Summary and Trends charts.
@@ -2817,7 +3293,9 @@ export default function App() {
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <h3 className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-                        {currentStageInfo.emoji} Today’s Stage Guidance ({currentStageInfo.everydayName})
+                        {todayMetrics.hasLoggedPeriods && todayMetrics.cycleDay > 0
+                          ? `${currentStageInfo.emoji} Today’s Stage Guidance (${currentStageInfo.everydayName})`
+                          : '🧬 Cycle Stage Guidance (Log your last period first to see your active phase)'}
                       </h3>
                       <p className="text-xs text-slate-600">{currentStageInfo.hormoneSummary}</p>
                     </div>
@@ -3206,13 +3684,15 @@ export default function App() {
               <div className="p-3 rounded-2xl bg-lavender-50 border border-lavender-200">
                 <div className="text-slate-500 font-bold">Cycle Length</div>
                 <div className="font-display font-extrabold text-base text-lavender-900">
-                  {todayMetrics.avgCycleLength} days
+                  {todayMetrics.hasLoggedPeriods ? `${todayMetrics.avgCycleLength} days` : 'Not logged'}
                 </div>
               </div>
               <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200">
                 <div className="text-slate-500 font-bold">Bleed Length</div>
                 <div className="font-display font-extrabold text-base text-rose-900">
-                  {todayMetrics.avgPeriodDuration} days
+                  {todayMetrics.hasLoggedPeriods && todayMetrics.avgPeriodDuration > 0
+                    ? `${todayMetrics.avgPeriodDuration} days`
+                    : 'Not logged'}
                 </div>
               </div>
               <div className="p-3 rounded-2xl bg-cream border border-slate-200">

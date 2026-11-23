@@ -96,22 +96,47 @@ export function exportClinicSummaryToPDF(
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   const currentStageName = PHASE_ADVISOR_DATA[todayMetrics.stageKey].shortName;
-  doc.text(
-    `Average Cycle Length: ${todayMetrics.avgCycleLength} Days   •   Average Period Duration: ${todayMetrics.avgPeriodDuration} Days   •   Pattern Status: ${
-      todayMetrics.isIrregular ? 'Variable / Irregular Flagged' : 'Within Regular Clinical Range'
-    }`,
-    margin + 4,
-    y + 14
-  );
-  doc.text(
-    `Current Cycle Position: Day ${todayMetrics.cycleDay} (${currentStageName} Stage)   •   Next Predicted Period: ${
-      todayMetrics.nextPeriodDateStr
-        ? formatHumanDate(todayMetrics.nextPeriodDateStr)
-        : 'Pending log'
-    }   •   Ovulation Window: Days ${todayMetrics.ovStart}-${todayMetrics.ovEnd}`,
-    margin + 4,
-    y + 21
-  );
+  if (todayMetrics.hasLoggedPeriods) {
+    doc.text(
+      `Cycle Baseline: ${
+        todayMetrics.avgCycleLength > 0 ? `${todayMetrics.avgCycleLength} Days` : 'Collecting 2+ cycles'
+      }   •   Average Period Duration: ${
+        todayMetrics.avgPeriodDuration > 0 ? `${todayMetrics.avgPeriodDuration} Days` : 'Pending end date'
+      }   •   Pattern Status: ${
+        todayMetrics.isIrregular ? 'Variable / Irregular Flagged' : 'Within Regular Clinical Range'
+      }`,
+      margin + 4,
+      y + 14
+    );
+    doc.text(
+      `Current Cycle Position: ${
+        todayMetrics.cycleDay > 0
+          ? `Day ${todayMetrics.cycleDay} (${currentStageName} Stage)`
+          : 'Pre-log date'
+      }   •   Next Predicted Period: ${
+        todayMetrics.nextPeriodDateStr
+          ? formatHumanDate(todayMetrics.nextPeriodDateStr)
+          : 'Pending log'
+      }   •   Ovulation Window: ${
+        todayMetrics.ovStart > 0 && todayMetrics.ovEnd > 0
+          ? `Days ${todayMetrics.ovStart}-${todayMetrics.ovEnd}`
+          : 'Pending log'
+      }`,
+      margin + 4,
+      y + 21
+    );
+  } else {
+    doc.text(
+      'Cycle Baseline: No period dates logged yet   •   Average Period Duration: Not logged yet',
+      margin + 4,
+      y + 14
+    );
+    doc.text(
+      'Current Cycle Position: Waiting for first period start & end log   •   Predictions begin after first log',
+      margin + 4,
+      y + 21
+    );
+  }
 
   y += 32;
 

@@ -106,6 +106,7 @@ export const FullScreenCalendarModal: React.FC<FullScreenCalendarModalProps> = (
 
   // Build current + next 5 predicted period & ovulation windows anchored on the entered period
   const upcomingCycleWindows = useMemo(() => {
+    if (!todayMetrics.hasLoggedPeriods) return [];
     const baseStart = todayMetrics.activePeriodStartStr || todayMetrics.nextPeriodDateStr;
     if (!baseStart) return [];
     const bleedDays = todayMetrics.activePeriodDuration || todayMetrics.avgPeriodDuration || 5;
@@ -239,7 +240,7 @@ export const FullScreenCalendarModal: React.FC<FullScreenCalendarModalProps> = (
                 text: '🌸 Fertile Window',
                 className: 'bg-sage-200 text-sage-900',
               };
-            } else if (showStageLabels) {
+            } else if (showStageLabels && dayMetrics.hasLoggedPeriods && dayMetrics.cycleDay > 0) {
               if (dayMetrics.stageKey === 'FOLLICULAR') {
                 markerBadge = {
                   text: '🌱 Follicular',
@@ -275,13 +276,15 @@ export const FullScreenCalendarModal: React.FC<FullScreenCalendarModalProps> = (
                   >
                     {day}
                   </span>
-                  <span
-                    className={`text-[9px] font-mono font-bold ${
-                      isLoggedPeriod || isPeakOvulation ? 'text-white/85' : 'text-slate-400'
-                    }`}
-                  >
-                    D{dayMetrics.cycleDay}
-                  </span>
+                  {dayMetrics.cycleDay > 0 && (
+                    <span
+                      className={`text-[9px] font-mono font-bold ${
+                        isLoggedPeriod || isPeakOvulation ? 'text-white/85' : 'text-slate-400'
+                      }`}
+                    >
+                      D{dayMetrics.cycleDay}
+                    </span>
+                  )}
                 </div>
 
                 {/* Middle Row: Color-Coded Window Marker */}
@@ -466,7 +469,15 @@ export const FullScreenCalendarModal: React.FC<FullScreenCalendarModalProps> = (
               </div>
 
               <span className="text-[11px] font-bold text-slate-500 font-mono">
-                Based on {todayMetrics.avgCycleLength}d avg cycle · {todayMetrics.avgPeriodDuration}d avg bleed
+                {todayMetrics.hasLoggedPeriods
+                  ? `Based on ${
+                      todayMetrics.avgCycleLength > 0 ? `${todayMetrics.avgCycleLength}d` : 'pending'
+                    } cycle · ${
+                      todayMetrics.avgPeriodDuration > 0
+                        ? `${todayMetrics.avgPeriodDuration}d bleed`
+                        : 'bleed end pending'
+                    }`
+                  : 'Log your first period start & end dates to unlock cycle predictions'}
               </span>
             </div>
 
@@ -523,9 +534,11 @@ export const FullScreenCalendarModal: React.FC<FullScreenCalendarModalProps> = (
               Selected: {formatHumanDate(selectedDateStr)}
             </span>
             <span className="text-xs font-bold text-slate-700">
-              {PHASE_ADVISOR_DATA[selectedDayMetrics.stageKey].emoji}{' '}
-              {PHASE_ADVISOR_DATA[selectedDayMetrics.stageKey].shortName} (Cycle Day{' '}
-              {selectedDayMetrics.cycleDay})
+              {selectedDayMetrics.hasLoggedPeriods && selectedDayMetrics.cycleDay > 0
+                ? `${PHASE_ADVISOR_DATA[selectedDayMetrics.stageKey].emoji} ${
+                    PHASE_ADVISOR_DATA[selectedDayMetrics.stageKey].shortName
+                  } (Cycle Day ${selectedDayMetrics.cycleDay})`
+                : 'No logged period covers this date yet'}
             </span>
           </div>
 

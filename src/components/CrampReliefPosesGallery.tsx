@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Play,
   Pause,
@@ -10,6 +10,9 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  Volume2,
+  VolumeX,
+  Square,
 } from 'lucide-react';
 
 export interface CrampReliefPose {
@@ -517,10 +520,125 @@ export const CrampReliefPosesGallery: React.FC<CrampReliefPosesGalleryProps> = (
   const [isTimerRunning, setIsTimerRunning] = useState<boolean>(false);
   const [completedPoseIds, setCompletedPoseIds] = useState<string[]>([]);
 
+  // Voice guidance state (Web Speech API)
+  const speechSupported =
+    typeof window !== 'undefined' &&
+    'speechSynthesis' in window &&
+    typeof SpeechSynthesisUtterance !== 'undefined';
+  const [voiceEnabled, setVoiceEnabled] = useState<boolean>(true);
+  const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
+  const [speakingTag, setSpeakingTag] = useState<string | null>(null);
+  const [voiceSpeed, setVoiceSpeed] = useState<number>(0.9);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoiceUri, setSelectedVoiceUri] = useState<string>('');
+  const lastSpokenCueSecondRef = useRef<number | null>(null);
+
+  const stopSpeech = useCallback(() => {
+    if (!speechSupported) return;
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore synthesis cancel errors
+    }
+    setIsSpeaking(false);
+    setSpeakingTag(null);
+  }, [speechSupported]);
+
+  // Load available browser TTS voices (prefer warm English voices)
+  useEffect(() => {
+    if (!speechSupported) return;
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices() || [];
+      const englishVoices = voices.filter((v) => v.lang?.toLowerCase().startsWith('en'));
+      const pool = englishVoices.length > 0 ? englishVoices : voices;
+      setAvailableVoices(pool);
+      setSelectedVoiceUri((prevUri) => {
+        if (prevUri && pool.some((v) => v.voiceURI === prevUri)) return prevUri;
+        const preferred =
+          pool.find((v) =>
+            /samantha|serena|victoria|karen|zira|aria|jenny|natural|google us english|google uk english female/i.test(
+              v.name
+            )
+          ) || pool[0];
+        return preferred ? preferred.voiceURI : '';
+      });
+    };
+    loadVoices();
+    window.speechSynthesis.addEventListener?.('voiceschanged', loadVoices);
+    return () => {
+      window.speechSynthesis.removeEventListener?.('voiceschanged', loadVoices);
+    };
+  }, [speechSupported]);
+
+  const speakUtterance = useCallback(
+    (text: string, tag: string, interrupt = true) => {
+      if (!speechSupported || !voiceEnabled || !text.trim()) return;
+      try {
+        if (interrupt) {
+          window.speechSynthesis.cancel();
+        }
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = voiceSpeed;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
+        const chosenVoice = availableVoices.find((v) => v.voiceURI === selectedVoiceUri);
+        if (chosenVoice) {
+          utterance.voice = chosenVoice;
+        }
+        utterance.onstart = () => {
+          setIsSpeaking(true);
+          setSpeakingTag(tag);
+        };
+        utterance.onend = () => {
+          setIsSpeaking(false);
+          setSpeakingTag(null);
+        };
+        utterance.onerror = () => {
+          setIsSpeaking(false);
+          setSpeakingTag(null);
+        };
+        window.speechSynthesis.speak(utterance);
+      } catch {
+        setIsSpeaking(false);
+        setSpeakingTag(null);
+      }
+    },
+    [speechSupported, voiceEnabled, voiceSpeed, availableVoices, selectedVoiceUri]
+  );
+
+  const speakFullPoseGuide = useCallback(
+    (pose: CrampReliefPose) => {
+      if (!speechSupported) return;
+      if (isSpeaking && speakingTag === 'full') {
+        stopSpeech();
+        return;
+      }
+      const script = [
+        `Pose ${pose.number}: ${pose.name}.`,
+        `${pose.categoryLabel}.`,
+        `Target area: ${pose.targetArea}.`,
+        `Breathing rhythm: ${pose.breathPattern}.`,
+        ...pose.steps.map((s, idx) => `Step ${idx + 1}: ${s}`),
+        `Dorm comfort tip: ${pose.dormTip}`,
+      ].join(' ');
+      speakUtterance(script, 'full', true);
+    },
+    [speechSupported, isSpeaking, speakingTag, stopSpeech, speakUtterance]
+  );
+
+  // Stop speech when unmounting or closing modal
+  useEffect(() => {
+    return () => {
+      stopSpeech();
+    };
+  }, [stopSpeech]);
+
   useEffect(() => {
     setSecondsLeft(activePose.durationSeconds);
     setIsTimerRunning(false);
-  }, [activePoseId, activePose.durationSeconds]);
+    lastSpokenCueSecondRef.current = null;
+    stopSpeech();
+  }, [activePoseId, activePose.durationSeconds, stopSpeech]);
 
   // Close modal on Escape key
   useEffect(() => {
@@ -529,11 +647,12 @@ export const CrampReliefPosesGallery: React.FC<CrampReliefPosesGalleryProps> = (
       if (e.key === 'Escape') {
         setIsModalOpen(false);
         setIsTimerRunning(false);
+        stopSpeech();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isModalOpen]);
+  }, [isModalOpen, stopSpeech]);
 
   useEffect(() => {
     if (!isTimerRunning) return;
@@ -547,13 +666,57 @@ export const CrampReliefPosesGallery: React.FC<CrampReliefPosesGalleryProps> = (
           if (onLogCrampReliefSession) {
             onLogCrampReliefSession(activePose.name);
           }
+          if (voiceEnabled && speechSupported) {
+            speakUtterance(
+              `${activePose.name} complete. Gently release the pose and notice the warmth in your lower back and pelvis.`,
+              'complete',
+              true
+            );
+          }
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
     return () => window.clearInterval(interval);
-  }, [isTimerRunning, activePose.id, activePose.name, onLogCrampReliefSession]);
+  }, [
+    isTimerRunning,
+    activePose.id,
+    activePose.name,
+    onLogCrampReliefSession,
+    voiceEnabled,
+    speechSupported,
+    speakUtterance,
+  ]);
+
+  // Soft spoken breath cues while the hold timer is active (when no full walkthrough is playing)
+  useEffect(() => {
+    if (!isTimerRunning || !voiceEnabled || !speechSupported) return;
+    if (speakingTag === 'full' || speakingTag?.startsWith('step-')) return;
+    if (lastSpokenCueSecondRef.current === secondsLeft) return;
+    lastSpokenCueSecondRef.current = secondsLeft;
+
+    if (secondsLeft === activePose.durationSeconds) {
+      speakUtterance(
+        `Beginning ${activePose.name}. Settle in comfortably and inhale slowly into your lower back.`,
+        'breath',
+        true
+      );
+    } else if (secondsLeft > 6 && secondsLeft % 10 === 9) {
+      speakUtterance('Inhale softly for four seconds.', 'breath', false);
+    } else if (secondsLeft > 2 && secondsLeft % 10 === 5) {
+      speakUtterance('Exhale slowly and soften pelvic tension.', 'breath', false);
+    }
+  }, [
+    isTimerRunning,
+    secondsLeft,
+    activePose.durationSeconds,
+    activePose.name,
+    voiceEnabled,
+    speechSupported,
+    speakingTag,
+    speakUtterance,
+  ]);
 
   const formatTimer = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -562,12 +725,14 @@ export const CrampReliefPosesGallery: React.FC<CrampReliefPosesGalleryProps> = (
   };
 
   const handlePrevPose = () => {
+    stopSpeech();
     const prevIdx =
       (activePoseIndex - 1 + CRAMP_RELIEF_POSES_DATA.length) % CRAMP_RELIEF_POSES_DATA.length;
     setActivePoseId(CRAMP_RELIEF_POSES_DATA[prevIdx].id);
   };
 
   const handleNextPose = () => {
+    stopSpeech();
     const nextIdx = (activePoseIndex + 1) % CRAMP_RELIEF_POSES_DATA.length;
     setActivePoseId(CRAMP_RELIEF_POSES_DATA[nextIdx].id);
   };
@@ -595,17 +760,17 @@ export const CrampReliefPosesGallery: React.FC<CrampReliefPosesGalleryProps> = (
           <div>
             <div className="flex flex-wrap items-center gap-2 text-xs font-bold mb-1 text-rose-800">
               <span className="px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-extrabold uppercase tracking-wider">
-                Yoga Routine Modal
+                Voice-Guided Yoga Modal
               </span>
               <span>6 Animated Cramp-Relief Poses</span>
               <span aria-hidden="true">·</span>
-              <span>▶️ Cramp Relief Video Inside</span>
+              <span>🎙️ Spoken Voice Coach &amp; Video</span>
             </div>
             <h3 className="font-display font-extrabold text-lg sm:text-xl leading-snug text-slate-900">
               Yoga Routine: Poses to Relieve Period Cramps &amp; Pelvic Tension
             </h3>
             <p className="text-xs sm:text-sm mt-0.5 text-slate-600">
-              Tap to launch the interactive Yoga Routine modal with animated poses, breath timer &amp; direct cramp relief video player
+              Tap to launch the voice-guided Yoga Routine modal with spoken alignment coach, animated poses, breath timer &amp; video player
             </p>
           </div>
         </div>
@@ -628,6 +793,7 @@ export const CrampReliefPosesGallery: React.FC<CrampReliefPosesGalleryProps> = (
             if (e.target === e.currentTarget) {
               setIsModalOpen(false);
               setIsTimerRunning(false);
+              stopSpeech();
             }
           }}
         >
@@ -656,8 +822,32 @@ export const CrampReliefPosesGallery: React.FC<CrampReliefPosesGalleryProps> = (
                 </div>
               </div>
 
-              {/* Direct Video Play Button + External Link + Close Button */}
+              {/* Close handler + Voice toggle + Video Play Button + External Link */}
               <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {speechSupported && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (voiceEnabled) {
+                        stopSpeech();
+                        setVoiceEnabled(false);
+                      } else {
+                        setVoiceEnabled(true);
+                      }
+                    }}
+                    aria-pressed={voiceEnabled}
+                    className={`px-3 py-2 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 border ${
+                      voiceEnabled
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400/60'
+                        : 'bg-white/10 hover:bg-white/20 text-rose-100 border-white/20'
+                    }`}
+                    title={voiceEnabled ? 'Mute spoken yoga voice coach' : 'Enable spoken yoga voice coach'}
+                  >
+                    {voiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                    <span>{voiceEnabled ? 'Voice On' : 'Voice Off'}</span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => setShowInlineVideo((prev) => !prev)}
@@ -690,6 +880,7 @@ export const CrampReliefPosesGallery: React.FC<CrampReliefPosesGalleryProps> = (
                   onClick={() => {
                     setIsModalOpen(false);
                     setIsTimerRunning(false);
+                    stopSpeech();
                   }}
                   aria-label="Close Yoga Routine Modal"
                   className="p-2 rounded-xl bg-white/10 hover:bg-white/25 text-white border border-white/20 transition-all cursor-pointer"
@@ -889,16 +1080,175 @@ export const CrampReliefPosesGallery: React.FC<CrampReliefPosesGalleryProps> = (
                       </button>
                     </div>
 
-                    <div className="bg-white rounded-2xl p-3.5 border border-rose-200/80 space-y-1.5">
+                    {/* Voice Coach Bar */}
+                    {speechSupported && (
+                      <div className="rounded-2xl bg-gradient-to-r from-[#3B0944]/5 via-lavender-50 to-rose-50 border border-lavender-200 p-3 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`w-7 h-7 rounded-xl flex items-center justify-center ${
+                                isSpeaking
+                                  ? 'bg-rose-600 text-white animate-pulse'
+                                  : 'bg-[#3B0944] text-[#D4AF37]'
+                              }`}
+                            >
+                              {voiceEnabled ? (
+                                <Volume2 className="w-4 h-4" />
+                              ) : (
+                                <VolumeX className="w-4 h-4" />
+                              )}
+                            </span>
+                            <div>
+                              <div className="text-xs font-extrabold text-slate-900">
+                                🎙️ Spoken Yoga Voice Coach
+                              </div>
+                              <div className="text-[11px] text-slate-600">
+                                {isSpeaking
+                                  ? 'Speaking calm pose & breathing instructions...'
+                                  : voiceEnabled
+                                  ? 'Tap Listen to hear full alignment & live breath cues'
+                                  : 'Voice muted — toggle Voice On above to listen'}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={!voiceEnabled}
+                              onClick={() => speakFullPoseGuide(activePose)}
+                              className={`px-3 py-1.5 rounded-xl font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 ${
+                                isSpeaking && speakingTag === 'full'
+                                  ? 'bg-rose-600 hover:bg-rose-700 text-white'
+                                  : 'bg-[#3B0944] hover:bg-lavender-900 text-[#D4AF37]'
+                              }`}
+                            >
+                              {isSpeaking && speakingTag === 'full' ? (
+                                <>
+                                  <Square className="w-3 h-3 fill-current" />
+                                  <span>Stop Guide</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Volume2 className="w-3.5 h-3.5" />
+                                  <span>Speak Full Guide</span>
+                                </>
+                              )}
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={!voiceEnabled}
+                              onClick={() => {
+                                if (isSpeaking && speakingTag === 'breath') {
+                                  stopSpeech();
+                                } else {
+                                  speakUtterance(
+                                    `${activePose.breathPattern}. Inhale slowly into your lower belly, then exhale completely to release pelvic tightness.`,
+                                    'breath',
+                                    true
+                                  );
+                                }
+                              }}
+                              className="px-2.5 py-1.5 rounded-xl bg-white hover:bg-lavender-50 text-lavender-900 border border-lavender-200 font-bold text-xs cursor-pointer disabled:opacity-50"
+                            >
+                              🌬️ Breath Cue
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-lavender-200/70 text-[11px]">
+                          <div className="flex items-center gap-1">
+                            <span className="font-bold text-slate-600 mr-1">Pace:</span>
+                            {[
+                              { rate: 0.78, label: 'Slow' },
+                              { rate: 0.9, label: 'Calm' },
+                              { rate: 1.05, label: 'Natural' },
+                            ].map((opt) => (
+                              <button
+                                key={opt.label}
+                                type="button"
+                                onClick={() => setVoiceSpeed(opt.rate)}
+                                className={`px-2 py-0.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                                  voiceSpeed === opt.rate
+                                    ? 'bg-lavender-700 text-white'
+                                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-lavender-50'
+                                }`}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {availableVoices.length > 0 && (
+                            <select
+                              aria-label="Select Yoga Coach Voice"
+                              value={selectedVoiceUri}
+                              onChange={(e) => setSelectedVoiceUri(e.target.value)}
+                              className="max-w-[200px] px-2 py-1 rounded-lg border border-slate-200 bg-white text-[11px] font-semibold text-slate-700 truncate"
+                            >
+                              {availableVoices.map((v) => (
+                                <option key={v.voiceURI} value={v.voiceURI}>
+                                  {v.name}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="bg-white rounded-2xl p-3.5 border border-rose-200/80 space-y-2">
                       <span className="text-xs font-extrabold uppercase tracking-wider text-slate-700 block">
                         Step-by-Step Alignment
                       </span>
-                      <ol className="space-y-1 text-xs sm:text-sm text-slate-700 list-decimal list-inside leading-relaxed">
-                        {activePose.steps.map((step, idx) => (
-                          <li key={idx} className="font-medium">
-                            {step}
-                          </li>
-                        ))}
+                      <ol className="space-y-2 text-xs sm:text-sm text-slate-700 leading-relaxed">
+                        {activePose.steps.map((step, idx) => {
+                          const stepTag = `step-${idx}`;
+                          const isStepSpeaking = isSpeaking && speakingTag === stepTag;
+                          return (
+                            <li
+                              key={idx}
+                              className={`flex items-start justify-between gap-2 p-2 rounded-xl border transition-colors ${
+                                isStepSpeaking
+                                  ? 'bg-lavender-50 border-lavender-300 text-slate-900'
+                                  : 'bg-cream/40 border-transparent'
+                              }`}
+                            >
+                              <span className="font-medium">
+                                <strong className="text-rose-800 mr-1">{idx + 1}.</strong>
+                                {step}
+                              </span>
+                              {speechSupported && (
+                                <button
+                                  type="button"
+                                  disabled={!voiceEnabled}
+                                  onClick={() => {
+                                    if (isStepSpeaking) {
+                                      stopSpeech();
+                                    } else {
+                                      speakUtterance(`Step ${idx + 1}. ${step}`, stepTag, true);
+                                    }
+                                  }}
+                                  aria-label={`Speak Step ${idx + 1}`}
+                                  title={isStepSpeaking ? 'Stop speaking step' : `Hear Step ${idx + 1}`}
+                                  className={`shrink-0 px-2 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 border transition-colors cursor-pointer disabled:opacity-40 ${
+                                    isStepSpeaking
+                                      ? 'bg-rose-600 text-white border-rose-700'
+                                      : 'bg-white hover:bg-lavender-50 text-lavender-800 border-lavender-200'
+                                  }`}
+                                >
+                                  {isStepSpeaking ? (
+                                    <Square className="w-3 h-3 fill-current" />
+                                  ) : (
+                                    <Volume2 className="w-3 h-3" />
+                                  )}
+                                  <span>{isStepSpeaking ? 'Stop' : 'Voice'}</span>
+                                </button>
+                              )}
+                            </li>
+                          );
+                        })}
                       </ol>
                     </div>
 
