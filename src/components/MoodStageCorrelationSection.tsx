@@ -18,6 +18,8 @@ import {
   Activity,
   Grid,
   Zap,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { StageKey, UserData } from '../types';
 import { MOOD_CATEGORIES, SYMPTOM_ITEMS, PHASE_ADVISOR_DATA } from '../constants';
@@ -169,6 +171,7 @@ export const MoodStageCorrelationSection: React.FC<MoodStageCorrelationSectionPr
     'spectrum'
   );
   const [selectedStageFilter, setSelectedStageFilter] = useState<StageKey | 'ALL'>('ALL');
+  const [showRecentCheckIns, setShowRecentCheckIns] = useState<boolean>(false);
 
   const correlationData = useMemo(() => {
     const logs = userData.dailyLogs || {};
@@ -1107,46 +1110,56 @@ export const MoodStageCorrelationSection: React.FC<MoodStageCorrelationSectionPr
         )}
       </div>
 
-      {/* Stage-Filtered Symptom & Mood Check-In Log Explorer */}
-      <div className="rounded-2xl bg-lavender-50/50 border border-lavender-100 p-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-lavender-700" />
-            <h3 className="font-display font-bold text-xs sm:text-sm text-slate-800 uppercase tracking-wider">
-              {selectedStageFilter === 'ALL'
-                ? 'Recent Symptom & Mood Check-Ins by Stage'
-                : `Check-Ins Logged in ${STAGE_META[selectedStageFilter].label}`}
+      {/* Stage-Filtered Symptom & Mood Check-In Log Explorer (Collapsed under Title + Down Arrow) */}
+      <div className="rounded-2xl bg-lavender-50/50 border border-lavender-100 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowRecentCheckIns((prev) => !prev)}
+          aria-expanded={showRecentCheckIns}
+          className="w-full min-h-[44px] px-4 py-3 flex items-center justify-between gap-2 text-left hover:bg-lavender-100/50 transition-colors cursor-pointer"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Sparkles className="w-4 h-4 text-lavender-700 shrink-0" />
+            <h3 className="font-display font-bold text-xs sm:text-sm text-slate-800 uppercase tracking-wider truncate tabular-nums">
+              Recent Symptom &amp; Mood Check-Ins ({correlationData.totalCheckIns})
             </h3>
           </div>
+          {showRecentCheckIns ? (
+            <ChevronUp className="w-4 h-4 text-slate-600 shrink-0" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-slate-600 shrink-0" />
+          )}
+        </button>
 
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setSelectedStageFilter('ALL')}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                selectedStageFilter === 'ALL'
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-lavender-50'
-              }`}
-            >
-              All Stages ({correlationData.totalCheckIns})
-            </button>
-            {STAGE_ORDER.map((st) => (
+        {showRecentCheckIns && (
+          <div className="px-4 pb-4 pt-3 border-t border-lavender-100 space-y-3">
+            <div className="flex flex-wrap items-center gap-1.5">
               <button
-                key={st}
                 type="button"
-                onClick={() => setSelectedStageFilter(st)}
+                onClick={() => setSelectedStageFilter('ALL')}
                 className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                  selectedStageFilter === st
-                    ? 'bg-lavender-700 text-white'
+                  selectedStageFilter === 'ALL'
+                    ? 'bg-slate-900 text-white'
                     : 'bg-white text-slate-600 border border-slate-200 hover:bg-lavender-50'
                 }`}
               >
-                {STAGE_META[st].emoji} {STAGE_META[st].shortLabel}
+                All Stages ({correlationData.totalCheckIns})
               </button>
-            ))}
-          </div>
-        </div>
+              {STAGE_ORDER.map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => setSelectedStageFilter(st)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                    selectedStageFilter === st
+                      ? 'bg-lavender-700 text-white'
+                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-lavender-50'
+                  }`}
+                >
+                  {STAGE_META[st].emoji} {STAGE_META[st].shortLabel}
+                </button>
+              ))}
+            </div>
 
         {filteredEntries.length === 0 ? (
           <p className="text-xs text-slate-500 italic bg-white rounded-xl p-3 border border-lavender-100">
@@ -1197,6 +1210,8 @@ export const MoodStageCorrelationSection: React.FC<MoodStageCorrelationSectionPr
                 </span>
               </div>
             ))}
+              </div>
+            )}
           </div>
         )}
       </div>

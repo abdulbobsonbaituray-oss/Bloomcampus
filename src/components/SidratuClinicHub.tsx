@@ -9,6 +9,8 @@ import {
   CheckCircle2,
   Plus,
   Trash2,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import {
   CycleMetrics,
@@ -64,9 +66,11 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
   const [logTreatment, setLogTreatment] = useState(SIDRATU_TREATMENTS[0]);
   const [logDate, setLogDate] = useState(formatDateISO(new Date()));
   const [logFeeling, setLogFeeling] = useState('');
+  const [showTherapyTimeline, setShowTherapyTimeline] = useState(false);
 
   // Booking Scheduler State
   const bookingSectionRef = useRef<HTMLDivElement>(null);
+  const [showAppointmentsList, setShowAppointmentsList] = useState(false);
   const [bookTreatment, setBookTreatment] = useState(
     currentGoalObj.recommendedTreatments[0] || SIDRATU_TREATMENTS[0]
   );
@@ -85,6 +89,7 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
   const [newCommentText, setNewCommentText] = useState('');
   const [newCommentTreatment, setNewCommentTreatment] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [showCommunityComments, setShowCommunityComments] = useState(false);
 
   // Virtual Assistant Chat State
   const [chatHistory, setChatHistory] = useState<
@@ -355,145 +360,73 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
   };
 
   return (
-    <div className="space-y-6">
-      {/* SIDRATU HERO BANNER (DEEP PLUM #3B0944, MAGENTA #C81D77, GOLD #D4AF37) */}
-      <section className="rounded-3xl bg-gradient-to-br from-[#3B0944] via-[#590d56] to-[#C81D77] text-white p-6 sm:p-8 shadow-lg border-2 border-[#D4AF37]/50">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div className="space-y-2 max-w-2xl">
-            <div className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#D4AF37]">
-              <Sparkles className="w-4 h-4" />
-              <span>Official Campus Skincare, Aesthetics & Dental Partner</span>
-            </div>
-            <h2 className="font-display font-extrabold text-2xl sm:text-3xl tracking-tight text-white">
-              Sidratu Beauty Therapy Skin Care
-            </h2>
-            <p className="text-xs sm:text-sm text-white/90 leading-relaxed">
-              Hormone fluctuations across your menstrual cycle directly impact sebum, collagen, and skin sensitivity. Sync your campus cycle stage with professional skin care, aesthetics, and dental clinic treatments.
-            </p>
-            <div className="pt-2 flex flex-wrap items-center gap-4 text-xs text-[#FDFBF7]/90">
-              <span className="inline-flex items-center gap-1.5 font-semibold">
-                <MapPin className="w-4 h-4 text-[#D4AF37]" />
-                101 Jomo Kenyatta Road, Freetown, Sierra Leone
+    <div className="space-y-4">
+      {/* COMPACT SIDRATU HEADER & SEGMENTED NAVIGATION */}
+      <section className="rounded-3xl bg-gradient-to-br from-[#3B0944] via-[#590d56] to-[#C81D77] text-white p-4 sm:p-5 shadow-md border border-[#D4AF37]/50 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] font-bold text-[#D4AF37]">
+              <span className="inline-flex items-center gap-1">
+                <Sparkles className="w-3.5 h-3.5" />
+                Sidratu Clinic
               </span>
               <span aria-hidden="true">·</span>
-              <span className="inline-flex items-center gap-1.5 font-semibold">
-                <Clock className="w-4 h-4 text-[#D4AF37]" />
-                Open Daily: 9:00 AM – 7:30 PM
+              <span className="inline-flex items-center gap-1 text-white/90">
+                <MapPin className="w-3 h-3 text-[#D4AF37]" />
+                101 Jomo Kenyatta Rd, Freetown
+              </span>
+              <span aria-hidden="true">·</span>
+              <span className="inline-flex items-center gap-1 text-white/90">
+                <Clock className="w-3 h-3 text-[#D4AF37]" />
+                9:00 AM – 7:30 PM
               </span>
             </div>
+            <h2 className="font-display font-extrabold text-xl sm:text-2xl tracking-tight text-white">
+              Sidratu Beauty Therapy Skin Care
+            </h2>
+            <p className="text-xs text-white/85 truncate">
+              {currentStage.shortName} Skin Tip: {currentStage.skincareSync}
+            </p>
           </div>
 
-          <div className="flex flex-col sm:flex-row lg:flex-col gap-3 shrink-0">
-            <button
-              type="button"
-              onClick={() => scrollToNewAppointment()}
-              className="px-6 py-3.5 rounded-2xl bg-[#D4AF37] hover:bg-[#e3be42] text-[#3B0944] font-display font-extrabold text-sm shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Calendar className="w-4 h-4" />
-              <span>New Appointment</span>
-            </button>
-            <div className="rounded-2xl bg-white/10 backdrop-blur-sm border border-[#D4AF37]/30 px-4 py-2.5 text-xs">
-              <span className="block text-[#D4AF37] font-bold">Cycle Skin Sync ({currentStage.shortName})</span>
-              <span className="text-white/90 mt-0.5 block">{currentStage.skincareSync}</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* SIDRATU QUICK ACTION BUTTONS (EASY ON THE EYES) */}
-      <section className="bg-white rounded-3xl shadow-xs border-2 border-[#D4AF37]/40 p-4 sm:p-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3.5">
-          <div>
-            <span className="text-[11px] font-extrabold uppercase tracking-wider text-[#C81D77] block">
-              ✨ Sidratu Clinic Action Buttons
-            </span>
-            <h3 className="font-display font-extrabold text-base sm:text-lg text-slate-900">
-              Choose a Skincare Tool or Clinic Section
-            </h3>
-          </div>
           <button
             type="button"
-            onClick={() =>
-              setActiveSidratuSection((prev) => (prev === 'all' ? 'assistant' : 'all'))
-            }
-            className="self-start sm:self-auto px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+            onClick={() => scrollToNewAppointment()}
+            className="min-h-[44px] px-5 py-2.5 rounded-2xl bg-[#D4AF37] hover:bg-[#e3be42] text-[#3B0944] font-display font-extrabold text-xs sm:text-sm shadow-sm transition-all flex items-center justify-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
           >
-            {activeSidratuSection === 'all' ? '📁 Show One at a Time' : '📂 Show All Sections'}
+            <Calendar className="w-4 h-4" />
+            <span>New Appointment</span>
           </button>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+        {/* Sleek Segmented Tool Switcher */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 pt-2 border-t border-white/15">
           {[
-            {
-              id: 'assistant' as const,
-              emoji: '💬',
-              title: 'AI Skincare Assistant',
-              sub: '24/7 Clinic & Cycle Chat',
-            },
-            {
-              id: 'goal' as const,
-              emoji: '🎯',
-              title: 'Skincare Goal Engine',
-              sub: 'Match Goal to Treatments',
-            },
+            { id: 'assistant' as const, label: 'AI Chat' },
+            { id: 'goal' as const, label: 'Skincare Goal' },
             {
               id: 'booking' as const,
-              emoji: '📅',
-              title: 'Book Appointment',
-              sub: `9am–7:30pm · ${(userData.appointments || []).length} Booked`,
+              label: `Book Visit (${(userData.appointments || []).length})`,
             },
             {
               id: 'timeline' as const,
-              emoji: '✨',
-              title: 'Gold Session Timeline',
-              sub: `${(userData.therapyLogs || []).length} Treatments Logged`,
+              label: `History (${(userData.therapyLogs || []).length})`,
             },
-            {
-              id: 'community' as const,
-              emoji: '🗣️',
-              title: 'Community Board',
-              sub: `${comments.length} Student Reviews`,
-            },
+            { id: 'community' as const, label: `Community (${comments.length})` },
           ].map((btn) => {
-            const isActive =
-              activeSidratuSection === btn.id || activeSidratuSection === 'all';
+            const isActive = activeSidratuSection === btn.id;
             return (
               <button
                 key={btn.id}
                 type="button"
                 onClick={() => setActiveSidratuSection(btn.id)}
-                className={`p-3 rounded-2xl border-2 text-left transition-all flex flex-col justify-between gap-1.5 cursor-pointer ${
+                className={`min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-extrabold whitespace-nowrap shrink-0 transition-all cursor-pointer tabular-nums ${
                   isActive
-                    ? 'bg-[#3B0944] text-[#D4AF37] border-[#D4AF37] shadow-md'
-                    : 'bg-cream hover:bg-lavender-50 text-slate-800 border-slate-200'
+                    ? 'bg-[#D4AF37] text-[#3B0944] shadow-xs'
+                    : 'bg-white/10 hover:bg-white/20 text-white'
                 }`}
               >
-                <div className="flex items-center justify-between">
-                  <span className="text-lg">{btn.emoji}</span>
-                  <span
-                    className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded-md ${
-                      isActive ? 'bg-[#D4AF37] text-[#3B0944]' : 'bg-white text-slate-600'
-                    }`}
-                  >
-                    {isActive ? 'Active' : 'Open'}
-                  </span>
-                </div>
-                <div>
-                  <div
-                    className={`font-display font-extrabold text-xs sm:text-sm ${
-                      isActive ? 'text-white' : 'text-slate-900'
-                    }`}
-                  >
-                    {btn.title}
-                  </div>
-                  <div
-                    className={`text-[11px] font-medium truncate ${
-                      isActive ? 'text-[#D4AF37]' : 'text-slate-500'
-                    }`}
-                  >
-                    {btn.sub}
-                  </div>
-                </div>
+                {btn.label}
               </button>
             );
           })}
@@ -731,49 +664,68 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
             </button>
           </form>
 
-          {/* Vertical Gold Timeline */}
+          {/* Collapsible Vertical Gold Timeline */}
           <div className="pt-2">
-            <div className="text-xs font-bold text-slate-600 mb-3">
-              Your Treatment History Timeline:
-            </div>
-            {(userData.therapyLogs || []).length === 0 ? (
-              <div className="text-xs text-slate-500 italic p-4 rounded-2xl bg-cream border border-slate-200/70">
-                No skincare sessions logged yet. Record your first treatment above!
-              </div>
-            ) : (
-              <div className="relative pl-6 space-y-4 before:content-[''] before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-[#D4AF37]">
-                {(userData.therapyLogs || []).map((item) => (
-                  <div
-                    key={item.id}
-                    className="relative bg-cream rounded-2xl p-3.5 border border-[#D4AF37]/40 shadow-xs"
-                  >
-                    <span className="absolute -left-[19px] top-4 w-3 h-3 rounded-full bg-[#D4AF37] ring-4 ring-white" />
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <span className="font-display font-bold text-xs sm:text-sm text-[#3B0944] block">
-                          {item.treatmentType}
-                        </span>
-                        <span className="text-[11px] text-slate-500 font-mono tabular-nums">
-                          {formatHumanDate(item.sessionDate)}
-                          {item.stageAtSession ? ` · ${item.stageAtSession} Stage` : ''}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteTherapyLog(item.id)}
-                        className="text-slate-400 hover:text-rose-600 p-1"
-                        title="Remove entry"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+            <div className="rounded-2xl border border-slate-200 bg-cream/60 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowTherapyTimeline((prev) => !prev)}
+                aria-expanded={showTherapyTimeline}
+                className="w-full min-h-[44px] px-4 py-2.5 flex items-center justify-between gap-2 text-left hover:bg-lavender-50/70 transition-colors cursor-pointer"
+              >
+                <span className="text-xs font-extrabold text-slate-800 tabular-nums">
+                  Your Treatment History Timeline ({(userData.therapyLogs || []).length})
+                </span>
+                {showTherapyTimeline ? (
+                  <ChevronUp className="w-4 h-4 text-slate-600 shrink-0" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-slate-600 shrink-0" />
+                )}
+              </button>
+
+              {showTherapyTimeline && (
+                <div className="px-4 pb-4 pt-3 border-t border-slate-200/80 bg-white">
+                  {(userData.therapyLogs || []).length === 0 ? (
+                    <div className="text-xs text-slate-500 italic p-4 rounded-2xl bg-cream border border-slate-200/70">
+                      No skincare sessions logged yet. Record your first treatment above!
                     </div>
-                    <p className="text-xs text-slate-700 mt-1.5 leading-relaxed">
-                      {item.postSessionFeeling}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ) : (
+                    <div className="relative pl-6 space-y-4 before:content-[''] before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-[#D4AF37]">
+                      {(userData.therapyLogs || []).map((item) => (
+                        <div
+                          key={item.id}
+                          className="relative bg-cream rounded-2xl p-3.5 border border-[#D4AF37]/40 shadow-xs"
+                        >
+                          <span className="absolute -left-[19px] top-4 w-3 h-3 rounded-full bg-[#D4AF37] ring-4 ring-white" />
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <span className="font-display font-bold text-xs sm:text-sm text-[#3B0944] block">
+                                {item.treatmentType}
+                              </span>
+                              <span className="text-[11px] text-slate-500 font-mono tabular-nums">
+                                {formatHumanDate(item.sessionDate)}
+                                {item.stageAtSession ? ` · ${item.stageAtSession} Stage` : ''}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteTherapyLog(item.id)}
+                              className="text-slate-400 hover:text-rose-600 p-1"
+                              title="Remove entry"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <p className="text-xs text-slate-700 mt-1.5 leading-relaxed">
+                            {item.postSessionFeeling}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </section>
         )}
@@ -851,42 +803,59 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
             </button>
           </form>
 
-          {/* Saved Appointments List */}
-          <div>
-            <div className="text-xs font-bold text-slate-600 mb-2.5">
-              Your Scheduled Sidratu Clinic Appointments ({(userData.appointments || []).length}):
-            </div>
-            {(userData.appointments || []).length === 0 ? (
-              <div className="text-xs text-slate-500 italic p-3.5 rounded-2xl bg-cream border border-slate-200/70">
-                No upcoming appointments booked yet. Use the scheduler above to book your visit!
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                {(userData.appointments || []).map((appt) => (
-                  <div
-                    key={appt.id}
-                    className="bg-cream rounded-2xl p-3 border border-slate-200/80 flex items-start justify-between gap-2 text-xs"
-                  >
-                    <div>
-                      <div className="font-bold text-slate-900">{appt.treatmentType}</div>
-                      <div className="text-slate-600 font-mono tabular-nums mt-0.5">
-                        {formatHumanDate(appt.requestedDate)} at {appt.requestedTime} ·{' '}
-                        <span className="text-sage-800 font-bold">{appt.status}</span>
-                      </div>
-                      {appt.notes && (
-                        <div className="text-slate-500 mt-1 italic">"{appt.notes}"</div>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleCancelAppointment(appt.id)}
-                      className="text-slate-400 hover:text-rose-600 p-1"
-                      title="Cancel appointment"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+          {/* Collapsible Saved Appointments List */}
+          <div className="rounded-2xl border border-slate-200 bg-cream/60 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowAppointmentsList((prev) => !prev)}
+              aria-expanded={showAppointmentsList}
+              className="w-full min-h-[44px] px-4 py-2.5 flex items-center justify-between gap-2 text-left hover:bg-lavender-50/70 transition-colors cursor-pointer"
+            >
+              <span className="text-xs font-extrabold text-slate-800 tabular-nums">
+                Your Scheduled Sidratu Clinic Appointments ({(userData.appointments || []).length})
+              </span>
+              {showAppointmentsList ? (
+                <ChevronUp className="w-4 h-4 text-slate-600 shrink-0" />
+              ) : (
+                <ChevronDown className="w-4 h-4 text-slate-600 shrink-0" />
+              )}
+            </button>
+
+            {showAppointmentsList && (
+              <div className="px-4 pb-4 pt-2 border-t border-slate-200/80 bg-white">
+                {(userData.appointments || []).length === 0 ? (
+                  <div className="text-xs text-slate-500 italic p-3.5 rounded-2xl bg-cream border border-slate-200/70">
+                    No upcoming appointments booked yet. Use the scheduler above to book your visit!
                   </div>
-                ))}
+                ) : (
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                    {(userData.appointments || []).map((appt) => (
+                      <div
+                        key={appt.id}
+                        className="bg-cream rounded-2xl p-3 border border-slate-200/80 flex items-start justify-between gap-2 text-xs"
+                      >
+                        <div>
+                          <div className="font-bold text-slate-900">{appt.treatmentType}</div>
+                          <div className="text-slate-600 font-mono tabular-nums mt-0.5">
+                            {formatHumanDate(appt.requestedDate)} at {appt.requestedTime} ·{' '}
+                            <span className="text-sage-800 font-bold">{appt.status}</span>
+                          </div>
+                          {appt.notes && (
+                            <div className="text-slate-500 mt-1 italic">"{appt.notes}"</div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleCancelAppointment(appt.id)}
+                          className="text-slate-400 hover:text-rose-600 p-1"
+                          title="Cancel appointment"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -938,27 +907,62 @@ export const SidratuClinicHub: React.FC<SidratuClinicHubProps> = ({
           </button>
         </form>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-          {comments.map((c) => (
-            <div
-              key={c.id}
-              className="rounded-2xl bg-cream border border-slate-200/80 p-4 flex flex-col justify-between gap-2"
-            >
-              <div>
-                <div className="flex items-center justify-between gap-2 text-xs text-slate-500 mb-1.5">
-                  <strong className="text-slate-900 font-bold">{c.userName}</strong>
-                  <span className="font-mono tabular-nums text-[11px]">
-                    {formatHumanDate(c.createdAt.split('T')[0])}
-                  </span>
+        {/* Collapsible Community Posts & Reviews */}
+        <div className="rounded-2xl border border-slate-200 bg-cream/60 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowCommunityComments((prev) => !prev)}
+            aria-expanded={showCommunityComments}
+            className="w-full min-h-[44px] px-4 py-2.5 flex items-center justify-between gap-2 text-left hover:bg-lavender-50/70 transition-colors cursor-pointer"
+          >
+            <span className="text-xs font-extrabold text-slate-800 tabular-nums">
+              Community Feedback &amp; Reviews ({comments.length})
+            </span>
+            {showCommunityComments ? (
+              <ChevronUp className="w-4 h-4 text-slate-600 shrink-0" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-slate-600 shrink-0" />
+            )}
+          </button>
+
+          {showCommunityComments && (
+            <div className="px-4 pb-4 pt-3 border-t border-slate-200/80 bg-white">
+              {comments.length === 0 ? (
+                <div className="rounded-2xl bg-cream border border-slate-200/80 p-5 text-center space-y-1.5">
+                  <div className="font-display font-extrabold text-sm text-slate-900">
+                    No community reviews posted yet
+                  </div>
+                  <p className="text-xs text-slate-600 max-w-lg mx-auto">
+                    Be the first to share a tip or Sidratu clinic experience from your{' '}
+                    <strong>{currentStage.shortName} Stage</strong> above, {userData.name}!
+                  </p>
                 </div>
-                <p className="text-xs text-slate-700 leading-relaxed">{c.commentText}</p>
-              </div>
-              <div className="text-[11px] text-lavender-700 font-medium pt-2 border-t border-slate-200/60">
-                {c.stageTag || 'Campus Member'}
-                {c.treatmentTag ? ` · ${c.treatmentTag}` : ''}
-              </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                  {comments.map((c) => (
+                    <div
+                      key={c.id}
+                      className="rounded-2xl bg-cream border border-slate-200/80 p-4 flex flex-col justify-between gap-2"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-2 text-xs text-slate-500 mb-1.5">
+                          <strong className="text-slate-900 font-bold">{c.userName}</strong>
+                          <span className="font-mono tabular-nums text-[11px]">
+                            {formatHumanDate(c.createdAt.split('T')[0])}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-700 leading-relaxed">{c.commentText}</p>
+                      </div>
+                      <div className="text-[11px] text-lavender-700 font-medium pt-2 border-t border-slate-200/60">
+                        {c.stageTag || 'Campus Member'}
+                        {c.treatmentTag ? ` · ${c.treatmentTag}` : ''}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          ))}
+          )}
         </div>
       </section>
       )}

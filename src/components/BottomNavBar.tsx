@@ -47,8 +47,8 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
   const navItems: NavItemConfig[] = [
     {
       id: 'tracker',
-      label: 'Cycle & LMP',
-      shortLabel: 'Cycle',
+      label: 'My Period',
+      shortLabel: 'Period',
       icon: Calendar,
       badge: `D${cycleDay}`,
       activeBg: isDarkMode ? 'bg-rose-950/80' : 'bg-rose-50',
@@ -57,8 +57,8 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
     },
     {
       id: 'checkin',
-      label: 'Mood & Log',
-      shortLabel: 'Daily Log',
+      label: 'Daily Log',
+      shortLabel: 'Mood',
       icon: SmilePlus,
       badge: hasLoggedMoodToday ? '✓' : undefined,
       activeBg: isDarkMode ? 'bg-lavender-950/80' : 'bg-lavender-50',
@@ -67,7 +67,7 @@ export const BottomNavBar: React.FC<BottomNavBarProps> = ({
     },
     {
       id: 'guide',
-      label: 'Phase & Pill Guide',
+      label: 'Pill & Care',
       shortLabel: 'Guide',
       icon: Pill,
       activeBg: isDarkMode ? 'bg-peach-950/80' : 'bg-peach-50',

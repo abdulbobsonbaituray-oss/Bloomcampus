@@ -1,5 +1,14 @@
 import React, { useState } from 'react';
-import { BookOpen, Sparkles, Plus, CheckCircle2, Circle, Trash2 } from 'lucide-react';
+import {
+  BookOpen,
+  Sparkles,
+  Plus,
+  CheckCircle2,
+  Circle,
+  Trash2,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { AcademicTask, CycleMetrics, UserData } from '../types';
 import { PHASE_ADVISOR_DATA } from '../constants';
 import {
@@ -30,6 +39,7 @@ export const StudyExamSyncPlanner: React.FC<StudyExamSyncPlannerProps> = ({
     return formatDateISO(nextWeek);
   });
   const [taskType, setTaskType] = useState<AcademicTask['type']>('Exam');
+  const [showTasksList, setShowTasksList] = useState<boolean>(false);
 
   const [aiPlanLoading, setAiPlanLoading] = useState(false);
   const [aiPlan, setAiPlan] = useState<{
@@ -260,66 +270,88 @@ export const StudyExamSyncPlanner: React.FC<StudyExamSyncPlannerProps> = ({
         </div>
       </form>
 
-      {/* Tasks List with Predicted Cycle Stage */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {(userData.academicTasks || []).length === 0 ? (
-          <div className="md:col-span-2 text-xs text-slate-500 italic p-4 rounded-2xl bg-cream border border-slate-200/70">
-            No upcoming exams or assignments added yet. Add a deadline above to see which cycle stage it lands on!
-          </div>
-        ) : (
-          (userData.academicTasks || []).map((task) => {
-            const { actionAdvice } = getStageCoachingForTask(task.dueDate);
-            return (
-              <div
-                key={task.id}
-                className={`rounded-2xl p-4 border transition-all flex items-start justify-between gap-3 ${
-                  task.completed
-                    ? 'bg-slate-50 border-slate-200 opacity-70'
-                    : 'bg-cream border-lavender-200 shadow-xs'
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <button
-                    type="button"
-                    onClick={() => toggleTaskDone(task.id)}
-                    className="mt-0.5 text-lavender-700 hover:text-lavender-900"
-                  >
-                    {task.completed ? (
-                      <CheckCircle2 className="w-5 h-5 text-sage-600" />
-                    ) : (
-                      <Circle className="w-5 h-5" />
-                    )}
-                  </button>
-                  <div>
-                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                      <span
-                        className={`font-display font-bold text-sm text-slate-900 ${
-                          task.completed ? 'line-through' : ''
-                        }`}
-                      >
-                        {task.title}
-                      </span>
-                      <span className="text-slate-400">·</span>
-                      <span className="font-semibold text-lavender-700">{task.course}</span>
-                      <span className="text-slate-400">·</span>
-                      <span className="font-mono tabular-nums text-slate-600">
-                        {formatHumanDate(task.dueDate)}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-700 mt-1 leading-relaxed">{actionAdvice}</p>
-                  </div>
+      {/* Collapsible Saved Exams & Assignments List */}
+      <div className="rounded-2xl border border-slate-200 bg-cream/60 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowTasksList((prev) => !prev)}
+          aria-expanded={showTasksList}
+          className="w-full min-h-[44px] px-4 py-2.5 flex items-center justify-between gap-2 text-left hover:bg-lavender-50/70 transition-colors cursor-pointer"
+        >
+          <span className="text-xs font-extrabold text-slate-800 tabular-nums">
+            Saved Exams &amp; Assignments ({(userData.academicTasks || []).length})
+          </span>
+          {showTasksList ? (
+            <ChevronUp className="w-4 h-4 text-slate-600 shrink-0" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-slate-600 shrink-0" />
+          )}
+        </button>
+
+        {showTasksList && (
+          <div className="px-4 pb-4 pt-2 border-t border-slate-200/80 bg-white">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(userData.academicTasks || []).length === 0 ? (
+                <div className="md:col-span-2 text-xs text-slate-500 italic p-4 rounded-2xl bg-cream border border-slate-200/70">
+                  No upcoming exams or assignments added yet. Add a deadline above to see which cycle stage it lands on!
                 </div>
-                <button
-                  type="button"
-                  onClick={() => deleteTask(task.id)}
-                  className="text-slate-400 hover:text-rose-600 p-1 shrink-0"
-                  title="Delete exam/task"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            );
-          })
+              ) : (
+                (userData.academicTasks || []).map((task) => {
+                  const { actionAdvice } = getStageCoachingForTask(task.dueDate);
+                  return (
+                    <div
+                      key={task.id}
+                      className={`rounded-2xl p-4 border transition-all flex items-start justify-between gap-3 ${
+                        task.completed
+                          ? 'bg-slate-50 border-slate-200 opacity-70'
+                          : 'bg-cream border-lavender-200 shadow-xs'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <button
+                          type="button"
+                          onClick={() => toggleTaskDone(task.id)}
+                          className="mt-0.5 text-lavender-700 hover:text-lavender-900"
+                        >
+                          {task.completed ? (
+                            <CheckCircle2 className="w-5 h-5 text-sage-600" />
+                          ) : (
+                            <Circle className="w-5 h-5" />
+                          )}
+                        </button>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                            <span
+                              className={`font-display font-bold text-sm text-slate-900 ${
+                                task.completed ? 'line-through' : ''
+                              }`}
+                            >
+                              {task.title}
+                            </span>
+                            <span className="text-slate-400">·</span>
+                            <span className="font-semibold text-lavender-700">{task.course}</span>
+                            <span className="text-slate-400">·</span>
+                            <span className="font-mono tabular-nums text-slate-600">
+                              {formatHumanDate(task.dueDate)}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-700 mt-1 leading-relaxed">{actionAdvice}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => deleteTask(task.id)}
+                        className="text-slate-400 hover:text-rose-600 p-1 shrink-0"
+                        title="Delete exam/task"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
         )}
       </div>
     </section>

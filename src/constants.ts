@@ -2,16 +2,19 @@ import { StageKey } from './types';
 
 export const STORAGE_USERS_KEY = 'bloomcampus_users_v1';
 export const STORAGE_SESSION_KEY = 'bloomcampus_current_user_v1';
+export const STORAGE_REMEMBER_ME_KEY = 'bloomcampus_remember_me_v1';
+export const STORAGE_REMEMBERED_EMAIL_KEY = 'bloomcampus_remembered_email_v1';
 export const STORAGE_ADMIN_CONFIG_KEY = 'bloomcampus_admin_config_v1';
 export const STORAGE_ADMIN_SESSION_KEY = 'bloomcampus_admin_session_v1';
 export const STORAGE_THEME_KEY = 'bloomcampus_theme_mode_v1';
 export const STORAGE_LMP_MEMORY_KEY = 'bloomcampus_lmp_memory_v1';
+export const STORAGE_HIDE_GUIDE_KEY = 'bloomcampus_hide_quick_guide_v1';
 
 export const OWNER_ADMIN_EMAIL = 'abdulbobsonbaituray@gmail.com';
 export const DEFAULT_ADMIN_PASSWORD = '@Haizen565.';
 export const DEFAULT_FREE_ACCESS_PASSWORD = 'Bobson@565';
 export const SECRET_VIP_PASSWORDS = ['Bobson@565', 'Bobson@565.'];
-export const FREE_TRIAL_DAYS = 14; // 2 Weeks Free Access
+export const FREE_TRIAL_DAYS = 7; // 1 Week Free Access
 
 export const CREATOR_NAME = 'ABDUL BOBSON TURAY';
 export const CREATOR_EMAIL = 'abdulbobsonbaituray@gmail.com';
@@ -177,6 +180,8 @@ export const PHASE_ADVISOR_DATA: Record<
   {
     name: string;
     shortName: string;
+    everydayName: string;
+    everydaySummary: string;
     emoji: string;
     bannerGradient: string;
     hormoneSummary: string;
@@ -191,6 +196,8 @@ export const PHASE_ADVISOR_DATA: Record<
   MENSTRUATION: {
     name: 'MENSTRUATION STAGE',
     shortName: 'Menstruation',
+    everydayName: 'Period Days',
+    everydaySummary: 'Rest & flow days. Energy may be lower while your body resets.',
     emoji: '🩸',
     bannerGradient: 'from-rose-900 via-rose-700 to-lavender-900',
     hormoneSummary: 'Estrogen & Progesterone at Lowest Baselines',
@@ -208,6 +215,8 @@ export const PHASE_ADVISOR_DATA: Record<
   FOLLICULAR: {
     name: 'FOLLICULAR STAGE',
     shortName: 'Follicular',
+    everydayName: 'Energy Rising Days',
+    everydaySummary: 'Fresh energy and clearer focus right after your period ends.',
     emoji: '🌱',
     bannerGradient: 'from-sage-800 via-sage-600 to-lavender-700',
     hormoneSummary: 'Estrogen Rising Steadily',
@@ -225,6 +234,8 @@ export const PHASE_ADVISOR_DATA: Record<
   OVULATION: {
     name: 'OVULATION STAGE',
     shortName: 'Ovulation',
+    everydayName: 'Peak Fertile Days',
+    everydaySummary: 'Highest fertility & confidence window mid-cycle.',
     emoji: '🌸',
     bannerGradient: 'from-peach-700 via-rose-600 to-lavender-700',
     hormoneSummary: 'Estrogen Peaking & LH Surge',
@@ -242,6 +253,8 @@ export const PHASE_ADVISOR_DATA: Record<
   LUTEAL: {
     name: 'LUTEAL STAGE',
     shortName: 'Luteal',
+    everydayName: 'Before Next Period',
+    everydaySummary: 'Winding down before your next period. Extra rest & snacks help.',
     emoji: '🌙',
     bannerGradient: 'from-lavender-900 via-lavender-700 to-peach-700',
     hormoneSummary: 'Progesterone Dominant then Declining',

@@ -1906,7 +1906,7 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                                     }`}
                                   >
                                     {st.daysLeft}d left (
-                                    {st.status === 'trial' ? '2-Wk Free' : st.status})
+                                    {st.status === 'trial' ? '1-Wk Free' : st.status})
                                   </span>
                                 </td>
                                 <td className="py-3 px-3">
@@ -1924,11 +1924,11 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                                     {onExtendUserFreeAccess && (
                                       <button
                                         type="button"
-                                        onClick={() => onExtendUserFreeAccess(u.email, 14)}
+                                        onClick={() => onExtendUserFreeAccess(u.email, 7)}
                                         className="px-2 py-1 rounded-lg bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-[10px] cursor-pointer"
-                                        title="Extend +14 days free access (Le 0)"
+                                        title="Extend +7 days free access (Le 0)"
                                       >
-                                        +14d
+                                        +7d
                                       </button>
                                     )}
                                     <button
@@ -2176,10 +2176,10 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => onExtendUserFreeAccess(u.email, 14)}
+                                    onClick={() => onExtendUserFreeAccess(u.email, 7)}
                                     className="px-3 py-2 rounded-xl bg-lavender-700 hover:bg-lavender-900 text-white font-extrabold text-xs cursor-pointer"
                                   >
-                                    +14d Free
+                                    +7d Free
                                   </button>
                                 </>
                               )}
@@ -2405,13 +2405,13 @@ export const OwnerAdminDashboard: React.FC<OwnerAdminDashboardProps> = ({
                 className="bg-white rounded-2xl p-4 border border-sage-200 shadow-xs cursor-pointer hover:bg-sage-50/50 transition-all"
               >
                 <div className="flex items-center justify-between text-sage-800 text-xs font-bold">
-                  <span>2-Week Free Users</span>
+                  <span>1-Week Free Users</span>
                   <CheckCircle2 className="w-4 h-4 text-sage-600" />
                 </div>
                 <div className="font-display font-extrabold text-3xl text-sage-800 mt-1 tabular-nums">
                   {stats.trial}
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">Active 14-day free access</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">Active 7-day free access</p>
               </div>
 
               <div

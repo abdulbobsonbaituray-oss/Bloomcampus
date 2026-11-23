@@ -4,9 +4,7 @@ import {
   Flame,
   CalendarCheck2,
   Droplets,
-  Sparkles,
   BookOpenCheck,
-  Compass,
   Trophy,
   CheckCircle2,
   Lock,
@@ -325,14 +323,12 @@ export function evaluateUserBadges(userData: UserData): BadgeEvaluationResult {
 interface BadgesMilestonesSectionProps {
   userData: UserData;
   onNavigateSection: (section: CoreNavSection, subAction?: 'hydration' | 'trends') => void;
-  onSimulateStreakDemo?: () => void;
   defaultExpanded?: boolean;
 }
 
 export const BadgesMilestonesSection: React.FC<BadgesMilestonesSectionProps> = ({
   userData,
   onNavigateSection,
-  onSimulateStreakDemo,
   defaultExpanded = false,
 }) => {
   const [filter, setFilter] = useState<'all' | 'unlocked' | 'locked'>('all');
@@ -527,17 +523,6 @@ export const BadgesMilestonesSection: React.FC<BadgesMilestonesSectionProps> = (
                 In Progress ({evaluation.totalCount - evaluation.unlockedCount})
               </button>
             </div>
-
-            {onSimulateStreakDemo && (
-              <button
-                type="button"
-                onClick={onSimulateStreakDemo}
-                className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-                <span>Boost Sample 7-Day Streak &amp; 3 Cycles</span>
-              </button>
-            )}
           </div>
 
           {/* Badges Grid */}

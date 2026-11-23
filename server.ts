@@ -298,8 +298,8 @@ async function pullUsersFromCloudFirestore(
               isVip: false,
               usedFreeAccessPassword: false,
               subscriptionStatus: 'active',
-              subscriptionUntil: firstTs + 14 * 24 * 60 * 60 * 1000,
-              paymentMethod: '2-Week Free Access',
+              subscriptionUntil: firstTs + 7 * 24 * 60 * 60 * 1000,
+              paymentMethod: '1-Week Free Access',
               periods: [],
               emergencyPills: [],
               dailyLogs: {},
@@ -370,31 +370,7 @@ interface CommunityComment {
   createdAt: string;
 }
 
-const DEFAULT_COMMENTS: CommunityComment[] = [
-  {
-    id: 'c-1',
-    userName: 'Kumba Hannah K.',
-    commentText: 'Syncing my heavy study sessions to my Follicular stage made such a difference for my midterms! Also loved my hydrating facial session at Sidratu on Jomo Kenyatta Road.',
-    stageTag: 'Follicular Stage',
-    treatmentTag: 'Facial Treatment',
-    createdAt: new Date(Date.now() - 2 * 86400000).toISOString(),
-  },
-  {
-    id: 'c-2',
-    userName: 'Mariama S.',
-    commentText: 'The 2-day bag alert saved me right before my morning lecture on campus. Remember to pack dark chocolate and water!',
-    stageTag: 'Luteal Stage',
-    createdAt: new Date(Date.now() - 5 * 86400000).toISOString(),
-  },
-  {
-    id: 'c-3',
-    userName: 'Aminata B.',
-    commentText: 'Booked an Anti-Dark Spot consultation at Sidratu Beauty Therapy Skin Care after hormonal breakouts during my Luteal phase. The staff were so welcoming and empathetic!',
-    stageTag: 'Menstruation Stage',
-    treatmentTag: 'Anti-Dark Spot Treatment',
-    createdAt: new Date(Date.now() - 8 * 86400000).toISOString(),
-  },
-];
+const DEFAULT_COMMENTS: CommunityComment[] = [];
 
 const PROJECT_DATA_DIR = path.join(process.cwd(), '.data');
 const TMP_DATA_DIR = path.join(os.tmpdir(), 'bloomcampus_data');
@@ -455,7 +431,7 @@ function sanitizeUserRecord(obj: Record<string, unknown>, emailKey: string): Rec
   };
   if (typeof cleaned.paymentMethod === 'string') {
     if (cleaned.paymentMethod.includes('Bobson')) {
-      cleaned.paymentMethod = '2-Week Free Access';
+      cleaned.paymentMethod = '1-Week Free Access';
     }
   }
   return cleaned;
@@ -615,7 +591,9 @@ function loadPersistentStore(): PersistentStore {
           mergedUsers = mergeUserRecords(mergedUsers, parsed.users, deletedEmails);
         }
         if (Array.isArray(parsed.communityComments) && parsed.communityComments.length > 0) {
-          comments = parsed.communityComments;
+          comments = parsed.communityComments.filter(
+            (c: CommunityComment) => c && c.id !== 'c-1' && c.id !== 'c-2' && c.id !== 'c-3'
+          );
         }
         if (parsed.adminConfig && typeof parsed.adminConfig === 'object') {
           adminCfg = {
